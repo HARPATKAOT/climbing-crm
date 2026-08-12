@@ -24,13 +24,15 @@ const EVENT_SYSTEM_META_NAMES = new Set([
   'customer_details_v2',
 ]);
 
-const CATEGORY_META = {
+// Exported so the send screen labels a template with the same colour and word
+// this screen uses — one category legend for the whole system, not two.
+export const CATEGORY_META = {
   UTILITY: { label: 'תפעולי', icon: Wrench, color: '#38BDF8' },
   MARKETING: { label: 'שיווקי', icon: Megaphone, color: '#34D399' },
   AUTHENTICATION: { label: 'אימות', icon: KeyRound, color: '#FBBF24' },
 };
 
-const CATEGORIES = Object.entries(CATEGORY_META).map(([value, meta]) => ({ value, label: meta.label }));
+export const CATEGORIES = Object.entries(CATEGORY_META).map(([value, meta]) => ({ value, label: meta.label }));
 
 const STATUS_META = {
   DRAFT: { label: 'טיוטה', color: '#94A3B8' },
@@ -45,7 +47,7 @@ function statusRank(status) {
   return STATUS_SORT_RANK[String(status || '').toUpperCase()] || 0;
 }
 
-function CategoryIcon({ category }) {
+export function CategoryIcon({ category }) {
   const meta = CATEGORY_META[String(category || '').toUpperCase()] || CATEGORY_META.UTILITY;
   const Icon = meta.icon;
   return (

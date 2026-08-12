@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox } from 'lucide-react';
+import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
-import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
+import TemplatesManager, { TemplatePreview, CategoryIcon, CATEGORIES } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotMasterSwitch from './BotMasterSwitch.jsx';
 import BotCapabilitiesPanel from './BotCapabilitiesPanel.jsx';
@@ -85,6 +85,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const [selectedList, setSelectedList] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [approvedTemplates, setApprovedTemplates] = useState([]);
+  // Two dozen approved templates in one flat list is a list nobody reads to the
+  // end, and several of them share a display name, so the picker needs the same
+  // search/filter/sort the management tab has.
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [templateCategory, setTemplateCategory] = useState('ALL');
+  const [templateSort, setTemplateSort] = useState('custom');
+  const [showArchivedTemplates, setShowArchivedTemplates] = useState(false);
   const [customMessage, setCustomMessage] = useState('');
   const [segmentFilters, setSegmentFilters] = useState({ ...EMPTY_FILTERS });
   const [previewCount, setPreviewCount] = useState(0);
@@ -301,15 +308,27 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     fetchApprovedTemplates();
   }, []);
 
+  // Archived templates come down too, behind the "כולל ארכיון" switch below:
+  // asking again over the network every time that switch flips would make a
+  // filter feel like a page load.
   const fetchApprovedTemplates = async () => {
     try {
-      const res = await fetch('/api/message-templates?approved=1');
+      const res = await fetch('/api/message-templates?approved=1&archived=1');
       const data = res.ok ? await res.json() : [];
       const remote = Array.isArray(data) ? data.map((t) => ({
         id: t.meta_name || t.name,
         name: t.name || t.meta_name,
         text: t.body || '',
         language: t.language,
+        metaName: t.meta_name || '',
+        category: String(t.category || 'UTILITY').toUpperCase(),
+        archived: !!t.archived,
+        // The preview pane reads these; without them it could only ever show
+        // the body, so a template with a button looked like one without.
+        header: t.header || '',
+        footer: t.footer || '',
+        buttons: Array.isArray(t.buttons) ? t.buttons : [],
+        variables: Array.isArray(t.variables) ? t.variables : [],
       })) : [];
       setApprovedTemplates(remote.length ? remote : WA_TEMPLATES);
     } catch {
@@ -361,6 +380,45 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     }
     : { header: '', body: customMessage, footer: '', buttons: [] };
   const previewVarMeta = Array.isArray(selectedTemplate?.variables) ? selectedTemplate.variables : [];
+
+  const allSendableTemplates = approvedTemplates.length ? approvedTemplates : WA_TEMPLATES;
+  const sendableCount = allSendableTemplates.filter((t) => !t.archived).length;
+  const archivedCount = allSendableTemplates.length - sendableCount;
+  const templateFiltersActive =
+    !!templateSearch.trim() || templateCategory !== 'ALL' || showArchivedTemplates;
+
+  const visibleTemplates = allSendableTemplates
+    .filter((t) => {
+      if (t.archived && !showArchivedTemplates) return false;
+      if (templateCategory !== 'ALL' && (t.category || 'UTILITY') !== templateCategory) return false;
+      const q = templateSearch.trim().toLowerCase();
+      if (!q) return true;
+      // The Meta name is searched too: three templates here read "אירוע ·
+      // קישור תשלום מזמין", and the Meta name is the only thing telling them
+      // apart.
+      return [t.name, t.metaName, t.text].some((v) => String(v || '').toLowerCase().includes(q));
+    })
+    .sort((a, b) => {
+      if (templateSort === 'name') return String(a.name || '').localeCompare(String(b.name || ''), 'he');
+      if (templateSort === 'category') {
+        return String(a.category || '').localeCompare(String(b.category || ''))
+          || String(a.name || '').localeCompare(String(b.name || ''), 'he');
+      }
+      return 0; // the server already returns the manual order from the Meta tab
+    });
+
+  // A template that scrolls out of sight behind a filter is still the one that
+  // will be sent, so it stays pinned at the top rather than looking unselected.
+  const pinnedTemplate =
+    selectedTemplate && !visibleTemplates.some((t) => t.id === selectedTemplate.id)
+      ? selectedTemplate
+      : null;
+
+  const resetTemplateFilters = () => {
+    setTemplateSearch('');
+    setTemplateCategory('ALL');
+    setShowArchivedTemplates(false);
+  };
 
   const handleBotToggle = async (enabled) => {
     const previous = !!settings.aiResponderEnabled;
@@ -681,19 +739,89 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </div>
 
               <div className="card card-p">
-                <div className="section-title" style={{ marginBottom: 14 }}>תבניות מאושרות</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {(approvedTemplates.length ? approvedTemplates : WA_TEMPLATES).map(tmpl => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <div className="section-title" style={{ marginBottom: 0 }}>תבניות מאושרות</div>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    {templateFiltersActive
+                      ? `${visibleTemplates.length} מתוך ${sendableCount}`
+                      : `${sendableCount} זמינות לשליחה`}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+                  <div className="input-icon-wrap" style={{ flex: '1 1 180px', minWidth: 150 }}>
+                    <Search className="input-icon" size={15} />
+                    <input
+                      className="input input-sm"
+                      placeholder="חיפוש שם, טקסט או שם ב-Meta..."
+                      style={{ width: '100%', paddingRight: 32 }}
+                      value={templateSearch}
+                      onChange={(e) => setTemplateSearch(e.target.value)}
+                    />
+                  </div>
+                  {/* .input is width:100%, so without a width these three each
+                      take a whole row and the filter bar becomes a stack. */}
+                  <AppSelect className="input input-sm" style={{ width: 150, flex: '0 0 auto' }}
+                    value={templateCategory} onChange={(e) => setTemplateCategory(e.target.value)}>
+                    <option value="ALL">כל הקטגוריות</option>
+                    {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </AppSelect>
+                  <AppSelect className="input input-sm" style={{ width: 160, flex: '0 0 auto' }}
+                    value={templateSort} onChange={(e) => setTemplateSort(e.target.value)}>
+                    <option value="custom">מיון: סדר ידני</option>
+                    <option value="name">מיון: שם</option>
+                    <option value="category">מיון: קטגוריה</option>
+                  </AppSelect>
+                  {archivedCount > 0 && (
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={showArchivedTemplates}
+                        onChange={(e) => setShowArchivedTemplates(e.target.checked)} />
+                      <Archive size={13} /> ארכיון ({archivedCount})
+                    </label>
+                  )}
+                  {templateFiltersActive && (
+                    <button type="button" className="btn btn-xs btn-ghost" onClick={resetTemplateFilters}>
+                      <FilterX size={12} /> נקה
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 460, overflowY: 'auto' }}>
+                  {[...(pinnedTemplate ? [pinnedTemplate] : []), ...visibleTemplates].map(tmpl => (
                     <div key={tmpl.id} className={`check-item ${selectedTemplate?.id === tmpl.id ? 'checked' : ''}`}
                       onClick={() => { setSelectedTemplate(selectedTemplate?.id === tmpl.id ? null : tmpl); setCustomMessage(''); }}
-                      style={{ padding: 12, cursor: 'pointer', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{tmpl.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{tmpl.text}</div>
+                      // .check-item is a flex row — left as-is, the name and the
+                      // message body sit side by side instead of one under the other.
+                      style={{ padding: 12, cursor: 'pointer', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)', borderRadius: 8, opacity: tmpl.archived ? 0.72 : 1, flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <CategoryIcon category={tmpl.category} />
+                        <div style={{ fontWeight: 700, fontSize: 13, minWidth: 0 }}>{tmpl.name}</div>
+                        {tmpl.archived && (
+                          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 6px' }}>
+                            ארכיון
+                          </span>
+                        )}
+                      </div>
+                      {tmpl.metaName && tmpl.metaName !== tmpl.name && (
+                        <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 3, direction: 'ltr', textAlign: 'right', fontFamily: 'monospace' }}>
+                          {tmpl.metaName}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {tmpl.text}
+                      </div>
                     </div>
                   ))}
+                  {visibleTemplates.length === 0 && !pinnedTemplate && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '14px 4px', textAlign: 'center' }}>
+                      {allSendableTemplates.length === 0
+                        ? 'אין תבניות מאושרות — סנכרנו מ-Meta בטאב «תבניות Meta»'
+                        : 'אין תבנית שמתאימה לחיפוש'}
+                    </div>
+                  )}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10 }}>
-                  לניהול — מיון, ארכיון, עריכה ומחיקה — עברו לטאב «תבניות Meta».
+                  לניהול — סדר ידני, ארכיון, עריכה ומחיקה — עברו לטאב «תבניות Meta».
                 </div>
               </div>
 
