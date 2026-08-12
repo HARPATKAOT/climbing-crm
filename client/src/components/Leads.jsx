@@ -2890,9 +2890,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     approved: '#34D399',
     rejected: '#F87171',
   };
-  const restrictedEligibilityGroups = groups.filter((group) => (
-    group.active !== false && Boolean(restrictedProgramForGroup(group))
-  ));
+  const eligibilityGroupOrder = { adult_squad: 0, young_squad: 1, advanced: 2 };
+  const restrictedEligibilityGroups = groups
+    .filter((group) => group.active !== false && Boolean(restrictedProgramForGroup(group)))
+    .sort((a, b) => (
+      eligibilityGroupOrder[restrictedProgramForGroup(a)]
+      - eligibilityGroupOrder[restrictedProgramForGroup(b)]
+    ));
   const visibleProgramEligibility = programEligibility
     .filter((item) => ['returning', 'approved'].includes(String(item.status || '')))
     .sort((a, b) => {
