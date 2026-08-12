@@ -6,19 +6,30 @@
 
 import { studentInGroup } from './studentGroups.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
+import { holdIsLive } from './placementHold.js';
 
-// 'pending_signup' is a soft hold while the customer completes registration at
-// the מתנ"ס: the group association is kept, but the seat stays open for others.
-export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist', 'pending_signup']);
+export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist']);
 
-export function countsTowardCapacity(student, groupId) {
+/**
+ * A placement waiting on the מתנ״ס takes its seat.
+ *
+ * It used to leave the seat open so waiting on somebody else's confirmation
+ * would not block the next family — which meant we kept offering a class that
+ * was in fact full, and then had to tell people there was no room after
+ * sending them off to register. The seat is held instead, for three days; see
+ * placementHold.js for what releases it.
+ */
+export function countsTowardCapacity(student, groupId, { now = new Date() } = {}) {
   if (!student || !groupId) return false;
   if (!studentInGroup(student, groupId)) return false;
-  return !CAPACITY_EXCLUDED_STATUSES.has(String(student.status || ''));
+  const status = String(student.status || '');
+  if (CAPACITY_EXCLUDED_STATUSES.has(status)) return false;
+  if (status === 'pending_signup') return holdIsLive(student, now);
+  return true;
 }
 
-export function countEnrolled(groupId, students = []) {
-  return (students || []).filter((s) => countsTowardCapacity(s, groupId)).length;
+export function countEnrolled(groupId, students = [], options = {}) {
+  return (students || []).filter((s) => countsTowardCapacity(s, groupId, options)).length;
 }
 
 /**
@@ -36,22 +47,22 @@ export function maxSlotsOf(group) {
 }
 
 /** Free places, or `null` when the capacity is unknown. */
-export function spotsLeft(group, students = []) {
+export function spotsLeft(group, students = [], options = {}) {
   if (!group?.id) return 0;
   const max = maxSlotsOf(group);
   if (max === null) return null;
-  return Math.max(0, max - countEnrolled(group.id, students));
+  return Math.max(0, max - countEnrolled(group.id, students, options));
 }
 
 /** Unknown capacity is never "full" — we have no grounds to turn anyone away. */
-export function isGroupFull(group, students = []) {
-  const free = spotsLeft(group, students);
+export function isGroupFull(group, students = [], options = {}) {
+  const free = spotsLeft(group, students, options);
   return free !== null && free <= 0;
 }
 
-export function enrichGroupsWithCapacity(groups = [], students = []) {
+export function enrichGroupsWithCapacity(groups = [], students = [], options = {}) {
   return (groups || []).map((g) => {
-    const enrolled = countEnrolled(g.id, students);
+    const enrolled = countEnrolled(g.id, students, options);
     const maxSlots = maxSlotsOf(g);
     const free = maxSlots === null ? null : Math.max(0, maxSlots - enrolled);
     return {

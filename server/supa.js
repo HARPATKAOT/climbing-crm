@@ -329,6 +329,12 @@ export const mappers = {
       created_at: r.created_at || null,
       healthSignedAt: r.health_signed_at || null,
       waiverSignedAt: r.waiver_signed_at || null,
+      // A placement holds its seat for a few days — see placementHold.js.
+      // Without these on the row the hold would be forgotten on every restart
+      // and the seat would quietly open again.
+      placement_hold_until: r.placement_hold_until || null,
+      placement_hold_firm: r.placement_hold_firm === true,
+      placement_reported_at: r.placement_reported_at || null,
     }),
     toRow: (o) => ({
       id: o.id,
@@ -352,6 +358,9 @@ export const mappers = {
       created_at: emptyToNull(o.created_at),
       health_signed_at: emptyToNull(o.healthSignedAt),
       waiver_signed_at: emptyToNull(o.waiverSignedAt),
+      placement_hold_until: emptyToNull(o.placement_hold_until),
+      placement_hold_firm: o.placement_hold_firm === true,
+      placement_reported_at: emptyToNull(o.placement_reported_at),
     }),
   },
 

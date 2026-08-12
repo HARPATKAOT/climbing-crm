@@ -10,7 +10,7 @@ import { db } from './db.js';
 import { supa } from './supa.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
-import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
+import { getSortedGroupDays, groupMeetsOnDay, israelDateStr } from './attendanceUtils.js';
 import { enrichGroupsWithBotMeta } from './groupMetadata.js';
 import {
   canPlaceInRestrictedGroup,
@@ -26,6 +26,8 @@ import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
+import { groupsForFrequency, holdExpiryFrom, holdNoticeForCustomer } from './placementHold.js';
+import { enrollmentId } from './studentGroups.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -1927,12 +1929,35 @@ export function buildCustomerTools({
         };
       }
 
+      // "פעמיים בשבוע" in a single-day group means both days of the pair — two
+      // group rows, not one. Saving only the first left the second day's coach
+      // without the trainee and without a register to mark.
+      const placedGroups = groupsForFrequency(db.get('groups') || [], group, frequency);
       const row = db.update('students', student.id, {
         status: 'pending_signup',
         groupId: group.id,
+        groupIds: placedGroups.map((g) => String(g.id)),
+        // The seat is taken from now, and only for a few days — see
+        // placementHold.js. Reporting the registration makes it firm.
+        placement_hold_until: holdExpiryFrom(),
+        placement_hold_firm: false,
       });
       if (!row) return { error: 'השיבוץ נכשל — יש להעביר לצוות' };
       await persistCore('students', row);
+      for (const placed of placedGroups) {
+        const enrollment = {
+          id: enrollmentId(student.id, placed.id),
+          student_id: student.id,
+          group_id: placed.id,
+          status: 'pending',
+          start_date: israelDateStr(),
+          end_date: null,
+        };
+        const saved = db.getOne('enrollments', enrollment.id)
+          ? db.update('enrollments', enrollment.id, enrollment)
+          : db.insert('enrollments', enrollment);
+        if (saved) await persistCore('enrollments', saved);
+      }
       try {
         await onPlacement?.({ student: row, group, kind: 'pending_signup' });
       } catch (err) {
@@ -1962,13 +1987,16 @@ export function buildCustomerTools({
       });
       return {
         שובץ: student.name || '',
-        קבוצה: describeGroup(group),
+        קבוצה: placedGroups.map((g) => describeGroup(g)).join(' + '),
         סטטוס_פנימי: 'ממתין להרשמה',
+        שמירת_מקום: holdNoticeForCustomer(),
         חבילת_הרשמה: registrationPack,
-        הערה: 'השיבוץ נשמר ואינו תופס מקום בקבוצה. יש לשלוח את קישורי ההרשמה '
-          + 'והציוד. הקישור אינו אישור הרשמה; ההרשמה הופכת לסופית רק אחרי אימות '
-          + 'מהמתנ״ס או אישור צוות. אין להציג ללקוח את הסטטוס הפנימי. נקבעה '
-          + 'בדיקה חוזרת פנימית למחר — אין צורך לקרוא ל-scheduleFollowUp בנוסף.',
+        הערה: 'השיבוץ נשמר והמקום נתפס. יש לשלוח את קישורי ההרשמה והציוד, ולומר '
+          + 'ללקוח בדיוק את מה שכתוב בשדה «שמירת_מקום» — שהמקום שמור לזמן קצוב '
+          + 'ושעליו לעדכן כשנרשם. הקישור אינו אישור הרשמה; ההרשמה הופכת לסופית '
+          + 'רק אחרי אימות מהמתנ״ס או אישור צוות. אין להציג ללקוח את הסטטוס '
+          + 'הפנימי. נקבעה בדיקה חוזרת פנימית למחר — אין צורך לקרוא '
+          + 'ל-scheduleFollowUp בנוסף.',
       };
     },
 

@@ -52,8 +52,25 @@ export function findOpenCheck(db, studentId) {
     && row.status !== CENTRE_CHECK_CONFIRMED) || null;
 }
 
+/**
+ * The place was held for a few days so an abandoned placement would not sit on
+ * a seat for ever. A parent who says they registered is the opposite of
+ * abandoned: from here the hold waits on the centre, not on a clock.
+ */
+async function makeHoldFirm({ db, persist, student, now }) {
+  if (!student?.id) return;
+  if (student.placement_hold_firm === true) return;
+  const updated = db.update?.('students', student.id, {
+    placement_hold_firm: true,
+    placement_hold_until: null,
+    placement_reported_at: new Date(now).toISOString(),
+  });
+  if (updated && typeof persist === 'function') await persist('students', updated);
+}
+
 export async function recordParentReport({ db, persist, student, parent, now = new Date() } = {}) {
   if (!student?.id) return { ok: false, error: 'אין מתאמן' };
+  await makeHoldFirm({ db, persist, student, now });
   const existing = findOpenCheck(db, student.id);
   if (existing) return { ok: true, row: existing, duplicate: true };
   const row = db.insert(CENTRE_CHECK_COLLECTION, {
