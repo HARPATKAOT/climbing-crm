@@ -8,22 +8,8 @@ import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables
 import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { invalidateComposerResources } from './composerResources.js';
+import TemplateUsageBadges from './TemplateUsageBadges.jsx';
 import AppSelect from './AppSelect.jsx';
-
-const EVENT_SYSTEM_META_NAMES = new Set([
-  'event_host_payment_v4',
-  'event_participant_link_v4',
-  'event_host_payment_v3',
-  'event_participant_link_v3',
-  'event_host_payment_v2',
-  'event_participant_link_v2',
-  'event_host_payment',
-  'event_participant_link',
-  'equipment_payment',
-  'equipment_payment_link',
-  'participation_form_link',
-  'customer_details_v2',
-]);
 
 // Exported so the send screen labels a template with the same colour and word
 // this screen uses — one category legend for the whole system, not two.
@@ -122,41 +108,6 @@ function ExternalLinkWarning({ template }) {
         הכפתור מוביל ל־{host} — מחוץ למערכת. מה שימולא שם לא ייכנס לתיק הלקוח.
       </span>
     </div>
-  );
-}
-
-function SystemBadge({ template }) {
-  const meta = String(template?.meta_name || template?.name || '');
-  const id = String(template?.id || '');
-  if (
-    !EVENT_SYSTEM_META_NAMES.has(meta) &&
-    !id.startsWith('tpl-event-') &&
-    id !== 'tpl-equipment-payment'
-  ) {
-    return null;
-  }
-  const label = meta.startsWith('event_') || id.startsWith('tpl-event-')
-    ? 'אירוע'
-    : 'ציוד';
-  return (
-    <span
-      title="תבנית מערכת — נשלחת אוטומטית מהמסך המתאים כשהחלון סגור"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        padding: '1px 7px',
-        borderRadius: 999,
-        fontSize: 10,
-        fontWeight: 800,
-        color: '#FCD34D',
-        background: 'rgba(234, 179, 8, 0.16)',
-        border: '1px solid rgba(234, 179, 8, 0.35)',
-        marginInlineStart: 6,
-        verticalAlign: 'middle',
-      }}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -877,7 +828,12 @@ export default function TemplatesManager() {
                   <span style={templateTagStyle(t.tag)}>{t.tag}</span>
                 )}
                 <span>{t.name}</span>
-                <SystemBadge template={t} />
+                {/* מי שולח אותה — התשובה שהניקוי האחרון נדרש לחפש בקוד. */}
+                <TemplateUsageBadges
+                  usage={t.used_by}
+                  manualSend={t.manual_send}
+                  showIdle={!t.archived}
+                />
               </div>
               <ExternalLinkWarning template={t} />
               <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>

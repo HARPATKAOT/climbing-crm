@@ -442,6 +442,7 @@ import {
   setManualTemplate,
   withManualSendFlag,
 } from './conversationTemplateSettings.js';
+import { withUsage } from './templateUsage.js';
 import {
   PARTICIPATION_FORM_TEMPLATE,
   ensureParticipationFormWhatsappTemplate,
@@ -2202,7 +2203,11 @@ app.get('/api/message-templates', async (req, res) => {
   // setting, not a hardcoded list — every consumer of this route reads it off
   // the row so nobody has to fetch the setting separately.
   const manualNames = await loadManualTemplateNames().catch(() => DEFAULT_MANUAL_TEMPLATE_NAMES);
-  res.json(withManualSendFlag(rows, manualNames));
+  // ומי שולח כל תבנית — הבוט, אוטומציה או אחד המסכים. נגזר כאן ולא נשמר, כדי
+  // שתבנית שנותקה מאוטומציה תפסיק להיות מסומנת באותו רגע.
+  res.json(withUsage(withManualSendFlag(rows, manualNames), {
+    automations: db.get('automations') || [],
+  }));
 });
 
 app.post('/api/message-templates/:id/manual-send', requireOwner, async (req, res) => {
