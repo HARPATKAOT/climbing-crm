@@ -10,6 +10,7 @@ import {
   ruleChargeBreakdown,
 } from '../utils/activityPricing.js';
 import { formatIls } from '../utils/vat.js';
+import { priceRuleIcon } from '../utils/priceRuleIcons.js';
 import AppSelect from './AppSelect.jsx';
 
 /**
@@ -271,28 +272,34 @@ export default function ActivityPriceBook() {
               <div className="policy-block-sub" style={{ padding: '4px 2px', fontWeight: 700 }}>
                 {group.label}
               </div>
-              {group.rules.map((rule) => (
-                <button
-                  key={rule.id}
-                  type="button"
-                  className={`policy-card${String(rule.id) === String(selectedId) ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setCreating(false);
-                    setSelectedId(rule.id);
-                    setDraft(editableFrom(rule));
-                    setError('');
-                    setMessage('');
-                  }}
-                >
-                  <span className="policy-card-name">{rule.name}</span>
-                  <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                    {rule.summary || describePriceRule(rule)}
-                  </span>
-                  {rule.is_active === false && (
-                    <span className="policy-card-tag">בארכיון</span>
-                  )}
-                </button>
-              ))}
+              {group.rules.map((rule) => {
+                const { Icon, color } = priceRuleIcon(rule);
+                return (
+                  <button
+                    key={rule.id}
+                    type="button"
+                    className={`policy-card${String(rule.id) === String(selectedId) ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setCreating(false);
+                      setSelectedId(rule.id);
+                      setDraft(editableFrom(rule));
+                      setError('');
+                      setMessage('');
+                    }}
+                  >
+                    <span className="policy-card-name">
+                      <Icon size={14} style={{ color }} aria-hidden="true" />
+                      {rule.name}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                      {rule.summary || describePriceRule(rule)}
+                    </span>
+                    {rule.is_active === false && (
+                      <span className="policy-card-tag">בארכיון</span>
+                    )}
+                  </button>
+                );
+              })}
             </React.Fragment>
           ))}
 

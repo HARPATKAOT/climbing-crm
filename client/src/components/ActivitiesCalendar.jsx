@@ -22,6 +22,7 @@ import {
   ruleChargeBreakdown,
   ruleNumbers,
 } from '../utils/activityPricing.js';
+import { priceRuleIcon } from '../utils/priceRuleIcons.js';
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
@@ -2003,6 +2004,9 @@ function RegularActivityModal({
                           priceRules.find((item) => String(item.id) === event.target.value)
                         )}
                         disabled={readOnly}
+                        optionIcon={(value) => (value
+                          ? priceRuleIcon(priceRules.find((item) => String(item.id) === value))
+                          : null)}
                       >
                         <option value="">בחרו שורה</option>
                         {priceRules.map((item) => (
