@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent, Ban } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent, Ban, Mountain } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
@@ -9,6 +9,7 @@ import CashShiftPanel from './CashShiftPanel.jsx';
 import CashManagerPanel from './CashManagerPanel.jsx';
 import PosCheckoutLinks from './PosCheckoutLinks.jsx';
 import DiscountCenter from './DiscountCenter.jsx';
+import ActivityPriceBook from './ActivityPriceBook.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -88,7 +89,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
   const [activeTab, setActiveTab] = useState(
-    ['products', 'discounts', 'manager'].includes(initialTab) && isOwner ? initialTab : 'sale'
+    ['products', 'activity-prices', 'discounts', 'manager'].includes(initialTab) && isOwner ? initialTab : 'sale'
   );
   const [employees, setEmployees] = useState([]);
 
@@ -411,7 +412,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   }, [activeTab, isOwner, refreshReports]);
 
   useEffect(() => {
-    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports' || activeTab === 'products' || activeTab === 'discounts' || activeTab === 'manager')) {
+    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports' || activeTab === 'products' || activeTab === 'activity-prices' || activeTab === 'discounts' || activeTab === 'manager')) {
       setActiveTab('sale');
     }
   }, [isOwner, activeTab]);
@@ -424,6 +425,10 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const tabs = [
     { k: 'sale', label: 'מכירה', icon: ShoppingCart },
     ...(isOwner ? [{ k: 'products', label: 'מוצרים', icon: Package }] : []),
+    // מחירון הפעילויות יושב ליד מחירון הקופה כדי שכל המחירים יהיו במקום אחד
+    // לעין — אבל הם שני מסכים ושני מודלים: כאן מוצר עם מלאי, שם יום פעילות
+    // לקבוצה עם מינימום ומדרגות.
+    ...(isOwner ? [{ k: 'activity-prices', label: 'מחירון פעילויות', icon: Mountain }] : []),
     ...(isOwner ? [{ k: 'discounts', label: 'הטבות והנחות', icon: BadgePercent }] : []),
     { k: 'links', label: 'קישורים ללקוח', icon: Link2 },
     { k: 'close', label: 'פתיחה / סגירה', icon: Calculator },
@@ -616,6 +621,8 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       )}
 
       {activeTab === 'products' && isOwner && <Pricelist />}
+
+      {activeTab === 'activity-prices' && isOwner && <ActivityPriceBook />}
 
       {activeTab === 'discounts' && isOwner && <DiscountCenter />}
 
