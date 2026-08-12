@@ -1140,23 +1140,24 @@ export default function PosSale({
         }
       }
 
-      // Clear cart after any successful checkout action
+      // מכירה שהושלמה סוגרת את הטיפול בלקוח הזה, והדלפק פנוי לבא בתור.
+      //
+      // עד כאן הלקוח נוקה רק במסלול קישור התשלום — שם כבר ידענו שהשארתו על
+      // המסך גורמת למכירה הבאה להיתלות עליו. אותו דבר בדיוק קרה אחרי מכירה
+      // במזומן, שהיא רוב מה שקורה בדלפק: העגלה התרוקנה, הלקוח נשאר, והמוכר
+      // התחיל להקליד ללקוח הבא על תיק של מישהו אחר.
+      //
+      // מה שכן נשאר הוא אישור המסמך והעודף להחזר: הדלפקיסט עדיין צריך לקרוא
+      // אותם. הם נמחקים מעצמם ברגע שנכנס פריט לעגלה הבאה.
       setCart([]);
       setTenderedAmount('');
       setTenderedDenoms({});
-      // קישור תשלום סוגר את הטיפול בלקוח הזה: הוא עבר לרשימת הממתינים, והדלפק
-      // פנוי לבא בתור. השארת הלקוח על המסך גרמה למכירה הבאה להיתלות עליו.
       setPaymentMethod('');
-      if (endpoint === '/api/pos/payment-link') {
-        clearCustomer();
-        setAnonymousSale(false);
-        setAppliedCoupon(null);
-        setDismissedCoupons(new Set());
-      }
       setShowQuoteOptions(false);
-      if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
-        clearCustomer();
-      }
+      clearCustomer();
+      setAnonymousSale(false);
+      setAppliedCoupon(null);
+      setDismissedCoupons(new Set());
       refresh();
     } catch (err) {
       setError(err.message || 'שגיאה');
