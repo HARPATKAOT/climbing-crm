@@ -80,6 +80,22 @@ export function groupsForFrequency(groups = [], group, frequency = '') {
   return paired ? [group, paired] : [group];
 }
 
+export const ONCE_WEEKLY = 'פעם בשבוע';
+
+/**
+ * יום שנאמר הוא תדירות שנבחרה.
+ *
+ * דריה כתבה „יום א'”, והבוט שאל אותה אם היא רוצה פעם או פעמיים בשבוע במקום
+ * לשלוח לה את הקישור. אבל פעמיים בשבוע הן *שני* ימים — מי שנוקב ביום אחד כבר
+ * ענה על השאלה. השאלה נשארת רק כשלא נאמר יום כלל.
+ */
+export function frequencyForRequest({ frequency = '', day = null, frequencies = [] } = {}) {
+  const chosen = String(frequency || '').trim();
+  if (chosen) return chosen;
+  if (day === null || day === undefined || day === '') return '';
+  return frequencies.includes(ONCE_WEEKLY) ? ONCE_WEEKLY : '';
+}
+
 /** מה שנאמר להורה: המקום שמור, וצריך לחזור אלינו. */
 export function holdNoticeForCustomer({ days = HOLD_DAYS } = {}) {
   return `המקום שמור ל-${days} ימים עד להשלמת ההרשמה במתנ״ס. `

@@ -26,6 +26,7 @@ import {
   printReceiptFromSale, openInvoiceFallback, thermalSupported, printMode, PRINT_MODES,
 } from '../utils/thermalPrinter.js';
 import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 // שתי דרכים בלבד, וכל אחת בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
 const PAY_METHODS = [
@@ -152,6 +153,9 @@ export default function PosSale({
   sellerEmployeeId = '',
   hideInvoiceContactEditor = false,
 }) {
+  // פרטי העסק נדרשים לקבלה המודפסת — שם משפטי, מספר עוסק, כתובת ולוגו הם
+  // פרטי חובה על חשבונית מס.
+  const { profile: businessProfile } = useBusinessProfile();
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -720,6 +724,7 @@ export default function PosSale({
     if (printMode() === PRINT_MODES.OS) {
       const sale = data.sale || {};
       return printReceiptViaOs(buildReceiptHtml({
+        profile: businessProfile,
         sale: { ...sale, tendered_amount: sale.tendered_amount ?? (Number(tenderedAmount) || undefined) },
         changeGiven: data.changeGiven || 0,
       }));
@@ -1061,6 +1066,21 @@ export default function PosSale({
     return true;
   };
 
+  /**
+   * המכירה הקודמת נסגרת ברגע שנכנס פריט לעגלה.
+   *
+   * העודף להחזר ואישור המסמך נשארו על המסך אחרי מכירה, וזה נכון — הדלפקיסט
+   * צריך לראות כמה להחזיר. אבל הם נשארו שם גם אחרי שהתחילה מכירה חדשה, לצד
+   * תצוגת העודף החיה של הלקוח שעומד עכשיו: שני סכומים שונים באותו מסך, בלי
+   * שום דבר שמבדיל ביניהם, ואחד מהם שייך למישהו שכבר הלך. בקופה זה בדיוק סוג
+   * הבלבול שגורם להחזיר את הסכום הלא נכון.
+   */
+  useEffect(() => {
+    if (!cart.length) return;
+    setLastChange(null);
+    setResult(null);
+  }, [cart.length]);
+
   const runAction = async (endpoint, extra = {}, { validateFn = validate } = {}) => {
     if (!validateFn()) return;
     setBusy(true);
@@ -1120,23 +1140,24 @@ export default function PosSale({
         }
       }
 
-      // Clear cart after any successful checkout action
+      // מכירה שהושלמה סוגרת את הטיפול בלקוח הזה, והדלפק פנוי לבא בתור.
+      //
+      // עד כאן הלקוח נוקה רק במסלול קישור התשלום — שם כבר ידענו שהשארתו על
+      // המסך גורמת למכירה הבאה להיתלות עליו. אותו דבר בדיוק קרה אחרי מכירה
+      // במזומן, שהיא רוב מה שקורה בדלפק: העגלה התרוקנה, הלקוח נשאר, והמוכר
+      // התחיל להקליד ללקוח הבא על תיק של מישהו אחר.
+      //
+      // מה שכן נשאר הוא אישור המסמך והעודף להחזר: הדלפקיסט עדיין צריך לקרוא
+      // אותם. הם נמחקים מעצמם ברגע שנכנס פריט לעגלה הבאה.
       setCart([]);
       setTenderedAmount('');
       setTenderedDenoms({});
-      // קישור תשלום סוגר את הטיפול בלקוח הזה: הוא עבר לרשימת הממתינים, והדלפק
-      // פנוי לבא בתור. השארת הלקוח על המסך גרמה למכירה הבאה להיתלות עליו.
       setPaymentMethod('');
-      if (endpoint === '/api/pos/payment-link') {
-        clearCustomer();
-        setAnonymousSale(false);
-        setAppliedCoupon(null);
-        setDismissedCoupons(new Set());
-      }
       setShowQuoteOptions(false);
-      if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
-        clearCustomer();
-      }
+      clearCustomer();
+      setAnonymousSale(false);
+      setAppliedCoupon(null);
+      setDismissedCoupons(new Set());
       refresh();
     } catch (err) {
       setError(err.message || 'שגיאה');

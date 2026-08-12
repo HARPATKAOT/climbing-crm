@@ -161,10 +161,12 @@ import {
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
 import {
+  activityPublicSlug,
   upcomingPublicActivities,
   upcomingOpeningHours,
   publicGroups,
 } from './publicSite.js';
+import { eventPublicUrl } from './botFacts.js';
 import {
   SUGGESTION_PENDING,
   approveSuggestion,
@@ -414,6 +416,7 @@ import {
   equipmentReceiptMessage,
   familyEquipmentStanding,
 } from './equipmentStanding.js';
+import { ideaJustScheduled, ideaScheduledMessage } from './activityIdeas.js';
 import { weeklySessionsForStudent } from './studentFrequency.js';
 import { shoesUpgradeQuote, describeShoesUpgrade } from './equipmentUpgrade.js';
 import { safetyTestStatus } from './safetyTestService.js';
@@ -5183,6 +5186,9 @@ function normalizeActivityPayload(body = {}) {
     // it is erased. That is why an activity saved as published came back
     // private, however it had been set: the flag never survived the next save.
     show_on_site: !isOps && !!body.registration_enabled && !!body.show_on_site,
+    // רעיון: פעילות שאוספת מתעניינים. בלי תאריך היא עדיין חוקית — זו כל
+    // הנקודה, ולכן גם הבדיקה של „חסר תאריך” מוותרת עליה.
+    collect_interest: !isOps && body.collect_interest === true,
     registration_closes_at: body.registration_closes_at || null,
     collect_registration_payment:
       !isOps && registrationMode === 'paid_per_participant' && Number(body.price || 0) > 0,
@@ -5392,7 +5398,8 @@ app.post('/api/activities', async (req, res) => {
   }
   const payload = normalizeActivityPayload(req.body || {});
   if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
-  if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
+  // רעיון הוא פעילות שעדיין אין לה תאריך — זו כל מהותה.
+  if (!payload.date && !payload.collect_interest) return res.status(400).json({ error: 'חסר תאריך' });
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
   }
@@ -5435,7 +5442,8 @@ app.put('/api/activities/:id', async (req, res) => {
   }
   const payload = normalizeActivityPayload({ ...existing, ...(req.body || {}) });
   if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
-  if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
+  // רעיון הוא פעילות שעדיין אין לה תאריך — זו כל מהותה.
+  if (!payload.date && !payload.collect_interest) return res.status(400).json({ error: 'חסר תאריך' });
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
   }
@@ -5478,6 +5486,12 @@ app.put('/api/activities/:id', async (req, res) => {
   applyVacationAttendanceForActivities(existing, updated).catch((err) =>
     console.error('Vacation attendance sync failed:', err.message)
   );
+  // The whole point of a list with no date: the moment there is one, the people
+  // who asked to be told are told.
+  if (ideaJustScheduled(existing, updated)) {
+    announceScheduledIdea(updated).catch((err) =>
+      console.error('idea announcement failed:', err.message));
+  }
 });
 
 // Deleting an activity that people are registered to leaves their registrations
@@ -10333,6 +10347,64 @@ app.post('/api/payments/:id/refund', async (req, res) => {
 });
 
 /**
+ * Everybody who asked to be told when this one gets a date.
+ *
+ * The list is the only reason a dateless activity exists, so it is the only
+ * thing that must happen when the date arrives. Outside the 24-hour window
+ * there is no template for it — the news is worth an approved one, but until
+ * there is one the team hears instead of nobody hearing at all.
+ */
+async function announceScheduledIdea(activity) {
+  const rows = listInterest(db, activity.id).filter((row) => (
+    String(row.status || 'interested') === 'interested'
+  ));
+  if (!rows.length) return;
+  const link = activityPublicSlug(activity) && activity.registration_enabled
+    ? eventPublicUrl(activityPublicSlug(activity))
+    : '';
+  const missed = [];
+  for (const row of rows) {
+    const parent = row.parent_id ? db.getOne('parents', row.parent_id) : null;
+    const phone = normalizePhone(parent?.phone || row.phone || '');
+    if (!phone || (parent && isOptedOut(parent))) continue;
+    if (parent && !canSendFreeform(parent, 'whatsapp')) {
+      missed.push(`${row.name || parent?.name || ''} · ${phone}`);
+      continue;
+    }
+    try {
+      await whatsappService.sendTextMessage(
+        phone,
+        withBotMark(ideaScheduledMessage(activity, {
+          firstName: parentFirstName(parent) || String(row.name || '').split(/\s+/)[0],
+          link,
+        })),
+        true,
+        { source: 'ai', parentId: parent?.id || null }
+      );
+    } catch (err) {
+      console.error('idea announcement send failed:', err.message);
+    }
+  }
+  if (!missed.length) return;
+  const { phones } = alertRecipients(db, 'handoff', db.getSettings ? db.getSettings() : {});
+  const body = [
+    `📣 נקבע תאריך ל${activity.name || 'פעילות'} — לא הצלחנו להודיע לכולם`,
+    ...missed.slice(0, 12).map((line) => `• ${line}`),
+    '← חלון 24 השעות סגור אצלם, צריך פנייה מכם.',
+  ].join('\n');
+  for (const staffPhone of phones) {
+    try {
+      await whatsappService.sendTextMessage(staffPhone, body, false, {
+        source: 'staff_notify',
+        clip: false,
+      });
+    } catch (err) {
+      console.error('idea staff notice failed:', err.message);
+    }
+  }
+}
+
+/**
  * The message a family gets once the equipment is settled.
  *
  * Until now paying was a page that closed, and marking "we already have shoes"
@@ -14695,6 +14767,18 @@ function posSellerForRequest(req) {
 }
 
 app.post('/api/pos/sale', async (req, res) => {
+  // ההדפסה בדלפק ממתינה לתשובה הזאת: מספר המסמך מודפס על הקבלה, ולכן אי אפשר
+  // להדפיס לפני שהוא קיים. המשמעות היא שכל קריאה חיצונית שיושבת כאן נמדדת
+  // בשניות שבהן הדלפקיסט עומד מול הלקוח ומחכה. הפירוק לשלבים הוא הדרך היחידה
+  // לדעת מי מהן באמת עולה — במקום לנחש ולייעל את הדבר הלא נכון.
+  const startedAt = Date.now();
+  const phases = [];
+  let phaseAt = startedAt;
+  const phase = (label) => {
+    const now = Date.now();
+    phases.push(`${label} ${now - phaseAt}ms`);
+    phaseAt = now;
+  };
   try {
     const {
       cart = [],
@@ -14726,6 +14810,7 @@ app.post('/api/pos/sale', async (req, res) => {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
     }
     lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
+    phase('eligibility');
     const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
     requireCounterPolicyAcceptance(req, cancellationPolicies);
 
@@ -14780,6 +14865,7 @@ app.post('/api/pos/sale', async (req, res) => {
       syncedParent = synced.parent;
       clientId = synced.clientId;
     }
+    phase('icount:client');
 
     let doc = null;
     if (icount.isConfigured()) {
@@ -14797,6 +14883,7 @@ app.post('/api/pos/sale', async (req, res) => {
         vattype: icountVatType(true),
       });
     }
+    phase('icount:doc');
 
     let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
@@ -14897,6 +14984,8 @@ app.post('/api/pos/sale', async (req, res) => {
 
     // החשבונית נשלחת מהשרת. עד היום נבנתה כאן רק כתובת wa.me שפתחה דפדפן
     // בדלפק וחיכתה שמישהו ילחץ „שלח” — מה שקרה לפעמים, ואיש לא ידע מתי לא.
+    phase('db+passes');
+
     let whatsappUrl = null;
     let invoiceWhatsappSent = false;
     let invoiceWhatsappError = null;
@@ -14954,6 +15043,8 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
+    phase('whatsapp');
+
     const receipt = method === 'cash'
       ? buildSaleReceipt({
         sale,
@@ -14961,6 +15052,10 @@ app.post('/api/pos/sale', async (req, res) => {
         openDrawer: true,
       })
       : null;
+
+    console.log(
+      `⏱️ [POS] sale ${sale.id} took ${Date.now() - startedAt}ms — ${phases.join(' · ')}`
+    );
 
     res.status(201).json({
       sale,
@@ -18904,6 +18999,10 @@ app.listen(PORT, () => {
   setInterval(() => {
     automationsService.runBotFollowUps().catch((err) =>
       console.error('bot follow-ups failed:', err.message));
+    // On the same beat: a turn that died before its answer went out leaves a
+    // customer answered by nobody, and nothing else would ever say so.
+    automationsService.runAbandonedReplySweep().catch((err) =>
+      console.error('abandoned reply sweep failed:', err.message));
   }, 15 * 60 * 1000);
 
   setTimeout(() => {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   expiredHolds,
+  frequencyForRequest,
   groupsForFrequency,
   holdExpiryFrom,
   holdIsLive,
@@ -42,6 +43,19 @@ test('קבוצה שנמכרת רק פעם בשבוע אינה מוצאת בן ז
 test('קבוצה שכבר נפגשת פעמיים אינה מוכפלת', () => {
   // אין לה בן זוג באותה שעה, ולכן היום השני כבר בתוכה.
   assert.deepEqual(groupsForFrequency(GROUPS, TWICE_GROUP, TWICE_WEEKLY).map((g) => g.id), [TWICE_GROUP.id]);
+});
+
+test('יום שנאמר הוא תדירות שנבחרה — ולא שאלה נוספת', () => {
+  const both = ['פעם בשבוע', 'פעמיים בשבוע'];
+  // דריה כתבה „יום א'” ונשאלה פעם או פעמיים במקום לקבל קישור.
+  assert.equal(frequencyForRequest({ day: 0, frequencies: both }), 'פעם בשבוע');
+  assert.equal(frequencyForRequest({ day: 3, frequencies: both }), 'פעם בשבוע');
+  // תדירות שנאמרה במפורש גוברת על היום.
+  assert.equal(frequencyForRequest({ frequency: 'פעמיים בשבוע', day: 0, frequencies: both }), 'פעמיים בשבוע');
+  // בלי יום ובלי תדירות — השאלה עדיין נדרשת.
+  assert.equal(frequencyForRequest({ frequencies: both }), '');
+  // קבוצה שנמכרת רק פעמיים בשבוע אינה הופכת לפעם אחת בגלל יום.
+  assert.equal(frequencyForRequest({ day: 1, frequencies: ['פעמיים בשבוע'] }), '');
 });
 
 test('החזקה חיה עד התפוגה, ושיבוץ ישן בלי תפוגה נחשב מוחזק', () => {

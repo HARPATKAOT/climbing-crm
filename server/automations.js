@@ -27,6 +27,10 @@ import {
   releaseFollowUpSend,
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
+import { abandonedClaims, markClaimReported } from './botReplyClaims.js';
+import { formFollowUpLine, formStillMissing } from './formFollowUp.js';
+import { participationEligibility } from './participationEligibility.js';
+import { buildRedirectUrl } from './publicLinks.js';
 import {
   equipmentOpenLine,
   familyEquipmentStanding,
@@ -59,7 +63,20 @@ function liveFollowUpState(row, parent) {
       && (!c.expires_at || new Date(c.expires_at).getTime() > now)
   );
   const link = checkout?.id ? buildEquipmentRedirectUrl(checkout.id) : '';
-  return { awaitingRegistration, equipmentLine: equipmentOpenLine(standing, { link }) };
+
+  // The form is the first step of all of them: it is what opens the trainee
+  // card. A family that filled it overnight must not be asked for it again.
+  const digits = String(parent.phone || '').replace(/\D/g, '');
+  const formLine = formStillMissing(students, (id) => participationEligibility(db, { studentId: id }))
+    && digits
+    ? formFollowUpLine({ link: buildRedirectUrl('fp', digits) })
+    : '';
+
+  return {
+    awaitingRegistration,
+    equipmentLine: equipmentOpenLine(standing, { link }),
+    formLine,
+  };
 }
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
@@ -593,6 +610,57 @@ export const automationsService = {
   },
 
   /**
+   * Turns that died before their answer went out.
+   *
+   * A reply is claimed before the model runs and closed after the send, so a
+   * worker that disappears in between — a deploy replacing the instance is
+   * enough — leaves a customer who was answered by nobody. It happened while a
+   * daughter was being placed: the placement saved, the message with the links
+   * never sent, and nothing anywhere said so.
+   *
+   * The turn is not re-run. Its tools already did their work, and guessing at
+   * the rest is worse than a person reading the thread. This turns the silence
+   * into a line on somebody's phone.
+   */
+  runAbandonedReplySweep: async ({ now = new Date() } = {}) => {
+    const stuck = abandonedClaims(db, { now });
+    if (!stuck.length) return { event: 'abandoned_replies', found: 0 };
+
+    const settings = db.getSettings ? db.getSettings() : {};
+    const rows = stuck.map((claim) => {
+      const parent = (db.get('parents') || []).find((p) => phonesMatch(p.phone, claim.phone));
+      return { claim, parent };
+    });
+    const lines = rows.slice(0, 10).map(({ claim, parent }) => (
+      `• ${parent?.name || '—'} · ${claim.phone || ''}`
+    ));
+    const body = [
+      '🔇 הבוט לא סיים תשובה — הלקוח לא קיבל כלום',
+      ...lines,
+      rows.length > lines.length ? `ועוד ${rows.length - lines.length}…` : '',
+      '← כדאי לפתוח את השיחה ולהמשיך ידנית.',
+    ].filter(Boolean).join('\n');
+
+    const { phones } = alertRecipients(db, 'handoff', settings);
+    let notified = 0;
+    for (const staffPhone of phones) {
+      try {
+        const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
+          source: 'staff_notify',
+          clip: false,
+        });
+        if (result?.success) notified += 1;
+      } catch (err) {
+        console.error('abandoned reply notice failed:', err.message);
+      }
+    }
+    for (const { claim } of rows) {
+      await markClaimReported(db, persistCore, claim.id, { now });
+    }
+    return { event: 'abandoned_replies', found: rows.length, notified };
+  },
+
+  /**
    * The promises the bot made — "תבדוק איתי מחר", and the day-after check on a
    * placement — come due here.
    *
@@ -656,7 +724,9 @@ export const automationsService = {
           // is actually still open — not the one the row was created for.
           const subject = (row.reason === 'pending_signup' && live.awaitingRegistration.length)
             ? `ההרשמה של ${live.awaitingRegistration.join(' ו')} במתנ״ס`
-            : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו'));
+            : (row.reason === 'form_not_filled'
+              ? 'טופס ההשתתפות'
+              : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו')));
           const result = await whatsappService.sendTemplateMessage(
             phone,
             FOLLOWUP_TEMPLATE_NAME,
@@ -714,9 +784,11 @@ export const automationsService = {
       const lines = needStaff.slice(0, 15).map(({ row, parent }) => {
         const what = row.reason === 'equipment_unpaid'
           ? `ציוד של ${row.subject || 'מתאמן'}`
-          : (row.reason === 'pending_signup'
-            ? `הרשמה של ${row.subject || 'מתאמן'}`
-            : (row.note || 'מעקב'));
+          : (row.reason === 'form_not_filled'
+            ? 'טופס השתתפות שלא מולא'
+            : (row.reason === 'pending_signup'
+              ? `הרשמה של ${row.subject || 'מתאמן'}`
+              : (row.note || 'מעקב')));
         return `• ${parent.name || '—'} · ${parent.phone || ''} — ${what}`;
       });
       const body = [
