@@ -26,6 +26,7 @@ import {
   printReceiptFromSale, openInvoiceFallback, thermalSupported, printMode, PRINT_MODES,
 } from '../utils/thermalPrinter.js';
 import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 // שתי דרכים בלבד, וכל אחת בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
 const PAY_METHODS = [
@@ -152,6 +153,9 @@ export default function PosSale({
   sellerEmployeeId = '',
   hideInvoiceContactEditor = false,
 }) {
+  // פרטי העסק נדרשים לקבלה המודפסת — שם משפטי, מספר עוסק, כתובת ולוגו הם
+  // פרטי חובה על חשבונית מס.
+  const { profile: businessProfile } = useBusinessProfile();
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -720,6 +724,7 @@ export default function PosSale({
     if (printMode() === PRINT_MODES.OS) {
       const sale = data.sale || {};
       return printReceiptViaOs(buildReceiptHtml({
+        profile: businessProfile,
         sale: { ...sale, tendered_amount: sale.tendered_amount ?? (Number(tenderedAmount) || undefined) },
         changeGiven: data.changeGiven || 0,
       }));

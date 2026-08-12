@@ -21,6 +21,7 @@ import React, {
 export const DEFAULT_BUSINESS_PROFILE = Object.freeze({
   display_name: 'קיר בועז',
   legal_name: 'הרפתקאות',
+  vat_id: '',
   logo_url: '/logo.png',
   phone: '',
   email: '',
