@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PENDING_KIND, todaysEntrants, entryRows, paymentRows, buildPendingQueue, buildCounterQueues,
+  shiftSales,
 } from './pendingHandling.js';
 
 const TODAY = '2026-08-10';
@@ -166,4 +167,61 @@ test('someone whose payment is still open is not counted as climbing', () => {
   });
   assert.deepEqual(pending.map((r) => r.name), ['יונתן כהן']);
   assert.deepEqual(active, []);
+});
+
+test('„אפשר להכניס” נאמר רק על מכירה שקנתה כניסה', () => {
+  // זוג נעליים ששולם אינו אישור כניסה. הכיתוב הזה על שורה של נעליים שולח
+  // מטפס לקיר בלי שקנה כניסה, ואיש בדלפק לא יידע.
+  const base = {
+    sales: [
+      { id: 'shoes', payment_method: 'online', status: 'paid', created_at: '2026-08-10T08:30:00.000Z',
+        customer_name: 'יעל חורב', student_id: 's1', total: 350,
+        items: [{ name: 'נעלי REFLEX', grants_wall_climbing: false }] },
+      { id: 'entry', payment_method: 'online', status: 'paid', created_at: '2026-08-10T09:00:00.000Z',
+        customer_name: 'נועה לוי', student_id: 's2', total: 60,
+        items: [{ name: 'כניסה לקיר', grants_wall_climbing: true }] },
+    ],
+    today: TODAY,
+    dateOf,
+    studentOf,
+  };
+  const rows = paymentRows(base);
+  assert.equal(rows.find((r) => r.sale_id === 'shoes').grants_entry, false);
+  assert.equal(rows.find((r) => r.sale_id === 'entry').grants_entry, true);
+});
+
+test('מכירה במזומן אינה ממתינה לטיפול, אבל היא כן במכירות המשמרת', () => {
+  // העובד שגבה במזומן ראה את הכסף; אין על מה שיאשר. עדיין צריך שהמכירה
+  // תופיע איפשהו, אחרת אין בדלפק תמונה של מה נמכר במשמרת.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    sales: [
+      { id: 'c1', payment_method: 'cash', status: 'paid', created_at: '2026-08-10T09:00:00.000Z',
+        customer_name: 'קונה במזומן', total: 20, items: [{ name: 'ארטיק' }] },
+      { id: 'o1', payment_method: 'online', status: 'pending_payment', created_at: '2026-08-10T09:30:00.000Z',
+        customer_name: 'ממתין לקישור', total: 60 },
+    ],
+  };
+  const { pending, sales } = buildCounterQueues(parts);
+  assert.deepEqual(pending.map((r) => r.name), ['ממתין לקישור']);
+  // הכי חדש בראש.
+  assert.deepEqual(sales.map((r) => r.name), ['ממתין לקישור', 'קונה במזומן']);
+  assert.equal(sales.find((r) => r.sale_id === 'c1').method, 'cash');
+});
+
+test('מכירה מבוטלת אינה נספרת במכירות המשמרת', () => {
+  const rows = shiftSales({
+    sales: [
+      { id: 'x', payment_method: 'cash', status: 'cancelled', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'בוטל' },
+      { id: 'y', payment_method: 'cash', status: 'paid', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'תקין' },
+    ],
+    today: TODAY,
+    dateOf,
+    studentOf,
+  });
+  assert.deepEqual(rows.map((r) => r.name), ['תקין']);
 });
