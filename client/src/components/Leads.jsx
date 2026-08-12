@@ -91,9 +91,11 @@ import {
   EQUIPMENT_ICON_COLORS,
   EQUIPMENT_LABELS,
   EQUIPMENT_ORDER,
+  EQUIPMENT_SHEET_TONE,
   EQUIPMENT_STATUS_TONES,
   applyEquipmentTone,
   equipmentItemTone,
+  equipmentOverallTone,
   equipmentToneBg,
   equipmentToneColor,
   equipmentToneLabel,
@@ -2810,6 +2812,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       })}
     </span>
   );
+  // אייקון הציוד בשורת הסיכום. אותם שלושה צבעים שהמדריך רואה בגיליון
+  // הנוכחות, כדי שאותו מצב ייראה אותו דבר בשני המסכים. „מהבית” ו„נמסר”
+  // שניהם ירוקים — מבחינת המשרד שניהם סגורים.
+  const equipmentHeadTone = showEquipment ? equipmentOverallTone(equipmentItems) : null;
+  const equipmentHeadLabel = equipmentHeadTone === 'blocked'
+    ? 'ממתין לתשלום'
+    : equipmentHeadTone === 'give'
+      ? 'שולם — ממתין למסירה'
+      : 'הושלם';
   const climbingLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
   const climbingLevelTint = climbingLevel?.startsWith('5')
     ? '#3B82F6'
@@ -2903,9 +2914,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       : salesPending > 0
         ? `${salesCountLabel} · ${salesPending} ממתין לתשלום`
         : salesCountLabel;
-  const equipmentUnpaid = equipmentItems.filter((i) => i.payment_status !== 'paid').length;
+  // דרך equipmentItemTone ולא דרך payment_status ישירות: „מהבית” ו„לא
+  // מעוניינים” אינם 'paid', ובלי זה הם נספרו כחוב ופריט מסודר הוצג
+  // כ„ממתין לתשלום”.
+  const equipmentUnpaid = equipmentItems.filter(
+    (i) => equipmentItemTone(i) === 'unpaid'
+  ).length;
   const equipmentAwaiting = equipmentItems.filter(
-    (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
+    (i) => equipmentItemTone(i) === 'awaiting'
   ).length;
   const equipmentSummary = !showEquipment
     ? ''
@@ -3735,6 +3751,30 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
                       >
                         {documentsSummary}
+                        {equipmentHeadTone && (
+                          <button
+                            type="button"
+                            onClick={() => openFolderView('equipment')}
+                            title={`ציוד: ${equipmentHeadLabel}`}
+                            aria-label={`ציוד: ${equipmentHeadLabel}`}
+                            aria-pressed={openFolder === 'equipment'}
+                            style={{
+                              width: summaryIconBoxSize,
+                              height: summaryIconBoxSize,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: EQUIPMENT_SHEET_TONE[equipmentHeadTone].color,
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Package size={summaryIconSize} strokeWidth={summaryIconStrokeWidth} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => openFolderView('tests', { testFilter: 'security' })}

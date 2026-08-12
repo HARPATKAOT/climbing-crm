@@ -99,6 +99,52 @@ export function equipmentToneLabel(tone, itemType = null) {
 }
 
 /**
+ * ארבעה מצבים בלבד בגיליון הנוכחות, צבע אחד לכל משמעות. זה מכוון
+ * להיות פחות מדויק מסטטוס הציוד המלא: המדריך צריך לדעת רק אם יש לו
+ * פעולה לעשות, והפירוט המלא נמצא בחלון העריכה ובטאב הציוד.
+ *
+ * אותם צבעים משמשים גם באייקון הציוד בראש תיק הלקוח, כדי שמצב זהה
+ * ייראה זהה בשני המסכים.
+ */
+export const EQUIPMENT_SHEET_TONE = {
+  give: { color: '#FBBF24', bg: 'rgba(251,191,36,0.18)', border: 'AA', label: 'לתת עכשיו' },
+  ready: { color: '#4ADE80', bg: 'rgba(74,222,128,0.16)', border: '55', label: 'תקין' },
+  blocked: { color: '#FB7185', bg: 'rgba(251,113,133,0.16)', border: '55', label: 'ממתין לתשלום' },
+  // אפור מלא ולא דהוי: „אין מה לעשות” הוא סטטוס, לא היעדר סטטוס.
+  na: { color: '#94A3B8', bg: 'rgba(148,163,184,0.20)', border: '77', label: 'לא רלוונטי' },
+};
+
+/** סדר התצוגה במקרא — מהדחוף לחסר משמעות. */
+export const EQUIPMENT_SHEET_TONE_ORDER = ['give', 'blocked', 'ready', 'na'];
+
+export function equipmentSheetTone(item) {
+  if (!item) return 'na';
+  // נגזר מ-equipmentItemTone כדי שיהיה מקור אמת אחד — שם כבר מנורמל
+  // „לא מעוניינים” על נעליים ל„ממתין לתשלום”.
+  const tone = equipmentItemTone(item);
+  // „מהבית” = הילד מצויד, בדיוק כמו פריט שנמסר.
+  if (tone === 'own' || tone === 'given') return 'ready';
+  // „לא מעוניינים” הוא המצב היחיד שבו אין פריט ואין מה לעשות בנידון.
+  if (tone === 'declined') return 'na';
+  if (tone === 'unpaid') return 'blocked';
+  // נעליים לא נמסרות מהמחסן — מי ששילם פשוט לוקח זוג.
+  return item.item_type === 'shoes' ? 'ready' : 'give';
+}
+
+/**
+ * מצב הציוד של מתאמן כולו, בצבע אחד — לאייקון הסיכום בראש התיק.
+ * החמור ביותר קובע: מי שחייב כסף אדום, מי ששילם ומחכה למסירה כתום,
+ * וירוק רק כשאין שום פעולה פתוחה. בלי פריטים בכלל אין מה לצבוע.
+ */
+export function equipmentOverallTone(items = []) {
+  const tones = items.map(equipmentSheetTone).filter((t) => t !== 'na');
+  if (!tones.length) return null;
+  if (tones.includes('blocked')) return 'blocked';
+  if (tones.includes('give')) return 'give';
+  return 'ready';
+}
+
+/**
  * מי מותר לסמן ידנית ומי לא.
  *
  * „שולם” נקבע רק כשמתקבל תשלום בדף התשלום, ו„נמסר” נפתח רק אחרי שיש תשלום.
