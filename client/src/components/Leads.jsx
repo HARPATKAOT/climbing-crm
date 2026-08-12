@@ -5145,28 +5145,18 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       selectedIds={editGroupIds}
                       disabled={savingGroup}
                       initiallyOpen
+                      modalOnly
+                      onSave={handleSaveGroup}
+                      onCancel={() => {
+                        setEditGroupIds(studentGroupIds(student));
+                        setEditingGroup(false);
+                      }}
                       onToggle={(id) => {
                         setEditGroupIds((prev) => (
                           prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
                         ));
                       }}
                     />
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" className="btn btn-primary btn-sm" disabled={savingGroup} onClick={handleSaveGroup}>
-                        <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={savingGroup}
-                        onClick={() => {
-                          setEditGroupIds(studentGroupIds(student));
-                          setEditingGroup(false);
-                        }}
-                      >
-                        ביטול
-                      </button>
-                    </div>
                   </div>
                 ) : (
                   <div>
