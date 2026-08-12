@@ -1496,6 +1496,8 @@ function RegularActivityModal({
   }, [templateMenuOpen]);
 
   const [priceRules, setPriceRules] = useState([]);
+  // בחירה מפורשת של דרך התמחור. null = לפי מה שכבר רשום על האירוע.
+  const [priceModeChoice, setPriceModeChoice] = useState(null);
 
   // המחירון נטען כשכרטיס המחיר מוצג — גם בעריכת תבנית, כי תבנית יכולה להישמר
   // עם שורת מחירון בדיוק כמו אירוע.
@@ -1549,6 +1551,7 @@ function RegularActivityModal({
    */
   const pickPriceRule = (rule) => {
     if (readOnly) return;
+    setPriceModeChoice('book');
     if (!rule) {
       setForm((prev) => ({ ...prev, price_rule_id: null, price_rule_version: null }));
       return;
@@ -1572,6 +1575,9 @@ function RegularActivityModal({
   /** ניתוק מהמחירון: המספרים של הכלל נכתבים לאירוע והקישור יורד. */
   const detachPriceRule = () => {
     if (readOnly || !priceRule) return;
+    // המספרים שנכתבים קובעים לאיזה כרטיס נוחתים: מינימום או תקרה → „חישוב
+    // מיוחד”, ואחרת „מחיר פשוט”. הגזירה עושה את זה לבד, ולכן הבחירה מתאפסת.
+    setPriceModeChoice(null);
     setForm((prev) => ({
       ...prev,
       price_rule_id: null,
@@ -1593,13 +1599,21 @@ function RegularActivityModal({
     && Number(form.price_rule_version) < (Number(priceRule.version) || 1);
 
   const linkedToBook = !!form.price_rule_id;
-  const priceMode = linkedToBook
+  /**
+   * המצב נגזר ממה שכבר יש על האירוע, אבל בחירה מפורשת גוברת עליו.
+   *
+   * בלי הבחירה המפורשת הכרטיס „מהמחירון” היה חסר תועלת: כל עוד לא נבחרה שורה
+   * אין `price_rule_id`, הגזירה מחזירה „פשוט”, והבורר שדרכו בוחרים שורה לא
+   * מוצג לעולם — כלומר אי אפשר להגיע למצב שהכרטיס מתאר.
+   */
+  const derivedPriceMode = linkedToBook
     ? 'book'
     : (normalizeCount(form.min_participants)
       || normalizeMoney(form.extra_participant_price)
       || normalizeMoney(form.max_charge))
       ? 'advanced'
       : 'simple';
+  const priceMode = priceModeChoice || derivedPriceMode;
 
   // תצוגה מקדימה: במחירון לפי הכלל, ואחרת לפי המספרים שעל האירוע. מספר
   // המשתתפים לדוגמה הוא המינימום כשיש, ואחרת המדרגה הראשונה.
@@ -1928,9 +1942,9 @@ function RegularActivityModal({
 
               {!isOps && canViewFinance && (
                 <>
-                  {/* שלוש דרכים לתמחר, ובכל רגע נתון פעילה אחת. הבחירה נגזרת
-                      ממה שכבר יש על האירוע ולא נשמרת כשדה: מצב שנשמר בנפרד
-                      מהמספרים יכול לסתור אותם. */}
+                  {/* שלוש דרכים לתמחר, ובכל רגע נתון פעילה אחת. המצב ההתחלתי
+                      נגזר ממה שכבר רשום על האירוע — מצב שנשמר כשדה נפרד יכול
+                      לסתור את המספרים — ולחיצה מחליפה אותו לשארית העריכה. */}
                   <div className="activity-price-modes">
                     {[
                       { id: 'simple', label: 'מחיר פשוט', hint: 'מספר אחד', Icon: CreditCard, color: 'var(--amber)' },
@@ -1944,7 +1958,14 @@ function RegularActivityModal({
                         style={{ '--method-color': color }}
                         disabled={readOnly}
                         onClick={() => {
-                          if (id === 'book') return;
+                          if (readOnly) return;
+                          setPriceModeChoice(id);
+                          if (id === 'book') {
+                            // הקישור עצמו נקבע בבורר שמופיע עכשיו. המספרים
+                            // המקומיים נשארים כמו שהם עד שנבחרת שורה, כדי שלחיצה
+                            // בטעות על הכרטיס לא תמחק מחיר שכבר הוקלד.
+                            return;
+                          }
                           if (linkedToBook) detachPriceRule();
                           if (id === 'simple') {
                             setForm((prev) => ({
@@ -1961,7 +1982,6 @@ function RegularActivityModal({
                               price_rule_id: null,
                               price_rule_version: null,
                               charge_basis: 'per_participant',
-                              min_participants: prev.min_participants || 1,
                             }));
                           }
                         }}
@@ -1992,6 +2012,11 @@ function RegularActivityModal({
                           </option>
                         ))}
                       </AppSelect>
+                      {!priceRules.length && (
+                        <span className="activity-settings-hint">
+                          המחירון עדיין ריק — קופה ומכירה ← מחירון פעילויות.
+                        </span>
+                      )}
                       {priceRule && (
                         <span className="activity-settings-hint">
                           {describePriceRule(priceRule)}
