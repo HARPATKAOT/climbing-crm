@@ -4,7 +4,7 @@ import {
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
   Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw, Lightbulb,
-  StickyNote, ClipboardList, UserPlus, CalendarClock, FileStack,
+  StickyNote, ClipboardList, UserPlus, CalendarClock, FileStack, CreditCard,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -12,6 +12,14 @@ import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
 import CancelActivityDialog from './CancelActivityDialog.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import {
+  describeEventCharge,
+  describePriceRule,
+  eventChargeBreakdown,
+  normalizeChargeBasis,
+  normalizeCount,
+  normalizeMoney,
+} from '../utils/activityPricing.js';
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
@@ -433,6 +441,13 @@ function emptyForm(dateStr = '', opts = {}) {
     registration_theme: {},
     price: '',
     max_participants: '',
+    // ברירת המחדל היא מחיר קבוע לאירוע — מי שרוצה תמחור לפי ראש בוחר בו במפורש.
+    charge_basis: 'flat',
+    min_participants: '',
+    extra_participant_price: '',
+    max_charge: '',
+    price_template_id: null,
+    host_charge_participants: '',
     description: '',
     notes: '',
     status: 'open',
@@ -1446,6 +1461,9 @@ function RegularActivityModal({
   const isTemplateCreate = isTemplateEdit && !initial?._template_id;
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
   const paidPerParticipant = isPaidPerParticipant(form);
+  // תמחור לפי ראש הוא שאלה נפרדת מ„מי משלם”: גם אירוע שהמזמין משלם עליו יכול
+  // להיות מתומחר לפי מספר הילדים שהגיעו.
+  const perParticipantCharge = normalizeChargeBasis(form.charge_basis) === 'per_participant';
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
   // כמה ימים האירוע נמשך — משמש להשוואה בין מחיר יום למחיר מלא.
   const eventDayCount = countEventDays(form.date, form.end_date);
@@ -1472,8 +1490,12 @@ function RegularActivityModal({
     return () => document.removeEventListener('mousedown', close);
   }, [templateMenuOpen]);
 
+  // המחירון נטען גם בלי לפתוח את תפריט „שמירה כתבנית”: כרטיס המחיר מציג בורר
+  // מחירון, ובלי הרשימה אי אפשר לדעת לאיזו שורה האירוע מחובר.
+  const needTemplates = templateMenuOpen || (canViewFinance && !isOps && !isTemplateEdit);
+
   useEffect(() => {
-    if (!templateMenuOpen || templateOptions.length) return undefined;
+    if (!needTemplates || templateOptions.length) return undefined;
     let active = true;
     setTemplateLoading(true);
     fetch('/api/activity-templates')
@@ -1485,12 +1507,57 @@ function RegularActivityModal({
       .catch(() => { if (active) setTemplateOptions([]); })
       .finally(() => { if (active) setTemplateLoading(false); });
     return () => { active = false; };
-  }, [templateMenuOpen, templateOptions.length]);
+  }, [needTemplates, templateOptions.length]);
 
   const saveAsTemplate = (event, action) => {
     setTemplateMenuOpen(false);
     submit(event, { closeAfter: false, saveAsTemplate: action });
   };
+
+  const priceRule = templateOptions.find(
+    (item) => String(item.id) === String(form.price_template_id || '')
+  ) || null;
+
+  /**
+   * העתקת כלל תמחור מהמחירון אל האירוע.
+   *
+   * הערכים מועתקים ולא נקראים חיים: שינוי מחיר במחירון לא אמור לתמחר מחדש יום
+   * הולדת שכבר הוצע ללקוח. הקישור נשמר רק כדי להראות מאיפה המחיר הגיע, ולאפשר
+   * לרענן אותו ביודעין.
+   */
+  const applyPriceRule = (rule) => {
+    if (readOnly) return;
+    if (!rule) {
+      setForm((prev) => ({ ...prev, price_template_id: null }));
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      price_template_id: rule.id,
+      price: rule.price ?? '',
+      price_includes_vat: normalizePriceIncludesVat(rule.price_includes_vat),
+      charge_basis: normalizeChargeBasis(rule.charge_basis),
+      min_participants: rule.min_participants ?? '',
+      extra_participant_price: rule.extra_participant_price ?? '',
+      max_charge: rule.max_charge ?? '',
+      max_participants: prev.max_participants || (rule.max_participants ?? ''),
+    }));
+  };
+
+  // האם שורת המחירון המחוברת כבר לא תואמת את מה שכתוב באירוע. זה לא בהכרח
+  // באג — אפשר לתת הנחה לאירוע בודד — ולכן זו הצעה ולא תיקון אוטומטי.
+  const priceRuleDrifted = !!priceRule && [
+    ['price', (v) => Number(v) || 0],
+    ['charge_basis', normalizeChargeBasis],
+    ['min_participants', (v) => normalizeCount(v)],
+    ['extra_participant_price', (v) => normalizeMoney(v)],
+    ['max_charge', (v) => normalizeMoney(v)],
+    ['price_includes_vat', (v) => normalizePriceIncludesVat(v)],
+  ].some(([key, normalize]) => normalize(priceRule[key]) !== normalize(form[key]));
+
+  const chargePreview = eventChargeBreakdown(form, {
+    participants: normalizeCount(form.min_participants) || 0,
+  });
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
@@ -1810,11 +1877,63 @@ function RegularActivityModal({
 
               {!isOps && canViewFinance && (
                 <>
+                  {!isTemplateEdit && (
+                    <label>
+                      <span className="activity-settings-label">מחירון</span>
+                      <AppSelect
+                        className="input"
+                        value={form.price_template_id || ''}
+                        onChange={(event) => applyPriceRule(
+                          templateOptions.find((item) => String(item.id) === event.target.value)
+                        )}
+                        disabled={readOnly || templateLoading}
+                      >
+                        <option value="">בלי מחירון — מחיר ידני</option>
+                        {templateOptions.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                            {describePriceRule(item) ? ` · ${describePriceRule(item)}` : ''}
+                          </option>
+                        ))}
+                      </AppSelect>
+                      {priceRuleDrifted && (
+                        <span className="activity-settings-hint">
+                          המחיר כאן שונה ממה שרשום במחירון.
+                          {' '}
+                          <button
+                            type="button"
+                            className="linklike"
+                            onClick={() => applyPriceRule(priceRule)}
+                            disabled={readOnly}
+                          >
+                            לעדכן לפי המחירון
+                          </button>
+                        </span>
+                      )}
+                    </label>
+                  )}
+
+                  <label>
+                    <span className="activity-settings-label">בסיס חיוב</span>
+                    <AppSelect
+                      className="input"
+                      value={normalizeChargeBasis(form.charge_basis)}
+                      onChange={(event) => set('charge_basis', event.target.value)}
+                      disabled={readOnly}
+                      optionIcon={(value) => (value === 'per_participant'
+                        ? { Icon: Users, color: 'var(--green)' }
+                        : { Icon: CreditCard, color: 'var(--amber)' })}
+                    >
+                      <option value="flat">מחיר קבוע לאירוע</option>
+                      <option value="per_participant">מחיר לכל משתתף</option>
+                    </AppSelect>
+                  </label>
+
                   <div className="activity-settings-grid activity-settings-grid--price-vat">
                     <label>
                       <span className="activity-settings-label">
                         {includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
-                        {paidPerParticipant ? ' · למשתתף' : ' · לאירוע'}
+                        {perParticipantCharge || paidPerParticipant ? ' · למשתתף' : ' · לאירוע'}
                       </span>
                       <input
                         className="input"
@@ -1852,12 +1971,68 @@ function RegularActivityModal({
                     </label>
                   </div>
 
-                  {priceVat.entered > 0 && (
-                    <div className="activity-settings-hint">
-                      {includesVat
-                        ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
-                        : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
+                  {/* מינימום משתתפים הוא רצפת חיוב בלבד: 12 נרשמים במינימום 15
+                      מחויבים כ-15, אבל ההרשמה נשארת פתוחה והאירוע מתקיים.
+                      התוספת היא המחיר מעבר לרצפה, והתקרה עוצרת את הסכום הכולל. */}
+                  {perParticipantCharge && (
+                    <div className="activity-settings-grid activity-settings-grid--price-vat">
+                      <label>
+                        <span className="activity-settings-label">מינימום משתתפים</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={form.min_participants ?? ''}
+                          onChange={(event) => set('min_participants', event.target.value)}
+                          disabled={readOnly}
+                        />
+                      </label>
+                      <label>
+                        <span className="activity-settings-label">מחיר לכל משתתף נוסף</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="כמו המחיר הרגיל"
+                          value={form.extra_participant_price ?? ''}
+                          onChange={(event) => set('extra_participant_price', event.target.value)}
+                          disabled={readOnly || !normalizeCount(form.min_participants)}
+                        />
+                      </label>
+                      <label>
+                        <span className="activity-settings-label">תקרת חיוב</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="בלי תקרה"
+                          value={form.max_charge ?? ''}
+                          onChange={(event) => set('max_charge', event.target.value)}
+                          disabled={readOnly}
+                        />
+                      </label>
                     </div>
+                  )}
+
+                  {perParticipantCharge ? (
+                    chargePreview.entered > 0 && (
+                      <div className="activity-settings-hint">
+                        {normalizeCount(form.min_participants)
+                          ? `במינימום: ${describeEventCharge(chargePreview)}`
+                          : describeEventCharge(chargePreview)}
+                      </div>
+                    )
+                  ) : (
+                    priceVat.entered > 0 && (
+                      <div className="activity-settings-hint">
+                        {includesVat
+                          ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
+                          : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
+                      </div>
+                    )
                   )}
 
                   {/* קייטנה נמשכת כמה ימים ולא כל הורה רוצה את כולם.
@@ -2159,6 +2334,13 @@ function ActivityFormModal({
     end_time: initial?.end_time ? String(initial.end_time).slice(0, 5) : (initial?.all_day ? '' : '12:00'),
     price: initial?.price ?? '',
     max_participants: initial?.max_participants ?? '',
+    // null מהשרת פירושו „לא הוגדר”, ושדה מספר ב-React חייב מחרוזת ריקה במקומו.
+    charge_basis: normalizeChargeBasis(initial?.charge_basis),
+    min_participants: initial?.min_participants ?? '',
+    extra_participant_price: initial?.extra_participant_price ?? '',
+    max_charge: initial?.max_charge ?? '',
+    price_template_id: initial?.price_template_id || null,
+    host_charge_participants: initial?.host_charge_participants ?? '',
     host_name: initial?.host_name || initial?.contact_name || '',
     host_phone: initial?.host_phone || initial?.contact_phone || '',
     host_email: initial?.host_email || '',
@@ -2209,6 +2391,8 @@ function ActivityFormModal({
       for (const key of [
         'price', 'price_includes_vat', 'collect_registration_payment', 'registration_mode',
         'allow_single_day', 'single_day_price',
+        'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
+        'host_charge_participants', 'host_charge_amount',
         'payment_link', 'payment_url', 'host_payment_id', 'host_payment_token',
       ]) delete next[key];
     }
@@ -2244,6 +2428,16 @@ function ActivityFormModal({
       setLocalError('הרשמה ליום בודד מחייבת עלות ליום בודד');
       return;
     }
+    // מינימום חיוב גבוה מהמכסה הוא אירוע שאי אפשר להירשם אליו מספיק כדי להצדיק
+    // את המחיר שלו. עדיף לעצור כאן מאשר לגלות את זה מול המזמין.
+    if (normalizeChargeBasis(form.charge_basis) === 'per_participant') {
+      const minCount = normalizeCount(form.min_participants);
+      const capCount = normalizeCount(form.max_participants);
+      if (minCount && capCount && minCount > capCount) {
+        setLocalError('מינימום המשתתפים גבוה ממכסת המשתתפים');
+        return;
+      }
+    }
     const endDateNorm = form.end_date && form.end_date > form.date ? form.end_date : '';
     const closeAfter = options.closeAfter !== false;
 
@@ -2262,6 +2456,10 @@ function ActivityFormModal({
         ? 0
         : Number(form.single_day_price),
         max_participants: form.max_participants === '' ? null : Number(form.max_participants),
+        charge_basis: normalizeChargeBasis(form.charge_basis),
+        min_participants: normalizeCount(form.min_participants),
+        extra_participant_price: normalizeMoney(form.extra_participant_price),
+        max_charge: normalizeMoney(form.max_charge),
         description: form.description || '',
         notes: form.notes || '',
         start_time: form.all_day ? null : (form.start_time || null),
@@ -4357,6 +4555,14 @@ export default function ActivitiesCalendar({
       location: tpl.location || '',
       price: tpl.price ?? '',
       max_participants: tpl.max_participants ?? '',
+      // כלל התמחור מגיע מהתבנית, והקישור נשמר כדי שיהיה אפשר לראות מאיזו שורת
+      // מחירון האירוע נבנה — ולרענן ממנה בהמשך אם המחירון השתנה.
+      event_kind: tpl.event_kind || '',
+      charge_basis: normalizeChargeBasis(tpl.charge_basis),
+      min_participants: tpl.min_participants ?? '',
+      extra_participant_price: tpl.extra_participant_price ?? '',
+      max_charge: tpl.max_charge ?? '',
+      price_template_id: tpl.id || null,
       description: tpl.description || '',
       notes: tpl.notes || '',
       registration_enabled: !!tpl.registration_enabled,
@@ -4393,6 +4599,11 @@ export default function ActivitiesCalendar({
       location: tpl.location || '',
       price: tpl.price ?? '',
       max_participants: tpl.max_participants ?? '',
+      event_kind: tpl.event_kind || '',
+      charge_basis: normalizeChargeBasis(tpl.charge_basis),
+      min_participants: tpl.min_participants ?? '',
+      extra_participant_price: tpl.extra_participant_price ?? '',
+      max_charge: tpl.max_charge ?? '',
       description: tpl.description || '',
       notes: tpl.notes || '',
       registration_enabled: !!tpl.registration_enabled,

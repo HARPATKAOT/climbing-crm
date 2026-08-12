@@ -5,7 +5,13 @@ import {
   CalendarDays, Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
 } from 'lucide-react';
 import InfoHint from '../utils/InfoHint.jsx';
-import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import { formatIls, normalizePriceIncludesVat } from '../utils/vat.js';
+import {
+  describeEventCharge,
+  hostChargeBreakdown,
+  normalizeChargeBasis,
+  normalizeCount,
+} from '../utils/activityPricing.js';
 import { AttendanceDayBar, AttendanceToggle, useActivityAttendance } from './ActivityAttendance.jsx';
 import AppSelect from './AppSelect.jsx';
 
@@ -846,11 +852,29 @@ export default function ActivityRegistrationPanel({
   const hostAmountIncludesVat = normalizePriceIncludesVat(
     hostPayment?.price_includes_vat ?? form.price_includes_vat
   );
+  // באירוע שמתומחר לפי ראש הסכום אינו המחיר שבשדה — הוא המחיר כפול מספר
+  // המשתתפים לחיוב, אחרי רצפת המינימום ולפני התקרה.
+  const perParticipantCharge = normalizeChargeBasis(form.charge_basis) === 'per_participant';
+  const registeredCount = regs.length;
+  const chargeBreakdown = hostChargeBreakdown(form, { registeredCount });
+  // שתי סיבות שונות לכך שהחיוב אינו לפי מספר הנרשמים, ואסור לבלבל ביניהן:
+  // או שהצוות תיקן ידנית את המספר, או שהמינימום הרים אותו. תיקון ידני ל-26
+  // כשנרשמו 12 אינו „חיוב לפי המינימום”, ואמירה כזאת שולחת לחפש באג שאין.
+  const overrideCount = normalizeCount(form.host_charge_participants);
+  const flooredByMinimum = perParticipantCharge
+    && chargeBreakdown.registeredCount < (chargeBreakdown.billableCount || 0);
+  const chargeNote = !perParticipantCharge
+    ? ''
+    : overrideCount != null && overrideCount !== registeredCount
+      ? `נרשמו ${registeredCount} — החיוב הוא על ${chargeBreakdown.billableCount}.`
+      : flooredByMinimum
+        ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
+        : '';
   const hostEnteredAmountLabel = formatIls(
-    hostPayment?.entered_amount ?? form.price ?? hostPayment?.amount ?? 0
+    hostPayment?.entered_amount ?? chargeBreakdown.entered ?? hostPayment?.amount ?? 0
   );
   const hostChargeAmountLabel = formatIls(
-    hostPayment?.amount ?? vatBreakdown(form.price, hostAmountIncludesVat).gross
+    hostPayment?.amount ?? chargeBreakdown.gross
   );
   const canDownloadCharge = !!(hostPayment?.icount_doc_url || hostPayment?.icount_doc_number || hostPayment?.icount_doc_id);
   const canDownloadRefund = !!(hostPayment?.refund_doc_url || hostPayment?.refund_doc_number);
@@ -1202,6 +1226,35 @@ export default function ActivityRegistrationPanel({
                     {hostStatusLabel}
                   </span>
                 </div>
+
+                {/* מה שמחייבים עליו בפועל. ברירת המחדל היא מספר הנרשמים, אבל
+                    מישהו נרשם ולא הגיע — או הגיע בלי להירשם — ואז מתקנים כאן,
+                    לפני שהקישור יוצא. אחרי תשלום השדה נעול: הסכום כבר חויב. */}
+                {perParticipantCharge && !isHostRefunded && (
+                  <div className="registration-host-payment-block">
+                    <label className="activity-registration-field">
+                      <span className="activity-registration-field-label">משתתפים לחיוב</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder={String(registeredCount)}
+                        value={form.host_charge_participants ?? ''}
+                        onChange={(event) => set('host_charge_participants', event.target.value)}
+                        disabled={readOnly || hostPayStatus === 'paid'}
+                      />
+                      <span className="activity-registration-field-hint">
+                        {describeEventCharge(chargeBreakdown) || 'אין עדיין מחיר לאירוע'}
+                      </span>
+                    </label>
+                    {chargeNote && (
+                      <div className="registration-host-payment-hint" style={{ color: 'var(--amber)' }}>
+                        {chargeNote}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {!isHostRefunded && (
                   <div className="registration-host-payment-block">

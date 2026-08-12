@@ -161,6 +161,12 @@ import {
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
 import {
+  normalizeChargeBasis,
+  normalizeCount,
+  normalizeMoney,
+  hostChargeBreakdown,
+} from './activityPricing.js';
+import {
   activityPublicSlug,
   upcomingPublicActivities,
   upcomingOpeningHours,
@@ -5187,6 +5193,18 @@ function normalizeActivityPayload(body = {}) {
     max_participants: isOps ? null : (body.max_participants === '' || body.max_participants == null
       ? null
       : Number(body.max_participants) || null),
+    // תמחור לפי ראש: המינימום הוא רצפת חיוב (12 נרשמים במינימום 15 מחויבים
+    // כ-15), התוספת היא המחיר מעבר לרצפה, והתקרה חוסמת את הסכום הכולל.
+    // `max_charge` הוא תקרת סכום, בשונה מ-`max_participants` שהוא מכסת נרשמים.
+    charge_basis: isOps ? 'flat' : normalizeChargeBasis(body.charge_basis),
+    min_participants: isOps ? null : normalizeCount(body.min_participants),
+    extra_participant_price: isOps ? null : normalizeMoney(body.extra_participant_price),
+    max_charge: isOps ? null : normalizeMoney(body.max_charge),
+    price_template_id: isOps ? null : (body.price_template_id || null),
+    // מה שהוקפא ברגע יצירת קישור התשלום למזמין. נשמר על האירוע כדי שהרשמה
+    // מאוחרת לא תשנה את הסכום שכבר נשלח לו.
+    host_charge_participants: isOps ? null : normalizeCount(body.host_charge_participants),
+    host_charge_amount: isOps ? null : normalizeMoney(body.host_charge_amount),
     responsible_id: body.responsible_id || null,
     description: body.description || '',
     payment_link: isOps ? '' : (body.payment_link || ''),
@@ -5261,6 +5279,32 @@ function buildActivityRegistrationUrl(req, slug) {
 function buildHostPaymentUrl(req, token) {
   if (!token) return '';
   return `${frontendPublicBase(req)}/event-host/${encodeURIComponent(token)}`;
+}
+
+/**
+ * מקפיא את הסכום שהמזמין יתבקש לשלם, ברגע שנוצר עבורו קישור.
+ *
+ * הסכום היה מחושב מחדש בכל פעם שהמזמין פותח את הקישור. כל עוד המחיר היה קבוע
+ * לאירוע זה לא הזיז דבר, אבל מחיר שנגזר ממספר המשתתפים משתנה בכל הרשמה — ומי
+ * שקיבל הצעה על 1,400₪ היה מגלה סכום אחר כשהוא בא לשלם. מכאן ואילך הסכום נקבע
+ * פעם אחת, והצוות הוא היחיד שמשנה אותו.
+ */
+function freezeHostCharge(activity) {
+  if (!activity || activity.registration_mode !== 'host_pays') return activity;
+  const registeredCount = activeRegistrations(db, activity.id).length;
+  const breakdown = hostChargeBreakdown(activity, { registeredCount });
+  return db.update('activities', activity.id, {
+    host_charge_participants: breakdown.billableCount ?? null,
+    host_charge_amount: breakdown.gross,
+  }) || activity;
+}
+
+/** הסכום שהמזמין משלם: מה שהוקפא, ואם אין — חישוב חי, כמו לפני ההקפאה. */
+function hostChargeFor(activity) {
+  const frozen = normalizeMoney(activity.host_charge_amount);
+  if (frozen != null) return frozen;
+  const registeredCount = activeRegistrations(db, activity.id).length;
+  return hostChargeBreakdown(activity, { registeredCount }).gross;
 }
 
 function matchHostPaymentActivity(rows, token) {
@@ -5372,6 +5416,10 @@ const ACTIVITY_FINANCE_FIELDS = new Set([
   'host_payment_token', 'host_payment_id', 'collect_registration_payment', 'registration_mode',
   'refund_amount', 'amount', 'total_amount', 'paid_amount', 'payment_id', 'icount_doc_id',
   'icount_doc_url', 'refund_doc_url', 'refund_doc_number',
+  // שדות התמחור לפי ראש הם מחיר לכל דבר, ומי שלא רואה את `price` לא אמור
+  // לגזור אותו מהמינימום והתקרה.
+  'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
+  'host_charge_participants', 'host_charge_amount',
 ]);
 const ACTIVITY_HR_FIELDS = new Set(['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']);
 
@@ -6945,6 +6993,7 @@ app.post('/api/activities/:id/registration-link', async (req, res) => {
       host_payment_token: hostPaymentToken,
     }) || updated;
   }
+  updated = freezeHostCharge(updated);
   const durableLink = await persistCore('activities', updated);
   if (durableLink?.ok === false) {
     return res.status(503).json({ error: durableLink.error || 'שמירת הקישור נכשלה' });
@@ -7026,6 +7075,14 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
             error: tokenPersisted.error || 'שמירת קישור התשלום נכשלה',
           });
         }
+      }
+      // הסכום נקבע כאן, לפני שהקישור יוצא — ולא כשהמזמין פותח אותו.
+      activity = freezeHostCharge(activity);
+      const chargePersisted = await persistCore('activities', activity);
+      if (chargePersisted?.ok === false) {
+        return res.status(503).json({
+          error: chargePersisted.error || 'שמירת סכום התשלום נכשלה',
+        });
       }
       url = buildHostPaymentUrl(req, activity.host_payment_token);
     }
@@ -7321,6 +7378,11 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       host_name: activity.host_name || activity.contact_name || '',
       price: Number(activity.price) || 0,
       price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
+      // הסכום לתשלום נקבע כאן ולא בדפדפן: המזמין צריך לראות בדיוק את מה שיחויב,
+      // ופירוט מספר המשתתפים הוא ההסבר מאיפה הסכום הגיע.
+      charge_amount: hostChargeFor(activity),
+      charge_basis: normalizeChargeBasis(activity.charge_basis),
+      charge_participants: normalizeCount(activity.host_charge_participants),
       payment_status: activity.payment_status || 'unpaid',
       cover_image: theme.cover_image || '',
       cover_position: theme.cover_position || '50% 50%',
@@ -7371,7 +7433,9 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
       ? db.getOne('payments', activity.host_payment_id)
       : null;
     const includesVat = normalizePriceIncludesVat(activity.price_includes_vat);
-    const amount = chargeAmount(activity.price, includesVat);
+    // הסכום שהוקפא כשהקישור נוצר. אירוע ותיק שאין לו סכום שמור נופל לחישוב חי,
+    // כך שכל קישור שכבר בידי מזמין ממשיך לעבוד בדיוק כמו קודם.
+    const amount = hostChargeFor(activity);
     const description = `תשלום אירוע: ${activity.name}`;
     if (
       !payment ||
