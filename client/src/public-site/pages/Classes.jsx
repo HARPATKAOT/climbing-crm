@@ -7,12 +7,8 @@ import Testimonials from '../components/Testimonials.jsx';
    one colour per age band. Everything operational — trainers, assistants and
    spare places — is deliberately left out; parents get the schedule, the team
    gets the rest. */
-const START_HOUR = 14;
-const END_HOUR = 22;
-const PX_PER_MIN = 1.4;
-const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
-const GRID_H = (END_HOUR - START_HOUR) * 60 * PX_PER_MIN;
-const DAYS = [0, 1, 2, 3, 4, 5];
+const PX_PER_MIN = 1.5;
+const ALL_DAYS = [0, 1, 2, 3, 4, 5];
 
 /* Same bands and order as the CRM legend. */
 const AGE_BANDS = [
@@ -47,10 +43,30 @@ function cleanName(group) {
   return name || (group.age_category ? `כיתות ${group.age_category}` : 'חוג טיפוס');
 }
 
-function minutesFromStart(time) {
+function toMinutes(time) {
   const [h, m] = String(time || '').split(':').map(Number);
   if (!Number.isFinite(h)) return null;
-  return (h - START_HOUR) * 60 + (Number.isFinite(m) ? m : 0);
+  return h * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+/**
+ * Fit the grid to the classes that exist instead of a fixed 14:00–22:00 window.
+ * A wall that runs 15:00–21:00 was showing two empty hours of dead space.
+ */
+function gridBounds(groups) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const g of groups) {
+    const start = toMinutes(g.time);
+    if (start == null) continue;
+    min = Math.min(min, start);
+    max = Math.max(max, start + (g.duration || 50));
+  }
+  if (!Number.isFinite(min)) return { startHour: 15, endHour: 21 };
+  return {
+    startHour: Math.floor(min / 60),
+    endHour: Math.min(23, Math.ceil(max / 60)),
+  };
 }
 
 function Legend() {
@@ -67,54 +83,58 @@ function Legend() {
 }
 
 function WeekBoard({ groups }) {
+  const { startHour, endHour } = gridBounds(groups);
+  const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => startHour + i);
+  const gridH = (endHour - startHour) * 60 * PX_PER_MIN;
+  // A day with no classes is not a column worth a sixth of the width.
+  const days = ALL_DAYS.filter((d) => groups.some((g) => groupDays(g).includes(d)));
+
   return (
     <div className="ks-board-scroll">
       <div className="ks-board">
         <div className="ks-board-head">
-          <div className="ks-board-hourcol">שעה</div>
-          {DAYS.map((day) => {
-            const count = groups.filter((g) => groupDays(g).includes(day)).length;
-            return (
-              <div className="ks-board-day" key={day}>
-                {weekdayName(day)}
-                {count > 0 && <span className="ks-board-count">{count}</span>}
-              </div>
-            );
-          })}
+          <div className="ks-board-hourcol" />
+          {days.map((day) => (
+            <div className="ks-board-day" key={day}>
+              {weekdayName(day)}
+              <span className="ks-board-count">
+                {groups.filter((g) => groupDays(g).includes(day)).length}
+              </span>
+            </div>
+          ))}
         </div>
 
-        <div className="ks-board-body" style={{ height: GRID_H }}>
+        <div className="ks-board-body" style={{ height: gridH }}>
           <div className="ks-board-hourcol">
-            {HOURS.map((h, i) => (
+            {hours.map((h, i) => (
               <span key={h} className="ks-board-hour" style={{ top: i * 60 * PX_PER_MIN }}>
                 {String(h).padStart(2, '0')}:00
               </span>
             ))}
           </div>
 
-          {DAYS.map((day) => (
+          {days.map((day) => (
             <div className="ks-board-col" key={day}>
-              {HOURS.map((h, i) => (
+              {hours.map((h, i) => (
                 <span key={h} className="ks-board-line" style={{ top: i * 60 * PX_PER_MIN }} />
               ))}
               {groups
                 .filter((g) => groupDays(g).includes(day))
                 .map((group) => {
-                  const top = minutesFromStart(group.time);
-                  if (top == null) return null;
+                  const start = toMinutes(group.time);
+                  if (start == null) return null;
                   const color = ageColor(group.age_category);
                   return (
                     <div
                       className="ks-chip"
                       key={`${group.id}-${day}`}
                       style={{
-                        top: top * PX_PER_MIN,
-                        height: Math.max((group.duration || 50) * PX_PER_MIN, 38),
-                        borderInlineStartColor: color,
-                        background: `color-mix(in srgb, ${color} 9%, #fff)`,
+                        top: (start - startHour * 60) * PX_PER_MIN,
+                        height: Math.max((group.duration || 50) * PX_PER_MIN - 4, 44),
+                        background: color,
                       }}
                     >
-                      <strong style={{ color }}>{group.time}</strong>
+                      <strong>{group.time}</strong>
                       <span>{cleanName(group)}</span>
                     </div>
                   );
