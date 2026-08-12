@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Award, Banknote, CheckCircle2, ClipboardList, CreditCard, FileText, Hourglass, RefreshCw,
-  ShieldAlert, Undo2, X,
+  Award, Banknote, CheckCircle2, ClipboardList, CreditCard, ExternalLink, FileText, Hourglass,
+  RefreshCw, ShieldAlert, Undo2, X,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 
@@ -256,6 +256,17 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {row.icount_client_id && (
+                        <a
+                          className="btn btn-ghost btn-sm"
+                          href={`https://app.icount.co.il/reports/fullclient.php?id=${encodeURIComponent(row.icount_client_id)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="תיק הלקוח ב-iCount"
+                        >
+                          <ExternalLink size={14} /> תיק הלקוח
+                        </a>
+                      )}
                       {row.doc_number && (
                         <button
                           type="button"

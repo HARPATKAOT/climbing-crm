@@ -139,7 +139,7 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
  * @param openSaleIds מזהי מכירות שנמצאות עכשיו ברשימת הממתינים
  */
 export function shiftSales({
-  sales = [], today, dateOf, studentOf, openSaleIds = new Set(), dismissedIds = [],
+  sales = [], today, dateOf, studentOf, parentOf, openSaleIds = new Set(), dismissedIds = [],
 }) {
   // שורה שהוסרה ביד לא חוזרת דרך הדלת האחורית: קישור שנשלח בסכום שגוי נמחק
   // מהרשימה, ואם הוא היה מופיע כאן ההסרה הייתה חסרת ערך.
@@ -153,6 +153,7 @@ export function shiftSales({
     })
     .map((sale) => {
       const student = sale.student_id && studentOf ? studentOf(sale.student_id) : null;
+      const parent = sale.parent_id && parentOf ? parentOf(sale.parent_id) : null;
       return {
         id: `sale:${sale.id}`,
         sale_id: sale.id,
@@ -168,6 +169,8 @@ export function shiftSales({
         status: sale.status || '',
         parent_id: sale.parent_id || null,
         doc_number: sale.icount_doc_number || null,
+        // תיק הלקוח ב-iCount — קיים רק למי שכבר הופקה לו שם חשבונית.
+        icount_client_id: parent?.icount_client_id || null,
         refunded: sale.status === 'refunded' || !!sale.refund_doc_number,
         items: (Array.isArray(sale.items) ? sale.items : [])
           .map((line) => line?.name)

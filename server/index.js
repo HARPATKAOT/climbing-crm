@@ -16359,6 +16359,7 @@ app.get('/api/checkin/pending', (req, res) => {
     today,
     dateOf: (iso) => israelLocalParts(iso)?.date || null,
     studentOf: (id) => db.getOne('students', id),
+    parentOf: (id) => db.getOne('parents', id),
     safetyOf: (id) => {
       const student = db.getOne('students', id);
       return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
