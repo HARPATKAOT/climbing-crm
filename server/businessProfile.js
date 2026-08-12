@@ -5,9 +5,12 @@ const SETTINGS_KEY = 'business_profile';
 
 // „קיר בועז” is the trade name customers know; „הרפתקאות” is the registered
 // business, and it is the one that belongs in a waiver or a privacy policy.
+// `vat_id` הוא מספר העוסק המורשה — אצל עוסק יחיד זהו מספר הת״ז. הוא נדרש
+// כפרט חובה על חשבונית מס, ולכן הוא נשמר כאן ולא מוטמע בקוד ההדפסה.
 export const DEFAULT_BUSINESS_PROFILE = Object.freeze({
   display_name: 'קיר בועז',
   legal_name: 'הרפתקאות',
+  vat_id: '',
   logo_url: '/logo.png',
   phone: '',
   email: '',
@@ -30,6 +33,7 @@ export function normalizeBusinessProfile(raw = {}, { validateImage = false } = {
   return {
     display_name: text(profile.display_name, 120) || DEFAULT_BUSINESS_PROFILE.display_name,
     legal_name: text(profile.legal_name, 160),
+    vat_id: text(profile.vat_id, 20),
     logo_url: logoUrl,
     phone: text(profile.phone, 60),
     email: text(profile.email, 160),

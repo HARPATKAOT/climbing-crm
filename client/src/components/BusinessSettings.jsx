@@ -253,6 +253,17 @@ export default function BusinessSettings() {
               placeholder="אם ריק — משתמשים בשם התצוגה"
             />
           </label>
+
+          <label className="business-settings-field">
+            מספר עוסק מורשה
+            <input
+              className="input"
+              value={form.vat_id || ''}
+              onChange={(e) => set('vat_id', e.target.value)}
+              placeholder="אצל עוסק יחיד — מספר הת״ז"
+              inputMode="numeric"
+            />
+          </label>
         </section>
 
         <section className="business-settings-card">
