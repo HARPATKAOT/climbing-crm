@@ -3449,6 +3449,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     )
                     : false;
                   const name = tab.student?.name || parentDisplayName(tab.parent);
+                  const cardName = tab.kind === 'student'
+                    ? (splitParentName({
+                        name: tab.student?.name,
+                        lastName: tab.student?.lastName,
+                      }).first || name)
+                    : name;
                   const isParentEntity = tab.kind !== 'student';
                   const isPrimary = !!tab.parent
                     && String(tab.parent.id) === String(primaryGuardianId);
@@ -3500,7 +3506,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           </span>
                         )}
                         <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {name}
+                          {cardName}
                         </span>
                         {/* אצל הילד הסימן יושב על כרטיס המתאמן, אצל ההורה על
                             כרטיס ההורה — ולמבוגר המילים הן גבר / אישה. */}
