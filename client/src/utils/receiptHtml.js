@@ -30,6 +30,28 @@ const TAIL_MM = 3;
 /** תקרת ההמתנה לטעינת הלוגו לפני הדפסה. */
 const IMAGE_WAIT_MS = 2000;
 
+/**
+ * הלוגו בגרסת הדפסה.
+ *
+ * לוגו האתר בנוי מבלוקים בגוונים בינוניים — אפור, אדום, כחול, כתום, טורקיז,
+ * חום. המדפסת מונוכרום ואין בה אפור כלל, וההמרה לגווני אפור מקרבת דווקא את
+ * הצבעים האלה זה לזה: הסף מאחד את כולם לגוש כהה אחד, והצורה נעלמת. שום סינון
+ * CSS לא מציל את זה, כי המידע אובד בהמרה עצמה ולא בסף.
+ *
+ * `logo-print.png` הוא צללית שחור-לבן שהוכנה מראש בדיוק לשימוש הזה — קווי
+ * המתאר של היעל והסלע נשמרים, ואין מה לרבב.
+ *
+ * לוגו שהועלה דרך ההגדרות אינו מוכר לנו מראש, ולכן הוא נשאר עם דחיפת
+ * הניגודיות: לא מושלם, אבל עדיף על כלום. על התמונה הבינארית הסינון הזה הוא
+ * ממילא חסר השפעה.
+ */
+const PRINT_LOGO = '/logo-print.png';
+
+const logoSrc = (profile) => {
+  const url = String(profile?.logo_url || '').trim();
+  return !url || url === '/logo.png' ? PRINT_LOGO : url;
+};
+
 /** גוף הדף — משותף לקבלה ולפתק פתיחת הקופה. */
 const PAGE_CSS = `
   @page { margin: 0; }
@@ -150,7 +172,8 @@ export function buildReceiptHtml({ profile, sale, changeGiven = 0 } = {}) {
   .thanks { text-align: center; margin-top: 4mm; font-size: 11pt; }
 </style></head>
 <body>
-  ${profile?.logo_url ? `<img class="logo" src="${escape(profile.logo_url)}" alt="">` : ''}
+  <img class="logo" src="${escape(logoSrc(profile))}" alt="">
+
   <h1>${escape(title)}</h1>
   <div class="biz">
     <div class="name">${escape(businessName)}</div>
