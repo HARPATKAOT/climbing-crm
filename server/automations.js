@@ -328,7 +328,9 @@ export function isWallScope(scope) {
 export const WALL_FORM_RECEIVED_MESSAGE =
   'שלום {{parentName}},\n'
   + 'קיבלנו את הפרטים ואת הצהרת הבריאות של {{name}} — הכול נשמר במערכת ואפשר להיכנס לקיר.\n'
-  + 'אפשר להשיב להודעה הזו בכל שאלה.';
+  // מי שבא לטפס פעם אחת לא יודע מה עוד יש כאן, וזו הפעם היחידה שנדבר איתו.
+  + 'אם בא לכם יותר מזה: יש אצלנו חוגי טיפוס לילדים ולנוער, ימי הולדת וטיולי שטח.\n'
+  + 'אפשר להשיב להודעה הזו ואשמח לספר על כל אחד מהם.';
 
 export const automationsService = {
   triggerEvent: async (eventName, payload) => {
@@ -383,6 +385,24 @@ export const automationsService = {
       // הנכון, ולכן בחלון פתוח נשלח הנוסח החופשי, ומחוץ לחלון עדיף לא לשלוח
       // כלום מאשר לשלוח הבטחה שגויה.
       if (isWallScope(enriched.participation_scope)) {
+        // Somebody who came to climb never wrote to us, so their window is shut
+        // by definition — which meant they got nothing at all. Their own
+        // template says what was saved and what else we run, and is the only
+        // thing that reaches them.
+        const wallTemplate = automation.action_payload?.templateNameWall;
+        if (!windowOpen && wallTemplate && templateIsApproved(wallTemplate)) {
+          const wallVars = templateVariableValues(
+            enriched,
+            automation.action_payload?.templateVarKeysWall || ['parentName', 'name']
+          );
+          console.log(`🤖 Sending wall-scope template "${wallTemplate}" to ${phone}`);
+          await whatsappService.sendTemplateMessage(phone, wallTemplate, wallVars, {
+            parentId: parent?.id || enriched.parentId,
+            language: automation.action_payload?.language,
+            source: 'automation',
+          });
+          return { sent: true, via: 'template', scope: 'wall' };
+        }
         if (!windowOpen) {
           console.warn(`🤖 Automation skipped for ${phone}: wall-scope form and no wall template`);
           return { sent: false, reason: 'wall_scope_no_template' };
@@ -398,6 +418,20 @@ export const automationsService = {
 
       if (templateName && (!windowOpen || automation.action_payload?.preferTemplate)) {
         const vars = templateVariableValues(enriched, varKeys);
+        // The wording that ends the conversation — "נחזור אליכם בהקדם" — left
+        // everyone outside the window waiting for a call. The newer one asks
+        // which class they want, and an answer opens the window so the bot can
+        // carry on by itself. Only once Meta has approved it.
+        const nextTemplate = automation.action_payload?.templateNameNext;
+        if (nextTemplate && templateIsApproved(nextTemplate)) {
+          console.log(`🤖 Sending automated WhatsApp template "${nextTemplate}" to ${phone}`);
+          await whatsappService.sendTemplateMessage(phone, nextTemplate, vars, {
+            parentId: parent?.id || enriched.parentId,
+            language: automation.action_payload?.language,
+            source: 'automation',
+          });
+          return { sent: true, via: 'template' };
+        }
         // An adult who registered themselves is both the greeting and the
         // participant, so the stock wording said their name twice: "שלום דלק
         // איל, קיבלנו את הפרטים ואת הצהרת הבריאות של דלק איל". Where a
