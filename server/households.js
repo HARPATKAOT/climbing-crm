@@ -91,18 +91,23 @@ export async function ensureHouseholdForParent(db, persist, parentId) {
     if (old) await save(persist, 'households', db.update('households', old.id, { status: 'merged', merged_into_id: householdId, updated_at: new Date().toISOString() }) || old);
   }
 
-  for (const id of parentIds) {
-    const row = upsertMember(db, householdId, { parent_id: id, role: 'adult' });
-    await save(persist, 'household_members', row);
-  }
-  for (const student of graph.students || []) {
-    const row = upsertMember(db, householdId, {
+  // כל בן משפחה נשמר בנסיעה נפרדת, והנסיעות המתינו זו לזו. נסיעה אחת היא
+  // כ-450 מ״ש, כך שתיק של שישה נפשות עלה קרוב לשלוש שניות — וזה קרה בכל
+  // מכירה בדלפק, כי מסלול הזכאות לקיר מתחיל כאן. במדידה בקופה השלב הזה היה
+  // הגדול ביותר: כשש שניות מתוך אחת-עשרה, יותר מ-iCount ומהמסמך גם יחד.
+  //
+  // השורות עצמן נכתבות כמקודם — שורה לכל אדם, אין קיצור דרך בנתונים. הן פשוט
+  // כבר לא ממתינות זו לזו, כי שורות של אנשים שונים אינן תלויות זו בזו.
+  const memberRows = [
+    ...parentIds.map((id) => upsertMember(db, householdId, { parent_id: id, role: 'adult' })),
+    ...(graph.students || []).map((student) => upsertMember(db, householdId, {
       student_id: student.id,
       role: student.isAdult === true ? 'adult' : 'child',
       profile_status: 'complete',
-    });
-    await save(persist, 'household_members', row);
-  }
+    })),
+  ];
+  await Promise.all(memberRows.map((row) => save(persist, 'household_members', row)));
+
   return household;
 }
 
