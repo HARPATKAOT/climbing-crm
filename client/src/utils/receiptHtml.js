@@ -254,30 +254,36 @@ export function printReceiptViaOs(html) {
      * לוגו. לכן ממתינים לתמונות, אבל עם תקרת זמן: קבלה בלי לוגו עדיפה בהרבה
      * על קבלה שלא יצאה כי תמונה נתקעה.
      */
-    const waitForImages = (doc) => {
-      const pending = Array.from(doc.images || []).filter((img) => !img.complete);
-      if (!pending.length) return Promise.resolve();
-      return Promise.race([
-        Promise.all(pending.map((img) => new Promise((done) => {
-          img.addEventListener('load', done, { once: true });
-          img.addEventListener('error', done, { once: true });
-        }))),
-        new Promise((done) => { window.setTimeout(done, IMAGE_WAIT_MS); }),
-      ]);
-    };
+    const pendingImages = (doc) => Array.from(doc.images || []).filter((img) => !img.complete);
 
-    frame.onload = async () => {
-      try {
-        const view = frame.contentWindow;
-        await waitForImages(view.document);
-        view.focus();
-        view.print();
-        cleanup();
-        resolve({ ok: true, via: 'os' });
-      } catch (err) {
-        cleanup();
-        reject(new Error(err?.message || 'ההדפסה דרך ווינדוס נכשלה'));
-      }
+    const waitForImages = (pending) => Promise.race([
+      Promise.all(pending.map((img) => new Promise((done) => {
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+      }))),
+      new Promise((done) => { window.setTimeout(done, IMAGE_WAIT_MS); }),
+    ]);
+
+    frame.onload = () => {
+      const view = frame.contentWindow;
+      const send = () => {
+        try {
+          view.focus();
+          view.print();
+          cleanup();
+          resolve({ ok: true, via: 'os' });
+        } catch (err) {
+          cleanup();
+          reject(new Error(err?.message || 'ההדפסה דרך ווינדוס נכשלה'));
+        }
+      };
+      // כשאין תמונה שממתינה, ההדפסה נשלחת מתוך אירוע הטעינה עצמו — בדיוק כפי
+      // שהיה לפני שנוספה ההמתנה ללוגו. ההמתנה הפכה כל הדפסה לאסינכרונית, כולל
+      // פתק פתיחת הקופה שאין בו תמונה כלל, ומאז מבליח חלון לבן שלא היה קודם.
+      // ההמתנה נשארת למי שבאמת צריך אותה, ולא נגבית ממי שלא.
+      const pending = pendingImages(view.document);
+      if (!pending.length) return send();
+      waitForImages(pending).then(send, send);
     };
     frame.onerror = () => {
       cleanup();

@@ -2532,13 +2532,6 @@ export default function PosSale({
                   {result.whatsappError}
                 </div>
               )}
-              {/* אבחון זמני: ההדפסה ממתינה לתשובת השרת, וזה הפירוק של מה שקרה
-                  בה. יוסר ברגע שנדע מה מאט. */}
-              {result.timing && (
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, direction: 'ltr', textAlign: 'right' }}>
-                  {`${(result.timing.totalMs / 1000).toFixed(1)}s — ${(result.timing.phases || []).join(' · ')}`}
-                </div>
-              )}
             </div>
           )}
 
