@@ -483,6 +483,10 @@ mappers.activities = columnMapper([
   'event_kind', 'participation_scope',
   // הרשמה ליום בודד באירוע רב-יומי, והמחיר שלה.
   'allow_single_day', 'single_day_price',
+  // תמחור לפי מספר משתתפים: על מה מחויב המזמין, מאיזו שורת מחירון זה הגיע,
+  // ומה הוקפא ברגע ששלחנו לו את הקישור.
+  'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
+  'price_template_id', 'host_charge_participants', 'host_charge_amount',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 mappers.attendance = columnMapper([
@@ -552,6 +556,8 @@ mappers.activity_templates = columnMapper([
   'cancellation_policy_id', 'cancellation_policy_disabled',
   'theme', 'sort_order', 'is_active',
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
+  // התבנית היא המחירון, ולכן היא נושאת את אותם שדות תמחור כמו האירוע.
+  'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 

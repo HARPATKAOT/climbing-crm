@@ -103,6 +103,16 @@ export default function PublicHostPayment() {
     activity?.price,
     normalizePriceIncludesVat(activity?.price_includes_vat)
   );
+  // הסכום מגיע מהשרת ולא מחושב כאן: הוא הוקפא ברגע ששלחו את הקישור, ובאירוע
+  // שמתומחר לפי ראש הוא לא שווה למחיר הבודד כפול מע״מ.
+  const chargeAmount = Number(activity?.charge_amount);
+  const dueAmount = Number.isFinite(chargeAmount) && chargeAmount > 0
+    ? chargeAmount
+    : priceVat.gross;
+  const chargeParticipants = Number(activity?.charge_participants) || 0;
+  const perHeadLabel = activity?.charge_basis === 'per_participant' && chargeParticipants > 0
+    ? `${chargeParticipants} משתתפים`
+    : '';
   const dateLabel = activity?.date
     ? new Date(`${activity.date}T12:00:00`).toLocaleDateString('he-IL', {
       weekday: 'long',
@@ -157,8 +167,9 @@ export default function PublicHostPayment() {
                   {dateLabel && <span>{dateLabel}</span>}
                   {activity?.start_time && <span>{String(activity.start_time).slice(0, 5)}</span>}
                   {activity?.location && <span>{activity.location}</span>}
+                  {perHeadLabel && <span>{perHeadLabel}</span>}
                   <strong>
-                    {formatIls(priceVat.gross)}
+                    {formatIls(dueAmount)}
                     {' '}
                     כולל מע״מ
                   </strong>

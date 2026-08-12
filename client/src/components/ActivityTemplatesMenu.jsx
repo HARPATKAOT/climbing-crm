@@ -4,6 +4,7 @@ import {
   GraduationCap, Handshake, Loader2, Mountain, Pencil, Plus, Search, Sparkles,
   Trash2, TreePine, Users, Waves, X,
 } from 'lucide-react';
+import { describePriceRule } from '../utils/activityPricing.js';
 
 const CATEGORY_META = {
   field: { label: 'פעילויות שטח', color: '#34D399', hint: 'טיולים, נחלים וטיפוס בטבע' },
@@ -589,9 +590,12 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{tpl.name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+          {/* הרשימה הזאת היא המחירון, ולכן היא אומרת גם על מה גובים ולא רק כמה:
+              „70₪ לראש · מינימום 20” הוא מה שמבדיל בין שתי שורות שהמחיר הבודד
+              שלהן זהה. */}
           {tpl.type === 'opening_hours'
             ? 'שעות פתיחה'
-            : (tpl.price ? `₪${Math.round(Number(tpl.price))}` : 'ללא מחיר קבוע')}
+            : (describePriceRule(tpl) || 'ללא מחיר קבוע')}
           {tpl.start_time && tpl.end_time ? ` · ${String(tpl.start_time).slice(0, 5)}–${String(tpl.end_time).slice(0, 5)}` : ''}
           {tpl.max_participants ? ` · עד ${tpl.max_participants}` : ''}
           {tpl.location ? ` · ${tpl.location}` : ''}
