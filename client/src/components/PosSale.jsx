@@ -1066,6 +1066,21 @@ export default function PosSale({
     return true;
   };
 
+  /**
+   * המכירה הקודמת נסגרת ברגע שנכנס פריט לעגלה.
+   *
+   * העודף להחזר ואישור המסמך נשארו על המסך אחרי מכירה, וזה נכון — הדלפקיסט
+   * צריך לראות כמה להחזיר. אבל הם נשארו שם גם אחרי שהתחילה מכירה חדשה, לצד
+   * תצוגת העודף החיה של הלקוח שעומד עכשיו: שני סכומים שונים באותו מסך, בלי
+   * שום דבר שמבדיל ביניהם, ואחד מהם שייך למישהו שכבר הלך. בקופה זה בדיוק סוג
+   * הבלבול שגורם להחזיר את הסכום הלא נכון.
+   */
+  useEffect(() => {
+    if (!cart.length) return;
+    setLastChange(null);
+    setResult(null);
+  }, [cart.length]);
+
   const runAction = async (endpoint, extra = {}, { validateFn = validate } = {}) => {
     if (!validateFn()) return;
     setBusy(true);
