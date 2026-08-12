@@ -257,6 +257,8 @@ function LevelDistributionChart({ rows, mode, onModeChange, activeLevel, onPickL
   const { top, ticks } = axisScale(Math.max(1, ...rows.map((r) => r.count)));
   const busiest = rows.reduce((best, r) => (r.count > (best?.count || 0) ? r : best), null);
   const unit = mode === 'climbers' ? 'מתאמנים' : 'מבחנים';
+  // המסך ימין־לשמאל, ולכן האיבר הראשון יושב מימין: הרמות הגבוהות בצד ימין.
+  const columns = [...rows].reverse();
 
   return (
     <div className="card card-p" style={{ marginBottom: 20 }}>
@@ -297,7 +299,7 @@ function LevelDistributionChart({ rows, mode, onModeChange, activeLevel, onPickL
                 <span key={t} style={{ bottom: `${(t / top) * 100}%` }}>{t}</span>
               ))}
             </div>
-            {rows.map((r) => {
+            {columns.map((r) => {
               const color = LEVEL_COLOR[r.level] || '#38BDF8';
               const isActive = activeLevel === r.level;
               return (
