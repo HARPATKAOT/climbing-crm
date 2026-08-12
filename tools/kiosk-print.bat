@@ -7,6 +7,10 @@ REM  הדגל --kiosk-printing מבטל את החלונית הזאת: כל הד�
 REM  למדפסת ברירת המחדל של ווינדוס. זו הדרך היחידה להדפסה אוטומטית מדפדפן,
 REM  ולכן המסוף חייב להיפתח מהקובץ הזה ולא מקיצור רגיל.
 REM
+REM  --disable-print-preview נוסף בגלל חלון לבן שהבהב בכל הדפסה: --kiosk-printing
+REM  מדלג על חלונית האישור, אבל הדפדפן עדיין בונה את משטח התצוגה המקדימה מאחורי
+REM  הקלעים, ובווינדוס הוא מבליח לרגע. הדגל הזה מונע את בנייתו מלכתחילה.
+REM
 REM  Edge ו-Chrome בנויים על אותו מנוע ומתנהגים אותו דבר. הקובץ מעדיף את
 REM  Edge, שמותקן בכל מחשב ווינדוס, ונופל ל-Chrome אם Edge חסר.
 REM
@@ -21,9 +25,9 @@ set "EDGE=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
 set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 
 if exist "%EDGE%" (
-  start "" "%EDGE%" --kiosk-printing --user-data-dir="%LOCALAPPDATA%\KirBoazTerminal" "%URL%"
+  start "" "%EDGE%" --kiosk-printing --disable-print-preview --user-data-dir="%LOCALAPPDATA%\KirBoazTerminal" "%URL%"
 ) else if exist "%CHROME%" (
-  start "" "%CHROME%" --kiosk-printing --user-data-dir="%LOCALAPPDATA%\KirBoazTerminal" "%URL%"
+  start "" "%CHROME%" --kiosk-printing --disable-print-preview --user-data-dir="%LOCALAPPDATA%\KirBoazTerminal" "%URL%"
 ) else (
   echo לא נמצא Edge ולא Chrome במחשב הזה.
   pause

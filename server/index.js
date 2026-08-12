@@ -14695,6 +14695,18 @@ function posSellerForRequest(req) {
 }
 
 app.post('/api/pos/sale', async (req, res) => {
+  // ההדפסה בדלפק ממתינה לתשובה הזאת: מספר המסמך מודפס על הקבלה, ולכן אי אפשר
+  // להדפיס לפני שהוא קיים. המשמעות היא שכל קריאה חיצונית שיושבת כאן נמדדת
+  // בשניות שבהן הדלפקיסט עומד מול הלקוח ומחכה. הפירוק לשלבים הוא הדרך היחידה
+  // לדעת מי מהן באמת עולה — במקום לנחש ולייעל את הדבר הלא נכון.
+  const startedAt = Date.now();
+  const phases = [];
+  let phaseAt = startedAt;
+  const phase = (label) => {
+    const now = Date.now();
+    phases.push(`${label} ${now - phaseAt}ms`);
+    phaseAt = now;
+  };
   try {
     const {
       cart = [],
@@ -14780,6 +14792,7 @@ app.post('/api/pos/sale', async (req, res) => {
       syncedParent = synced.parent;
       clientId = synced.clientId;
     }
+    phase('setup+icount:client');
 
     let doc = null;
     if (icount.isConfigured()) {
@@ -14797,6 +14810,7 @@ app.post('/api/pos/sale', async (req, res) => {
         vattype: icountVatType(true),
       });
     }
+    phase('icount:doc');
 
     let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
@@ -14897,6 +14911,8 @@ app.post('/api/pos/sale', async (req, res) => {
 
     // החשבונית נשלחת מהשרת. עד היום נבנתה כאן רק כתובת wa.me שפתחה דפדפן
     // בדלפק וחיכתה שמישהו ילחץ „שלח” — מה שקרה לפעמים, ואיש לא ידע מתי לא.
+    phase('db+passes');
+
     let whatsappUrl = null;
     let invoiceWhatsappSent = false;
     let invoiceWhatsappError = null;
@@ -14954,6 +14970,8 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
+    phase('whatsapp');
+
     const receipt = method === 'cash'
       ? buildSaleReceipt({
         sale,
@@ -14961,6 +14979,10 @@ app.post('/api/pos/sale', async (req, res) => {
         openDrawer: true,
       })
       : null;
+
+    console.log(
+      `⏱️ [POS] sale ${sale.id} took ${Date.now() - startedAt}ms — ${phases.join(' · ')}`
+    );
 
     res.status(201).json({
       sale,
