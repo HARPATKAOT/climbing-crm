@@ -169,8 +169,21 @@ const MEDIA_LOG_WORDS = {
 };
 
 /** High-impact personal events are routed silently; sales automation must stop. */
+/**
+ * A message the bot must not answer at all — a death, a hospital, an illness.
+ * The team is told and a person writes; anything automatic here is worse than
+ * silence.
+ *
+ * The words have to be the ones that only ever mean that. Three of them were
+ * not: «אבל» is the commonest conjunction in Hebrew, «שבעה» is the number, and
+ * «שבץ» is what a parent asks us to do with their child. "מילאתי את כל הפרטים
+ * אבל עוד לא שילמתי" was read as a bereavement — the customer was answered
+ * with nothing at all, and the flag it raises kept the bot silent on that
+ * conversation from then on. Mourning is named by its phrases, not by a word
+ * that happens to sit inside them.
+ */
 export function isSensitivePersonalEvent(text = '') {
-  return /(?:נפטר|נפטרה|מוות|אבל|שבעה|טיפול\s+נמרץ|מאושפז|מאושפזת|אירוע\s+מוחי|שבץ|סרטן|מחלה\s+קשה|תאונה\s+קשה)/u
+  return /(?:נפטר|נפטרה|נפטרו|מוות|הלווי[יה]|בית\s+אבל|ימי\s+אבל|אבלים|יושב(?:ים|ת)?\s+שבעה|טיפול\s+נמרץ|מאושפז|מאושפזת|אירוע\s+מוחי|שבץ\s+מוחי|סרטן|מחלה\s+קשה|תאונה\s+קשה)/u
     .test(String(text || ''));
 }
 
