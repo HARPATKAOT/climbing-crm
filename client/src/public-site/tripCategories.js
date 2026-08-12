@@ -105,4 +105,74 @@ export const TRIP_CATEGORIES = [
   },
 ];
 
+/* Public-facing trip facts. Operational constraints and exact suitability are
+   still confirmed by the team before every outing; these values are a useful
+   orientation, not a substitute for that conversation. */
+const CATEGORY_DEFAULTS = {
+  rappel: {
+    difficulty: 'בינונית–מאתגרת',
+    audience: 'משפחות מיטיבות לכת, קבוצות וחובבי אתגר',
+    duration: 'יום מלא',
+    equipment: 'ציוד הסנפלינג והבטיחות מסופק על ידינו',
+    season: 'לפי מזג האוויר ותנאי השטח',
+    images: ['/gallery/cat-rappel.jpg', '/gallery/gallery-09.jpg', '/gallery/gallery-01.jpg'],
+  },
+  cave: {
+    difficulty: 'קלה–בינונית',
+    audience: 'משפחות, קבוצות וסקרנים שאוהבים לגלות',
+    duration: 'חצי יום עד יום',
+    equipment: 'קסדה, תאורה וציוד ייעודי מסופקים לפי המסלול',
+    season: 'בתיאום ובהתאם לתנאי המערה',
+    images: ['/gallery/cat-cave.jpg', '/gallery/gallery-11.jpg', '/gallery/gallery-10.jpg'],
+  },
+  climb: {
+    difficulty: 'מותאמת למשתתפים',
+    audience: 'משפחות, מטפסים מתחילים וקבוצות חוג',
+    duration: 'חצי יום',
+    equipment: 'חבלים, רתמות וציוד אבטחה מסופקים',
+    season: 'רוב חודשי השנה, בהתאם למזג האוויר',
+    images: ['/gallery/cat-climb.jpg', '/gallery/gallery-16.jpg', '/gallery/gallery-11.jpg'],
+  },
+  walk: {
+    difficulty: 'בינונית',
+    audience: 'משפחות וקבוצות שאוהבות ללכת',
+    duration: 'חצי יום עד יום',
+    equipment: 'רשימת ציוד אישית נשלחת לפני היציאה',
+    season: 'לפי אופי המסלול ומזג האוויר',
+    images: ['/gallery/cat-walk.jpg', '/gallery/gallery-01.jpg', '/gallery/gallery-10.jpg'],
+  },
+};
+
+const TRIP_DETAILS = {
+  'נחל רחף': { slug: 'nahal-rahaf', region: 'מדבר יהודה', difficulty: 'מאתגרת', duration: 'יום מלא' },
+  'מערת קשת': { slug: 'keshet-cave', region: 'הגליל המערבי', difficulty: 'קלה–בינונית', duration: 'כחצי יום' },
+  'נחל קומראן': { slug: 'nahal-qumran', region: 'צפון ים המלח', difficulty: 'בינונית', duration: 'חצי יום עד יום' },
+  'הנקיק השחור': { slug: 'black-canyon', region: 'רמת הגולן', difficulty: 'מאתגרת', duration: 'יום מלא' },
+  'נחל תמרים': { slug: 'nahal-tamarim', region: 'מדבר יהודה', difficulty: 'מאתגרת', duration: 'יום מלא' },
+  'מצוק כבארה · זיכרון יעקב': { slug: 'kabara-cliff', region: 'אזור זיכרון יעקב', difficulty: 'מותאמת למשתתפים', duration: 'כחצי יום' },
+  'נחל פרת': { slug: 'nahal-prat', region: 'מדבר יהודה', difficulty: 'בינונית', duration: 'יום מלא' },
+  'נחל דרג׳ה': { slug: 'nahal-darga', region: 'מדבר יהודה', difficulty: 'מאתגרת', duration: 'יום מלא' },
+  'מערת קשת לנחל נמר': { slug: 'keshet-namer', region: 'הגליל המערבי', difficulty: 'בינונית', duration: 'יום מלא' },
+};
+
+for (const category of TRIP_CATEGORIES) {
+  const defaults = CATEGORY_DEFAULTS[category.key] || {};
+  category.trips = category.trips.map((trip) => {
+    const detail = TRIP_DETAILS[trip.name] || {};
+    return {
+      ...defaults,
+      ...trip,
+      ...detail,
+      slug: detail.slug || encodeURIComponent(trip.name),
+      region: detail.region || 'ברחבי הארץ',
+      summary: trip.body.length > 155 ? `${trip.body.slice(0, 152)}…` : trip.body,
+    };
+  });
+}
+
 export const tripCategory = (key) => TRIP_CATEGORIES.find((c) => c.key === key) || null;
+export const tripBySlug = (categoryKey, slug) => {
+  const category = tripCategory(categoryKey);
+  if (!category) return { category: null, trip: null };
+  return { category, trip: category.trips.find((item) => item.slug === slug) || null };
+};

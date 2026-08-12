@@ -16,22 +16,16 @@ const PARAGRAPHS = [
 
 export default function Boaz() {
   return (
-    <section className="ks-section">
-      <div className="ks-wrap" style={{ maxWidth: 760 }}>
-        <h1 className="ks-h1">בועז לחובר ז״ל</h1>
-        {PARAGRAPHS.map((text, i) => (
-          <p key={i} style={{ marginBottom: 16 }}>{text}</p>
-        ))}
-        <p
-          style={{
-            marginTop: 26, paddingTop: 18, borderTop: '2px solid var(--ks-amber)',
-            fontWeight: 600, fontSize: 18,
-          }}
-        >
-          עידית לחובר, אשתו של בועז, הקימה לזכרו את קיר הטיפוס בתל מונד — שמאז פועל
-          עם חוגי המתנ״ס ומטפח את דור ההרפתקנים הבא.
-        </p>
-      </div>
-    </section>
+    <>
+      <section className="ks-pagehero" style={{ backgroundPosition: 'center 38%', backgroundImage: "linear-gradient(90deg, rgba(25,24,18,.2), rgba(25,24,18,.82)), url('/gallery/gallery-06.jpg')" }}>
+        <div className="ks-wrap"><span className="ks-eyebrow">הסיפור שמאחורי הקיר</span><h1 className="ks-h1">בועז לחובר ז״ל</h1><p className="ks-lede">אדם של ספורט, טיולים, חברים, משפחה וחלומות — שהקיר ממשיך להניע קדימה.</p></div>
+      </section>
+      <section className="ks-section">
+        <div className="ks-wrap ks-prose" style={{ maxWidth: 790 }}>
+          {PARAGRAPHS.map((text, i) => <p key={i} style={{ marginBottom: 20 }}>{text}</p>)}
+          <div className="ks-cta" style={{ marginTop: 38 }}><h2 className="ks-h2">הנצחה חיה</h2><p>עידית לחובר, אשתו של בועז, הקימה לזכרו את קיר הטיפוס בתל מונד — שמאז פועל עם חוגי המתנ״ס ומטפח את דור ההרפתקנים הבא.</p></div>
+        </div>
+      </section>
+    </>
   );
 }

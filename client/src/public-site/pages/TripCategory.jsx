@@ -1,114 +1,98 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { ArrowLeft, Clock3, MapPin, Mountain } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { tripCategory, TRIP_CATEGORIES } from '../tripCategories.js';
-import { WHATSAPP_URL } from '../publicData.js';
+import { whatsappUrl } from '../publicData.js';
 
 export default function TripCategory() {
   const { key } = useParams();
-  const cat = tripCategory(key);
+  const category = tripCategory(key);
 
-  if (!cat) {
+  useEffect(() => {
+    if (category) document.title = `${category.title} | קיר בועז`;
+  }, [category]);
+
+  if (!category) {
     return (
-      <section className="ks-section">
-        <div className="ks-wrap">
-          <h1 className="ks-h1">לא מצאנו את הדף</h1>
-          <Link className="ks-btn ks-btn--primary" to="/activities">חזרה לפעילויות</Link>
-        </div>
-      </section>
+      <section className="ks-section"><div className="ks-wrap"><h1 className="ks-h1">לא מצאנו את הדף</h1><Link className="ks-btn ks-btn--primary" to="/activities">חזרה לטיולים</Link></div></section>
     );
   }
-
-  const others = TRIP_CATEGORIES.filter((c) => c.key !== cat.key);
 
   return (
     <>
       <section
         className="ks-pagehero"
-        style={{ backgroundImage:
-          `linear-gradient(to left, rgba(24,17,10,.9) 0%, rgba(24,17,10,.66) 45%, rgba(24,17,10,.2) 100%),
-           url('/gallery/cat-${cat.key}.jpg')` }}
+        style={{ backgroundImage: `linear-gradient(90deg, rgba(25,24,18,.2), rgba(25,24,18,.82)), url('/gallery/cat-${category.key}.jpg')` }}
       >
         <div className="ks-wrap">
           <span className="ks-eyebrow">טיולי שטח</span>
-          <h1 className="ks-h1">{cat.title}</h1>
-          <p className="ks-lede">{cat.tagline}</p>
+          <h1 className="ks-h1">{category.title}</h1>
+          <p className="ks-lede">{category.tagline}</p>
         </div>
       </section>
 
       <section className="ks-section">
-        <div className="ks-wrap" style={{ maxWidth: 820 }}>
-          <p style={{ fontSize: 17, marginTop: 0 }}>{cat.intro}</p>
-          {cat.note && (
-            <p
-              style={{
-                marginTop: 18, padding: '14px 18px', borderRadius: 4,
-                background: 'var(--ks-bg-warm)',
-                borderInlineStart: `3px solid ${cat.accent}`,
-                fontSize: 15.5,
-              }}
-            >
-              {cat.note}
-            </p>
+        <div className="ks-wrap">
+          <div className="ks-pageintro">
+            <span className="ks-eyebrow">חוויה שמרחיבה את הגבולות</span>
+            <h2 className="ks-h2">לראות את הארץ מזווית אחרת</h2>
+            <p className="ks-lede">{category.intro}</p>
+            {category.note && <p className="ks-card">{category.note}</p>}
+          </div>
+        </div>
+      </section>
+
+      <section className="ks-section ks-section--canvas">
+        <div className="ks-wrap">
+          <div className="ks-sectionhead">
+            <div>
+              <span className="ks-eyebrow">המסלולים שלנו</span>
+              <h2 className="ks-h2">לאן אפשר לצאת?</h2>
+            </div>
+          </div>
+
+          {category.trips.length ? (
+            <div className="ks-trip-grid">
+              {category.trips.map((trip) => (
+                <Link className="ks-trip-card" to={`/activities/${category.key}/${trip.slug}`} key={trip.slug}>
+                  <div className="ks-trip-card-media">
+                    <img src={trip.images[0]} alt={`${trip.name} — ${category.title}`} loading="lazy" />
+                    <span className="ks-status">{category.title}</span>
+                  </div>
+                  <div className="ks-trip-card-body">
+                    <h3>{trip.name}</h3>
+                    <p>{trip.summary}</p>
+                    <div className="ks-trip-meta">
+                      <span><MapPin size={15} /> {trip.region}</span>
+                      <span><Clock3 size={15} /> {trip.duration}</span>
+                      <span><Mountain size={15} /> {trip.difficulty}</span>
+                    </div>
+                    <span className="ks-seeall">לפרטי המסלול <ArrowLeft size={17} /></span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="ks-cta">
+              <h2 className="ks-h2">המסלול המדויק נקבע יחד</h2>
+              <p>ספרו לנו מי מגיע ומה מעניין אתכם, ואנחנו נתאים מקום, מועד ורמת אתגר.</p>
+              <a className="ks-btn ks-btn--light" href={whatsappUrl(`שלום, אשמח לתאם ${category.title} לקבוצה`)} target="_blank" rel="noreferrer">לבניית מסלול פרטי</a>
+            </div>
           )}
         </div>
       </section>
 
-      {!!cat.trips.length && (
-        <section className="ks-section ks-section--warm">
-          <div className="ks-wrap">
-            <div className="ks-sectionhead">
-              <h2>המסלולים שלנו</h2>
-            </div>
-            <div className="ks-grid">
-              {cat.trips.map((trip) => (
-                <article className="ks-card" key={trip.name}>
-                  <h3>{trip.name}</h3>
-                  <span className="ks-tile-rule" style={{ background: cat.accent, marginTop: 4 }} />
-                  <p style={{ margin: '8px 0 0', fontSize: 15 }}>{trip.body}</p>
-                </article>
-              ))}
-            </div>
-            <p className="ks-meta" style={{ marginTop: 20 }}>
-              מועדי היציאות הקרובים מתפרסמים בעמוד הפעילויות. לא מצאתם תאריך שמתאים?
-              אפשר לתאם יציאה לקבוצה.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
-              <Link className="ks-btn ks-btn--primary" to="/activities">לפעילויות הקרובות</Link>
-              <a className="ks-btn ks-btn--wa" href={WHATSAPP_URL} target="_blank" rel="noreferrer">
-                לתיאום יציאה — כתבו לנו
-              </a>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {!cat.trips.length && (
-        <section className="ks-section ks-section--warm">
-          <div className="ks-wrap">
-            <h2 className="ks-h2">רוצים לצאת?</h2>
-            <p className="ks-lede">ספרו לנו מי הקבוצה ומה מעניין אתכם, ונתאים מסלול.</p>
-            <a className="ks-btn ks-btn--wa" href={WHATSAPP_URL} target="_blank" rel="noreferrer">
-              כתבו לנו בוואטסאפ
-            </a>
-          </div>
-        </section>
-      )}
-
       <section className="ks-section">
         <div className="ks-wrap">
           <div className="ks-sectionhead">
-            <h2>עוד סוגי טיולים</h2>
-            <Link className="ks-seeall" to="/activities">לכל הפעילויות</Link>
+            <div><span className="ks-eyebrow">עוד דרכים לצאת</span><h2 className="ks-h2">אולי יתאים לכם גם</h2></div>
+            <Link className="ks-seeall" to="/activities">לכל הטיולים <ArrowLeft size={18} /></Link>
           </div>
-          <div className="ks-tiles">
-            {others.map((other) => (
-              <Link className="ks-tile" to={`/activities/${other.key}`} key={other.key}>
-                <img src={`/gallery/cat-${other.key}.jpg`} alt="" aria-hidden="true" loading="lazy" />
-                <div className="ks-tile-body">
-                  <h3>{other.title}</h3>
-                  <span className="ks-tile-rule" />
-                  <p>{other.tagline}</p>
-                </div>
+          <div className="ks-category-grid">
+            {TRIP_CATEGORIES.filter((item) => item.key !== category.key).map((item) => (
+              <Link className="ks-category-card" to={`/activities/${item.key}`} key={item.key}>
+                <img src={`/gallery/cat-${item.key}.jpg`} alt="" loading="lazy" />
+                <div><h3>{item.title}</h3><span>{item.tagline}</span></div>
               </Link>
             ))}
           </div>

@@ -1,5 +1,6 @@
 import React from 'react';
-import { useGroups, weekdayName, WHATSAPP_URL } from '../publicData.js';
+import { Brain, Heart, ShieldCheck, Sparkles } from 'lucide-react';
+import { useGroups, weekdayName, whatsappUrl } from '../publicData.js';
 import Testimonials from '../components/Testimonials.jsx';
 
 /* Mirrors the CRM's weekly board (client/src/components/Schedule.jsx): hours
@@ -181,46 +182,93 @@ export default function Classes() {
   const groups = data || [];
 
   return (
-    <section className="ks-section">
-      <div className="ks-wrap">
-        <span className="ks-eyebrow">לוח חוגים</span>
-        <h1 className="ks-h1">חוגי טיפוס שבועיים</h1>
-        <p className="ks-lede">
-          קבוצות קטנות לפי שכבות גיל, עם מדריכים מוסמכים. הלוח מתעדכן מהמערכת.
-        </p>
-
-        {loading && <p className="ks-meta">טוען חוגים…</p>}
-        {error && <p className="ks-meta">לא הצלחנו לטעון את הלוח כרגע. כתבו לנו ונעדכן.</p>}
-        {!loading && !error && !groups.length && (
-          <p className="ks-meta">אין כרגע חוגים פתוחים במערכת. כתבו לנו ונעדכן.</p>
-        )}
-
-        {!!groups.length && (
-          <>
-            <WeekBoard groups={groups} />
-            <DayList groups={groups} />
-            <Legend />
-            <p className="ks-meta" style={{ marginTop: 18 }}>
-              המחירים משתנים לפי מספר האימונים בשבוע — נשמח למסור בהודעה.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <a className="ks-btn ks-btn--wa" href={WHATSAPP_URL} target="_blank" rel="noreferrer">
-                לשריון מקום ולפרטי מחיר
-              </a>
-              <a className="ks-btn ks-btn--ghost" href="/join?interest=classes">
-                השארת פרטים לחזרה
-              </a>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="ks-wrap" style={{ marginTop: 64 }}>
-        <div className="ks-sectionhead">
-          <h2>מה הורים מספרים</h2>
+    <>
+      <section
+        className="ks-pagehero"
+        style={{ backgroundImage: "linear-gradient(90deg, rgba(25,24,18,.18), rgba(25,24,18,.82)), url('/gallery/gallery-08.jpg')" }}
+      >
+        <div className="ks-wrap">
+          <span className="ks-eyebrow">חוגי טיפוס בתל מונד</span>
+          <h1 className="ks-h1">לומדים לטפס.<br />לומדים להאמין.</h1>
+          <p className="ks-lede">קבוצות קטנות לפי שכבות גיל, תהליך שבועי ומדריכים שמכירים כל ילד וילדה.</p>
         </div>
-        <Testimonials />
-      </div>
-    </section>
+      </section>
+
+      <section className="ks-section">
+        <div className="ks-wrap ks-classes-intro">
+          <div>
+            <span className="ks-eyebrow">ספורט שמפתח הרבה מעבר לגוף</span>
+            <h2 className="ks-h2">כל מסלול הוא בעיה שאפשר לפתור</h2>
+            <p className="ks-lede">הילדים בונים טכניקה, כוח וגמישות — ובאותו זמן מתרגלים ריכוז, התמודדות והתמדה בסביבה תומכת.</p>
+            <ul className="ks-benefits">
+              <li><i><Brain size={21} /></i><div><strong>חשיבה וריכוז</strong><span>תכנון תנועה, קריאת מסלול וקבלת החלטות בזמן אמת.</span></div></li>
+              <li><i><Sparkles size={21} /></i><div><strong>מסוגלות והתמדה</strong><span>מנסים, לומדים, משנים ומגיעים צעד אחד גבוה יותר.</span></div></li>
+              <li><i><Heart size={21} /></i><div><strong>חברות ופרגון</strong><span>קבוצה שמלמדת לעודד, לבטוח ולעבוד יחד.</span></div></li>
+              <li><i><ShieldCheck size={21} /></i><div><strong>הרגלי בטיחות</strong><span>עבודה מסודרת עם ציוד ובהשגחת מדריכים מוסמכים.</span></div></li>
+            </ul>
+          </div>
+          <div className="ks-classes-photo">
+            <img src="/gallery/gallery-05.jpg" alt="ילדים משתפים פעולה בפעילות חוג בקיר בועז" loading="lazy" />
+          </div>
+        </div>
+      </section>
+
+      <section className="ks-section ks-section--canvas">
+        <div className="ks-wrap">
+          <div className="ks-sectionhead">
+            <div><span className="ks-eyebrow">גדלים יחד</span><h2 className="ks-h2">קבוצה שמתאימה לשלב הנכון</h2><p>החלוקה בפועל נקבעת לפי שכבת גיל, ניסיון ומקום פנוי.</p></div>
+          </div>
+          <div className="ks-age-grid">
+            <article className="ks-age-card"><b>א׳–ד׳</b><h3>היכרות, תנועה וביטחון</h3><p>משחקי טיפוס, יסודות טכניקה והתרגלות בטוחה לגובה.</p></article>
+            <article className="ks-age-card"><b>ה׳–ו׳</b><h3>טכניקה ועצמאות</h3><p>מסלולים מורכבים יותר, שיפור תנועה והעמקת עבודת הצוות.</p></article>
+            <article className="ks-age-card"><b>נוער ובוגרים</b><h3>אתגר והתקדמות</h3><p>אימון ממוקד, מטרות אישיות והכנה למפגש עם הסלע בשטח.</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section className="ks-section">
+        <div className="ks-wrap">
+          <div className="ks-sectionhead">
+            <div><span className="ks-eyebrow">לוח חוגים חי</span><h2 className="ks-h2">מוצאים את היום שמתאים לכם</h2><p>הלוח מגיע ישירות מהמערכת. בנייד הוא הופך לרשימה ברורה לפי ימים.</p></div>
+          </div>
+
+          {loading && <p className="ks-meta">טוען את לוח החוגים…</p>}
+          {error && <p className="ks-meta">לא הצלחנו לטעון את הלוח כרגע. שלחו לנו הודעה ונבדוק יחד.</p>}
+          {!loading && !error && !groups.length && <p className="ks-meta">אין כרגע קבוצות שמופיעות באתר. כתבו לנו ונעדכן.</p>}
+
+          {!!groups.length && (
+            <>
+              <WeekBoard groups={groups} />
+              <DayList groups={groups} />
+              <Legend />
+            </>
+          )}
+
+          <div className="ks-actions" style={{ marginTop: 24 }}>
+            <a className="ks-btn ks-btn--wa" href={whatsappUrl('שלום, אשמח לבדוק קבוצה מתאימה ומקום פנוי בחוגי הטיפוס')} target="_blank" rel="noreferrer">בדיקת מקום בקבוצה</a>
+            <a className="ks-btn ks-btn--ghost" href="/join?interest=classes">השארת פרטים לחזרה</a>
+          </div>
+          <p className="ks-meta" style={{ marginTop: 12 }}>מחירים ותדירות נמסרים לפי הקבוצה המתאימה ומספר האימונים בשבוע.</p>
+        </div>
+      </section>
+
+      <section className="ks-section ks-section--canvas">
+        <div className="ks-wrap">
+          <div className="ks-sectionhead"><div><span className="ks-eyebrow">מההורים</span><h2 className="ks-h2">כשהילדים מחכים כבר לאימון הבא</h2></div></div>
+          <Testimonials />
+        </div>
+      </section>
+
+      <section className="ks-section">
+        <div className="ks-wrap">
+          <div className="ks-cta">
+            <span className="ks-eyebrow">ניסיון ראשון</span>
+            <h2 className="ks-h2">רוצים לראות אם זה מתאים?</h2>
+            <p>כתבו לנו גיל, ניסיון קודם והימים שנוחים לכם. נבדוק קבוצה מתאימה ונסביר בדיוק איך מתחילים.</p>
+            <a className="ks-btn ks-btn--light" href={whatsappUrl('שלום, אני רוצה לבדוק התאמה לחוג טיפוס לילד/ה. אשמח לפרטים')} target="_blank" rel="noreferrer">מתחילים בוואטסאפ</a>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }
