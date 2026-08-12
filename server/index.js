@@ -14810,6 +14810,7 @@ app.post('/api/pos/sale', async (req, res) => {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
     }
     lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
+    phase('eligibility');
     const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
     requireCounterPolicyAcceptance(req, cancellationPolicies);
 
@@ -14864,7 +14865,7 @@ app.post('/api/pos/sale', async (req, res) => {
       syncedParent = synced.parent;
       clientId = synced.clientId;
     }
-    phase('setup+icount:client');
+    phase('icount:client');
 
     let doc = null;
     if (icount.isConfigured()) {
