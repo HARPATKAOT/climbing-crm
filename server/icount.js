@@ -154,6 +154,18 @@ function toYyyymmdd(dateStr) {
   return todayYyyymmdd();
 }
 
+/** כל תיקי הלקוחות ב-iCount, כמפה של client_id → תיק. */
+export async function listClients() {
+  const data = await icountPost('client/get_list');
+  return data.clients || {};
+}
+
+/** פרטי תיק לקוח יחיד — get_list מחזיר שם ומייל בלבד, בלי טלפון. */
+export async function getClientInfo(clientId) {
+  const data = await icountPost('client/info', { client_id: clientId });
+  return data?.client_info || data?.client || data || null;
+}
+
 /** Find client by custom_client_id (CRM parent id) among get_list results */
 export async function findClientByCustomId(customClientId) {
   const data = await icountPost('client/get_list');
@@ -727,9 +739,12 @@ export async function updateInventoryQty() {
  *
  * Placeholders: {clientId} / {doctype} / {docnum} / {docId}
  */
+/** הכתובת שנבדקה בחשבון שלנו; משתנה סביבה גובר עליה אם החשבון ישתנה. */
+export const ICOUNT_CLIENT_URL_DEFAULT = 'https://app.icount.co.il/reports/fullclient.php?id={clientId}';
+
 export function clientCardUrl(clientId) {
-  const template = (process.env.ICOUNT_CLIENT_URL_TEMPLATE || '').trim();
-  if (!template || !clientId) return null;
+  const template = (process.env.ICOUNT_CLIENT_URL_TEMPLATE || '').trim() || ICOUNT_CLIENT_URL_DEFAULT;
+  if (!clientId) return null;
   return template.replace(/\{clientId\}/g, encodeURIComponent(clientId));
 }
 

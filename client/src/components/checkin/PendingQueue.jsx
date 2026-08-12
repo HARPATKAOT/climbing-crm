@@ -4,6 +4,7 @@ import {
   RefreshCw, ShieldAlert, Undo2, X,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
+import { icountClientUrl } from '../../utils/icountLinks.js';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -259,7 +260,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                       {row.icount_client_id && (
                         <a
                           className="btn btn-ghost btn-sm"
-                          href={`https://app.icount.co.il/reports/fullclient.php?id=${encodeURIComponent(row.icount_client_id)}`}
+                          href={icountClientUrl(row.icount_client_id)}
                           target="_blank"
                           rel="noopener noreferrer"
                           title="תיק הלקוח ב-iCount"

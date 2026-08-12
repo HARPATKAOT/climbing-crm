@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 're
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
+import { icountClientUrl } from '../utils/icountLinks.js';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -2930,7 +2931,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     ? 'אין תשלומים'
     : `${studentPayments.length} רשומות`;
   // Same client for every row here, so the first one that carries a link wins.
-  const icountClientLink = studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url || '';
+  // הקישור הגיע עד היום רק דרך שורת תשלום, ולכן לא הופיע ללקוח שעוד לא שילם
+  // דרך המערכת. מזהה התיק שמור על הלקוח עצמו, וזה מקור אמין יותר.
+  const icountClientLink =
+    studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url
+    || icountClientUrl(parent?.icount_client_id)
+    || '';
   const sortedLevelTests = useMemo(
     () =>
       [...levelTestsHistory].sort((a, b) =>
