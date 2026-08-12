@@ -14996,6 +14996,9 @@ app.post('/api/pos/sale', async (req, res) => {
       coupon: coupon ? { code: coupon.code, discount: couponDiscount } : null,
       changeGiven,
       receiptBytes: receipt,
+      // מוחזר גם למסך ולא רק ללוג: מי שעומד בדלפק הוא זה שמרגיש את ההמתנה,
+      // והוא לא זה שיש לו גישה ללוחות הבקרה של השרת.
+      timing: { totalMs: Date.now() - startedAt, phases },
     });
   } catch (err) {
     console.error('POS sale error:', err.message, err.details?.error_details || '');
