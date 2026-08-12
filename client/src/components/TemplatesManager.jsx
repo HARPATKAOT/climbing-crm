@@ -447,13 +447,27 @@ export default function TemplatesManager() {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [sortBy, setSortBy] = useState('custom');
+  const [usageFilter, setUsageFilter] = useState('ALL');
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
 
-  const filtersActive = !!search.trim() || statusFilter !== 'ALL' || categoryFilter !== 'ALL';
+  const filtersActive = !!search.trim()
+    || statusFilter !== 'ALL'
+    || categoryFilter !== 'ALL'
+    || usageFilter !== 'ALL';
+
+  /** אותה שאלה שהתגית עונה עליה בשורה — מי שולח — כמסננת על הרשימה. */
+  const matchesUsage = (t) => {
+    if (usageFilter === 'ALL') return true;
+    const kinds = (Array.isArray(t.used_by) ? t.used_by : []).map((u) => u.kind);
+    if (usageFilter === 'manual') return !!t.manual_send;
+    if (usageFilter === 'none') return !kinds.length && !t.manual_send;
+    return kinds.includes(usageFilter);
+  };
 
   const matchesFilters = (t) => {
+    if (!matchesUsage(t)) return false;
     if (statusFilter !== 'ALL' && String(t.status).toUpperCase() !== statusFilter) return false;
     if (categoryFilter !== 'ALL' && String(t.category || '').toUpperCase() !== categoryFilter) return false;
     if (search.trim()) {
@@ -475,6 +489,7 @@ export default function TemplatesManager() {
     setSearch('');
     setStatusFilter('ALL');
     setCategoryFilter('ALL');
+    setUsageFilter('ALL');
   };
 
   const showMoveArrows = sortBy === 'custom' && !filtersActive;
@@ -1261,15 +1276,29 @@ export default function TemplatesManager() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <AppSelect className="input input-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        {/* .input הוא width:100%, ובלי רוחב מפורש כל תפריט תופס שורה שלמה
+            והשורה הופכת לערימה של ארבעה. */}
+        <AppSelect className="input input-sm" style={{ width: 150, flex: '0 0 auto' }}
+          value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="ALL">כל הסטטוסים</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </AppSelect>
-        <AppSelect className="input input-sm" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+        <AppSelect className="input input-sm" style={{ width: 150, flex: '0 0 auto' }}
+          value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
           <option value="ALL">כל הקטגוריות</option>
           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </AppSelect>
-        <AppSelect className="input input-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        <AppSelect className="input input-sm" style={{ width: 168, flex: '0 0 auto' }}
+          value={usageFilter} onChange={(e) => setUsageFilter(e.target.value)}>
+          <option value="ALL">כל השולחים</option>
+          <option value="manual">רק בשליחה ידנית</option>
+          <option value="bot">רק של הבוט</option>
+          <option value="automation">רק של אוטומציות</option>
+          <option value="event">רק של מסך אירועים</option>
+          <option value="none">אף אחד לא שולח</option>
+        </AppSelect>
+        <AppSelect className="input input-sm" style={{ width: 160, flex: '0 0 auto' }}
+          value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="custom">מיון: סדר ידני</option>
           <option value="name">מיון: שם</option>
           <option value="status">מיון: סטטוס</option>
