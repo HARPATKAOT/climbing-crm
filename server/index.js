@@ -54,6 +54,7 @@ import {
   PLACEMENT_REQUEST_COLLECTION,
   eligibilityForStudent,
   reviewProgramApproval,
+  setProgramGroupEligibility,
   setSharedProgramEligibility,
   sharedRestrictedEligibility,
 } from './placementEligibility.js';
@@ -5055,11 +5056,18 @@ app.get('/api/students/:id/program-eligibility', (req, res) => {
 app.put('/api/students/:id/program-eligibility', async (req, res) => {
   const wasEligible = sharedRestrictedEligibility(db, req.params.id)
     .some((row) => ['returning', 'approved'].includes(String(row.status || '')));
-  const result = await setSharedProgramEligibility(db, persistCore, {
-    studentId: req.params.id,
-    eligible: req.body?.eligible === true,
-    actor: req.crmUser?.email || req.crmUser?.id || 'crm',
-  });
+  const hasExplicitGroups = Array.isArray(req.body?.group_ids);
+  const result = hasExplicitGroups
+    ? await setProgramGroupEligibility(db, persistCore, {
+      studentId: req.params.id,
+      groupIds: req.body.group_ids,
+      actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+    })
+    : await setSharedProgramEligibility(db, persistCore, {
+      studentId: req.params.id,
+      eligible: req.body?.eligible === true,
+      actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+    });
   if (!result.ok) return res.status(result.status || 400).json(result);
 
   // The tick was a decision that stayed with us — the family heard nothing
