@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
-import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
+import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS, DAYS_FULL } from '../mockData.js';
 import { icountClientUrl } from '../utils/icountLinks.js';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
@@ -82,7 +82,7 @@ import {
   sortCommunicationRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
-import { consecutiveAbsences } from '../scheduleUtils.js';
+import { consecutiveAbsences, getGroupDays } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
 import { otherGuardians, studentGuardianIds } from '../utils/studentGuardians.js';
@@ -107,6 +107,17 @@ import { joinParentName, splitParentName } from '../utils/parentName.js';
 
 /** One shared empty list, so "nothing loaded yet" is a stable identity. */
 const EMPTY_ROWS = Object.freeze([]);
+
+/**
+ * The weekday a group meets, in the words the staff uses — "יום שלישי", not the
+ * bare index the group record stores. A group that meets twice a week names
+ * both days.
+ */
+function groupDaysLabel(group) {
+  const names = getGroupDays(group).map((d) => DAYS_FULL[d]).filter(Boolean);
+  if (!names.length) return '';
+  return names.length === 1 ? `יום ${names[0]}` : `ימים ${names.join(' ו')}`;
+}
 
 /**
  * The declaration feeds this screen holds carry no signature image and no form
@@ -2859,7 +2870,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const groupSummary = studentGroups.length === 0
     ? 'לא משויך'
     : studentGroups.length === 1
-      ? `${studentGroups[0].name}${studentGroups[0].day != null ? ` · יום ${studentGroups[0].day}` : ''}`
+      ? `${studentGroups[0].name}${groupDaysLabel(studentGroups[0]) ? ` · ${groupDaysLabel(studentGroups[0])}` : ''}`
       : (
         // More than one group — flag it so the staff notices the double assignment
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -5142,7 +5153,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               <ChevronLeft size={13} style={{ opacity: 0.6, flexShrink: 0 }} />
                             </button>
                             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                              יום {g.day} בשעה {g.time}
+                              {[groupDaysLabel(g), g.time ? `בשעה ${g.time}` : ''].filter(Boolean).join(' ')}
                             </div>
                           </div>
                         ))}
