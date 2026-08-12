@@ -233,6 +233,30 @@ function resultContainsRegisteredStatus(value) {
 }
 
 /**
+ * Equipment still owed, anywhere in a tool result.
+ *
+ * A mother paid for two of the three items and was told everything was
+ * settled — the chalk was still unpaid, and the reply was the model's own
+ * cheerful summary rather than anything the tools had said. Whatever a turn
+ * looked at is what it may claim: an open item in front of it is proof that
+ * "all done" is wrong.
+ */
+function resultShowsOpenEquipment(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some(resultShowsOpenEquipment);
+  for (const [key, item] of Object.entries(value)) {
+    if (/^(?:מצב|payment_status)$/i.test(key)) {
+      const state = String(item || '').trim();
+      if (['טרם נסגר', 'unpaid', 'ממתין לתשלום'].includes(state)) return true;
+    }
+    // הקישור עצמו הוא ההוכחה: הוא נוצר רק כשיש פריט שלא הוסדר.
+    if (/^(?:קישור)$/.test(key) && /\/api\/e\//.test(String(item || ''))) return true;
+    if (item && typeof item === 'object' && resultShowsOpenEquipment(item)) return true;
+  }
+  return false;
+}
+
+/**
  * Claims about writes are checked after the model finishes phrasing the reply.
  * A prompt can tell the model not to invent an action; this gate makes that
  * rule enforceable. Only a successful write tool from this exact turn can back
@@ -288,6 +312,13 @@ export function unbackedReplyClaims(text, successfulCalls = []) {
 
   if (/איז(?:ו|ה)[^\n.!?]*כיתה[^\n.!?]*תעד|איז(?:ה|ו)[^\n.!?]*גיל[^\n.!?]*תעד/.test(reply)) {
     claims.push('grade_as_preference');
+  }
+
+  // "הכול מעודכן אצלנו" beside a chalk bag nobody has paid for. A parent who
+  // hears that stops, and the missing item surfaces at the first training.
+  const claimsAllSettled = /(?:הכול|הכל)\s+(?:מעודכן|מסודר|תקין|סגור|מוסדר)|אין\s+צורך\s+בפעולות\s+נוספות|לא\s+נדרשת\s+פעולה\s+נוספת/.test(reply);
+  if (claimsAllSettled && successfulCalls.some((call) => resultShowsOpenEquipment(call.result))) {
+    claims.push('equipment_settled');
   }
 
   return [...new Set(claims)];
@@ -509,6 +540,19 @@ export async function runCustomerToolTurn({
       }
 
       const unbacked = unbackedReplyClaims(text, successfulCalls);
+      // Not a handoff: the customer is one tap from finishing, and the useful
+      // answer is the item that is still open — not a person calling back.
+      if (unbacked.includes('equipment_settled')) {
+        console.error('bot called the equipment settled while an item was still open');
+        return {
+          text: 'כמעט — נשאר עוד פריט ציוד שלא הוסדר. הקישור שנשלח קודם פתוח, '
+            + 'ואפשר להשלים אותו שם או לסמן שהוא כבר קיים אצלכם בבית.',
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'equipment_not_settled',
+        };
+      }
       if (unbacked.includes('grade_as_preference')) {
         console.error('bot treated a factual grade as a preference');
         return {
