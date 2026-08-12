@@ -214,13 +214,20 @@ export function GroupPickerField({
   onToggle,
   disabled = false,
   initiallyOpen = false,
+  modalOnly = false,
+  onSave,
+  onCancel,
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const chosen = groups.filter((g) => selectedIds.map(String).includes(String(g.id)));
+  const closePicker = () => {
+    setOpen(false);
+    onCancel?.();
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+      {!modalOnly && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
         {chosen.length === 0 ? (
           <span style={{ fontSize: 12, color: 'var(--text-3)' }}>לא משויך לחוג</span>
         ) : chosen.map((g) => {
@@ -248,8 +255,8 @@ export function GroupPickerField({
             </span>
           );
         })}
-      </div>
-      <div>
+      </div>}
+      {!modalOnly && <div>
         <button
           type="button"
           className="btn btn-ghost btn-xs"
@@ -258,14 +265,16 @@ export function GroupPickerField({
         >
           <CalendarDays size={12} /> בחירה מלוח החוגים
         </button>
-      </div>
+      </div>}
 
       {open && (
         <GroupPickerModal
           groups={groups}
           selectedIds={selectedIds}
           onToggle={onToggle}
-          onClose={() => setOpen(false)}
+          onClose={closePicker}
+          onSave={onSave}
+          saving={disabled}
         />
       )}
     </div>
@@ -277,7 +286,7 @@ export function GroupPickerField({
 const MODAL_CHROME_PX = 275;
 
 /** The board at full size, in a window big enough that nothing scrolls. */
-function GroupPickerModal({ groups, selectedIds, onToggle, onClose }) {
+function GroupPickerModal({ groups, selectedIds, onToggle, onClose, onSave, saving = false }) {
   const count = selectedIds.length;
 
   // The board is drawn to fit the window it opened in, so a laptop screen and a
@@ -320,8 +329,13 @@ function GroupPickerModal({ groups, selectedIds, onToggle, onClose }) {
           <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
             {count > 0 ? `${count} חוגים נבחרו` : 'לא נבחר חוג'}
           </span>
-          <button type="button" className="btn btn-primary btn-sm" onClick={onClose}>
-            <Check size={13} /> סיום
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={saving}
+            onClick={onSave || onClose}
+          >
+            <Check size={13} /> {saving ? 'שומר...' : onSave ? 'שמור' : 'סיום'}
           </button>
         </div>
       </div>
