@@ -4,6 +4,7 @@ import { VAT_RATE, chargeAmount, netAmount, vatBreakdown } from './vat.js';
 import { computeEquipmentTotal, DEFAULT_EQUIPMENT_SETTINGS } from './equipmentService.js';
 import {
   maxSlotsOf,
+  countEnrolled,
   spotsLeft,
   isGroupFull,
   enrichGroupsWithCapacity,
@@ -79,16 +80,19 @@ test('an unset capacity is unknown, never twelve', () => {
   assert.equal(unknown.isFull, false);
 });
 
-test('a soft hold does not take a seat', () => {
-  // "ממתין להרשמה" exists precisely so the place stays open until the
-  // community centre confirms.
-  const group = { id: 'g1', maxSlots: 2 };
+test('a placement holds its seat, and lets it go when the hold runs out', () => {
+  // It used to leave the seat open until the community centre confirmed, and
+  // the class was offered to the next family while in fact it was full.
+  const group = { id: 'g1', maxSlots: 3 };
+  const now = new Date('2026-08-11T09:00:00Z');
   const students = [
     { id: 's1', groupId: 'g1', status: 'registered' },
-    { id: 's2', groupId: 'g1', status: 'pending_signup' },
+    { id: 's2', groupId: 'g1', status: 'pending_signup', placement_hold_until: '2026-08-14T09:00:00Z' },
     { id: 's3', groupId: 'g1', status: 'waitlist' },
+    { id: 's4', groupId: 'g1', status: 'pending_signup', placement_hold_until: '2026-08-09T09:00:00Z' },
   ];
-  assert.equal(spotsLeft(group, students), 1);
+  assert.equal(countEnrolled('g1', students, { now }), 2);
+  assert.equal(spotsLeft(group, students, { now }), 1);
 });
 
 test('a price never lives inside prose', () => {

@@ -87,13 +87,13 @@ const WEBHOOK_PAYLOADS = [
       image: { id: '1234567890123', mime_type: 'image/jpeg', caption: 'זה הציוד שלי' },
     },
     text: 'זה הציוד שלי',
-    mediaRef: { kind: 'image', id: '1234567890123', mime: 'image/jpeg', filename: '' },
+    mediaRef: { kind: 'image', id: '1234567890123', mime: 'image/jpeg', filename: '', replyTo: '', reactionTo: '' },
   },
   {
     name: 'image with no caption',
     message: { type: 'image', image: { id: '999', mime_type: 'image/png' } },
     text: '[תמונה]',
-    mediaRef: { kind: 'image', id: '999', mime: 'image/png', filename: '' },
+    mediaRef: { kind: 'image', id: '999', mime: 'image/png', filename: '', replyTo: '', reactionTo: '' },
   },
   {
     name: 'document with a Hebrew filename',
@@ -102,31 +102,31 @@ const WEBHOOK_PAYLOADS = [
       document: { id: '555', mime_type: 'application/pdf', filename: 'חשבונית 3993.pdf' },
     },
     text: '[קובץ: חשבונית 3993.pdf]',
-    mediaRef: { kind: 'document', id: '555', mime: 'application/pdf', filename: 'חשבונית 3993.pdf' },
+    mediaRef: { kind: 'document', id: '555', mime: 'application/pdf', filename: 'חשבונית 3993.pdf', replyTo: '', reactionTo: '' },
   },
   {
     name: 'voice note',
     message: { type: 'audio', audio: { id: '777', mime_type: 'audio/ogg; codecs=opus', voice: true } },
     text: '[הודעה קולית]',
-    mediaRef: { kind: 'audio', id: '777', mime: 'audio/ogg', filename: '' },
+    mediaRef: { kind: 'audio', id: '777', mime: 'audio/ogg', filename: '', replyTo: '', reactionTo: '' },
   },
   {
     name: 'video',
     message: { type: 'video', video: { id: '888', mime_type: 'video/mp4' } },
     text: '[סרטון]',
-    mediaRef: { kind: 'video', id: '888', mime: 'video/mp4', filename: '' },
+    mediaRef: { kind: 'video', id: '888', mime: 'video/mp4', filename: '', replyTo: '', reactionTo: '' },
   },
   {
     name: 'sticker',
     message: { type: 'sticker', sticker: { id: '321', mime_type: 'image/webp' } },
     text: '[סטיקר]',
-    mediaRef: { kind: 'sticker', id: '321', mime: 'image/webp', filename: '' },
+    mediaRef: { kind: 'sticker', id: '321', mime: 'image/webp', filename: '', replyTo: '', reactionTo: '' },
   },
   {
     name: 'reaction',
     message: { type: 'reaction', reaction: { emoji: '👍', message_id: 'wamid.abc' } },
     text: 'ריאקציה: 👍',
-    mediaRef: null,
+    mediaRef: { kind: '', id: '', mime: '', filename: '', replyTo: '', reactionTo: 'wamid.abc' },
   },
   {
     name: 'location',
@@ -162,6 +162,26 @@ test('media ids are read without changing what inbound text says', () => {
     );
     assert.deepEqual(whatsappConnectService.extractMediaRef(message), mediaRef, `media ref for ${name}`);
   }
+});
+
+test('a text reply remembers the bubble it quotes', () => {
+  const quoted = {
+    type: 'text',
+    context: { from: '972500000000', id: 'wamid.QUOTED' },
+    text: { body: 'כן, מתאים' },
+  };
+  assert.equal(whatsappConnectService.extractMessageText(quoted), 'כן, מתאים');
+  assert.equal(whatsappConnectService.extractMediaRef(quoted).replyTo, 'wamid.QUOTED');
+});
+
+test('a quoted photo remembers both its file and what it answers', () => {
+  const ref = whatsappConnectService.extractMediaRef({
+    type: 'image',
+    context: { id: 'wamid.QUOTED' },
+    image: { id: '4242', mime_type: 'image/jpeg' },
+  });
+  assert.equal(ref.id, '4242');
+  assert.equal(ref.replyTo, 'wamid.QUOTED');
 });
 
 test('a media payload without an id yields no reference', () => {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PENDING_KIND, todaysEntrants, entryRows, paymentRows, buildPendingQueue, buildCounterQueues,
+  shiftSales,
 } from './pendingHandling.js';
 
 const TODAY = '2026-08-10';
@@ -166,4 +167,107 @@ test('someone whose payment is still open is not counted as climbing', () => {
   });
   assert.deepEqual(pending.map((r) => r.name), ['יונתן כהן']);
   assert.deepEqual(active, []);
+});
+
+test('„אפשר להכניס” נאמר רק על מכירה שקנתה כניסה', () => {
+  // זוג נעליים ששולם אינו אישור כניסה. הכיתוב הזה על שורה של נעליים שולח
+  // מטפס לקיר בלי שקנה כניסה, ואיש בדלפק לא יידע.
+  const base = {
+    sales: [
+      { id: 'shoes', payment_method: 'online', status: 'paid', created_at: '2026-08-10T08:30:00.000Z',
+        customer_name: 'יעל חורב', student_id: 's1', total: 350,
+        items: [{ name: 'נעלי REFLEX', grants_wall_climbing: false }] },
+      { id: 'entry', payment_method: 'online', status: 'paid', created_at: '2026-08-10T09:00:00.000Z',
+        customer_name: 'נועה לוי', student_id: 's2', total: 60,
+        items: [{ name: 'כניסה לקיר', grants_wall_climbing: true }] },
+    ],
+    today: TODAY,
+    dateOf,
+    studentOf,
+  };
+  const rows = paymentRows(base);
+  assert.equal(rows.find((r) => r.sale_id === 'shoes').grants_entry, false);
+  assert.equal(rows.find((r) => r.sale_id === 'entry').grants_entry, true);
+});
+
+test('מכירה במזומן אינה ממתינה לטיפול, אבל היא כן במכירות המשמרת', () => {
+  // העובד שגבה במזומן ראה את הכסף; אין על מה שיאשר. עדיין צריך שהמכירה
+  // תופיע איפשהו, אחרת אין בדלפק תמונה של מה נמכר במשמרת.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    sales: [
+      { id: 'c1', payment_method: 'cash', status: 'paid', created_at: '2026-08-10T09:00:00.000Z',
+        customer_name: 'קונה במזומן', total: 20, items: [{ name: 'ארטיק' }] },
+      { id: 'o1', payment_method: 'online', status: 'pending_payment', created_at: '2026-08-10T09:30:00.000Z',
+        customer_name: 'ממתין לקישור', total: 60 },
+    ],
+  };
+  const { pending, sales } = buildCounterQueues(parts);
+  assert.deepEqual(pending.map((r) => r.name), ['ממתין לקישור']);
+  // הקישור הפתוח נמצא ברשימת הממתינים בלבד; במכירות רק מה שנסגר.
+  assert.deepEqual(sales.map((r) => r.name), ['קונה במזומן']);
+  assert.equal(sales.find((r) => r.sale_id === 'c1').method, 'cash');
+});
+
+test('מכירה מבוטלת אינה נספרת במכירות המשמרת', () => {
+  const rows = shiftSales({
+    sales: [
+      { id: 'x', payment_method: 'cash', status: 'cancelled', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'בוטל' },
+      { id: 'y', payment_method: 'cash', status: 'paid', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'תקין' },
+    ],
+    today: TODAY,
+    dateOf,
+    studentOf,
+  });
+  assert.deepEqual(rows.map((r) => r.name), ['תקין']);
+});
+
+test('קישור תשלום פתוח נמצא ברשימת הממתינים בלבד, ולא גם במכירות', () => {
+  // אותה עסקה בשתי לשוניות נראית כמו שתי עסקאות.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid', student_id: 's1',
+      customer_name: 'יעל חורב', total: 350, created_at: '2026-08-10T08:30:00.000Z',
+      items: [{ name: 'נעלי REFLEX', grants_wall_climbing: false }],
+    }],
+  };
+  const open = buildCounterQueues(parts);
+  assert.deepEqual(open.pending.map((r) => r.sale_id), ['ps1']);
+  assert.deepEqual(open.sales, []);
+
+  // אחרי שהדלפק אישר שראה את הכסף, המכירה עוברת ללשונית המכירות.
+  const handled = buildCounterQueues({
+    ...parts,
+    sales: [{ ...parts.sales[0], handled_at: '2026-08-10T08:40:00.000Z' }],
+  });
+  assert.deepEqual(handled.pending, []);
+  assert.deepEqual(handled.sales.map((r) => r.sale_id), ['ps1']);
+});
+
+test('שורת תשלום שנמחקה ביד אינה צצה במכירות המשמרת', () => {
+  // הקישור נשלח בסכום שגוי. אם ההסרה רק מעבירה אותו ללשונית אחרת היא חסרת ערך.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    dismissedIds: ['payment:ps1'],
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid',
+      customer_name: 'יעל חורב', total: 350, created_at: '2026-08-10T08:30:00.000Z',
+    }],
+  };
+  const { pending, sales } = buildCounterQueues(parts);
+  assert.deepEqual(pending, []);
+  assert.deepEqual(sales, []);
 });

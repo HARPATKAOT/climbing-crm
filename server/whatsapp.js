@@ -1,7 +1,7 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
-import { encodeMediaRef } from './channels/mediaRef.js';
+import { encodeMediaRef, metaFromMediaRef } from './channels/mediaRef.js';
 import {
   recordMessage,
   recordMessageDurable,
@@ -593,7 +593,9 @@ async function callMetaWhatsAppAPI(phone, payload) {
       },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
-        to: formattedPhone,
+        // A read receipt names the message, not a recipient, and Meta rejects
+        // the call when `to` is sent along with it.
+        ...(formattedPhone ? { to: formattedPhone } : {}),
         ...payload
       })
     });
@@ -634,7 +636,10 @@ export const whatsappService = {
     try {
       const result = await callMetaWhatsAppAPI(phone, {
         type: 'text',
-        text: { body }
+        text: { body },
+        // Quoting shows the customer which of their messages this answers —
+        // the same thing WhatsApp's own reply does.
+        ...(options.replyTo ? { context: { message_id: options.replyTo } } : {}),
       });
 
       recordMessage({
@@ -646,6 +651,7 @@ export const whatsappService = {
         is_ai: isAi,
         source: options.source || (isAi ? 'ai' : 'crm'),
         meta_message_id: result.messageId || null,
+        meta: { reply_to: options.replyTo },
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -892,7 +898,11 @@ export const whatsappService = {
       if (caption && type !== 'audio' && type !== 'sticker') payload.caption = caption;
       if (type === 'document' && filename) payload.filename = filename;
 
-      const result = await callMetaWhatsAppAPI(phone, { type, [type]: payload });
+      const result = await callMetaWhatsAppAPI(phone, {
+        type,
+        [type]: payload,
+        ...(options.replyTo ? { context: { message_id: options.replyTo } } : {}),
+      });
       const { icon, noun } = MEDIA_LOG_WORDS[type] || MEDIA_LOG_WORDS.document;
       const subject = type === 'document' && filename ? filename : noun;
       const logMessage = caption ? `${icon} ${caption}` : `${icon} ${subject}`;
@@ -907,6 +917,7 @@ export const whatsappService = {
         meta_message_id: result.messageId || null,
         message_type: type,
         media_url: mediaRef || encodeMediaRef({ kind: 'meta', id: mediaId, filename }),
+        meta: { reply_to: options.replyTo },
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -923,6 +934,58 @@ export const whatsappService = {
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * React to one of the customer's messages with an emoji.
+   *
+   * An empty emoji is how WhatsApp removes a reaction — Meta takes the same
+   * payload either way, so both go through here.
+   */
+  sendReaction: async (phone, { messageId, emoji = '' } = {}, options = {}) => {
+    if (!messageId) return { success: false, error: 'חסר מזהה הודעה לתגובה' };
+    try {
+      const result = await callMetaWhatsAppAPI(phone, {
+        type: 'reaction',
+        reaction: { message_id: messageId, emoji },
+      });
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: emoji ? `ריאקציה: ${emoji}` : 'ריאקציה הוסרה',
+        status: result.mock ? 'sent' : 'delivered',
+        source: options.source || 'crm',
+        meta_message_id: result.messageId || null,
+        message_type: 'reaction',
+        meta: { reaction_to: messageId },
+        parent_id: options.parentId || null,
+        student_id: options.studentId || null,
+      });
+      return { success: true, emoji, messageId: result.messageId || null };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * Turn the customer's ticks blue when the desk opens their conversation.
+   *
+   * Nothing is recorded locally: this changes what the customer sees, not what
+   * our thread holds, and a failure is not worth surfacing — the desk still
+   * read the message.
+   */
+  markMessageRead: async (messageId) => {
+    if (!messageId) return { success: false, error: 'חסר מזהה הודעה' };
+    try {
+      const result = await callMetaWhatsAppAPI(null, {
+        status: 'read',
+        message_id: messageId,
+      });
+      return { success: true, mock: !!result.mock };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   },
@@ -1381,6 +1444,7 @@ export const whatsappService = {
       meta_message_id: metaMessageId,
       message_type: meta.type || 'text',
       media_url: encodeMediaRef(meta.mediaRef),
+      meta: metaFromMediaRef(meta.mediaRef),
       parent_id: parent?.id || null,
       student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
       created_at: inboundAt,
@@ -1822,6 +1886,7 @@ export const whatsappService = {
       meta_message_id: messageId || null,
       message_type: type || 'text',
       media_url: encodeMediaRef(mediaRef),
+      meta: metaFromMediaRef(mediaRef),
       parent_id: echoParent?.id || null,
     });
 
@@ -1863,6 +1928,7 @@ export const whatsappService = {
       meta_message_id: messageId || null,
       message_type: type || 'text',
       media_url: encodeMediaRef(mediaRef),
+      meta: metaFromMediaRef(mediaRef),
       created_at: createdAt,
       parent_id: historyParent?.id || null,
     });

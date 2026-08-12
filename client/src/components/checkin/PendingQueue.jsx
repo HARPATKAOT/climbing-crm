@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Award, CheckCircle2, ClipboardList, CreditCard, Hourglass, RefreshCw, ShieldAlert, X,
+  Award, Banknote, CheckCircle2, ClipboardList, CreditCard, ExternalLink, FileText, Hourglass,
+  RefreshCw, ShieldAlert, Undo2, X,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
+import { icountClientUrl } from '../../utils/icountLinks.js';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -23,6 +25,7 @@ const hhmm = (iso) => {
 export default function PendingQueue({ employees = [], onDone, refreshKey = 0 }) {
   const [rows, setRows] = useState([]);
   const [active, setActive] = useState([]);
+  const [sales, setSales] = useState([]);
   // „ממתינים” היא רשימת משימות; „מטפסים במשמרת” היא תמונת מצב של מי על הקיר.
   // שני דברים שונים, ולכן שתי לשוניות ולא טבלה אחת עם דגלים.
   const [tab, setTab] = useState('pending');
@@ -39,8 +42,9 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
       // תמיכה בשתי הצורות: מערך שטוח מהגרסה הקודמת, ואובייקט שתי הרשימות.
       setRows(Array.isArray(data) ? data : (data?.pending || []));
       setActive(Array.isArray(data) ? [] : (data?.active || []));
+      setSales(Array.isArray(data) ? [] : (data?.sales || []));
     } catch {
-      if (liveRef.current) { setRows([]); setActive([]); }
+      if (liveRef.current) { setRows([]); setActive([]); setSales([]); }
     } finally {
       if (liveRef.current) setLoading(false);
     }
@@ -114,6 +118,55 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     }
   };
 
+  /** זיכוי מלא של מכירה — הכסף חוזר ללקוח ומופק מסמך זיכוי ב-iCount. */
+  const refundSale = async (row) => {
+    const ok = window.confirm(
+      `לזכות את ${row.name} על ₪${row.total}?
+הכסף יוחזר ויופק מסמך זיכוי. אי אפשר לבטל את הפעולה.`
+    );
+    if (!ok) return;
+    setSavingId(row.id);
+    setError('');
+    try {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(row.sale_id)}/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'זיכוי מהדלפק' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'הזיכוי נכשל');
+      await load();
+      onDone?.(`בוצע זיכוי ל${row.name}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  /**
+   * פתיחת המסמך שהופק ב-iCount.
+   *
+   * המסלול מזרים PDF ודורש הזדהות, ולכן אי אפשר פשוט לפתוח אותו בלשונית —
+   * היא תגיע בלי הטוקן ותחזור 401. מושכים את הקובץ ופותחים אותו מהזיכרון.
+   */
+  const openDoc = async (row, kind = 'charge') => {
+    setError('');
+    try {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(row.sale_id)}/invoice?kind=${kind}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'לא נמצא מסמך');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const clearPayment = async (row) => {
     setSavingId(row.id);
     setError('');
@@ -133,8 +186,6 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     }
   };
 
-  const paidCount = rows.filter((r) => r.paid).length;
-
   return (
     <div className="card">
       <div className="section-title" style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -153,9 +204,13 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
         >
           מטפסים במשמרת ({active.length})
         </button>
-        {tab === 'pending' && paidCount > 0 && (
-          <span className="badge badge-green">{paidCount} שילמו — ממתינים לאישור</span>
-        )}
+        <button
+          type="button"
+          className={`tab-pill ${tab === 'sales' ? 'active' : ''}`}
+          onClick={() => setTab('sales')}
+        >
+          מכירות במשמרת ({sales.length})
+        </button>
         <button type="button" className="btn btn-ghost btn-sm" style={{ marginInlineStart: 'auto' }} onClick={load}>
           <RefreshCw size={14} />
         </button>
@@ -163,7 +218,92 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
 
       {error && <div className="alert alert-error" style={{ margin: 14, fontSize: 13 }}>{error}</div>}
 
-      {tab === 'active' ? (
+      {tab === 'sales' ? (
+        <div className="table-wrap">
+          <table className="crm-table">
+            <thead>
+              <tr><th>שעה</th><th>שם</th><th>מה נקנה</th><th>אופן תשלום</th><th>סכום</th><th /></tr>
+            </thead>
+            <tbody>
+              {sales.length === 0 && (
+                <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
+                  עוד לא נמכר כלום במשמרת הזאת
+                </td></tr>
+              )}
+              {sales.map((row) => (
+                <tr key={row.id}>
+                  <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {row.name}
+                    {row.payer_name && row.payer_name !== row.name && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>
+                        שילם: {row.payer_name}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ fontSize: 12, color: 'var(--text-2)' }}>{row.items || '—'}</td>
+                  <td>
+                    {row.method === 'cash' ? (
+                      <span className="badge badge-green"><Banknote size={12} /> מזומן</span>
+                    ) : row.paid ? (
+                      <span className="badge badge-green"><CreditCard size={12} /> שולם בקישור</span>
+                    ) : (
+                      <span className="badge badge-amber"><Hourglass size={12} /> ממתין לתשלום</span>
+                    )}
+                  </td>
+                  <td style={{ fontWeight: 700 }}>
+                    ₪{row.total}
+                    {row.refunded && <div style={{ fontSize: 11, color: 'var(--amber)' }}>זוכתה</div>}
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {row.icount_client_id && (
+                        <a
+                          className="btn btn-ghost btn-sm"
+                          href={icountClientUrl(row.icount_client_id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="תיק הלקוח ב-iCount"
+                        >
+                          <ExternalLink size={14} /> תיק הלקוח
+                        </a>
+                      )}
+                      {row.doc_number && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          title={`מסמך ${row.doc_number}`}
+                          onClick={() => openDoc(row, 'charge')}
+                        >
+                          <FileText size={14} /> חשבונית
+                        </button>
+                      )}
+                      {row.refunded ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => openDoc(row, 'refund')}
+                        >
+                          <FileText size={14} /> מסמך זיכוי
+                        </button>
+                      ) : row.paid && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={savingId === row.id}
+                          onClick={() => refundSale(row)}
+                        >
+                          <Undo2 size={14} /> {savingId === row.id ? 'מזכה...' : 'זיכוי'}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : tab === 'active' ? (
         <div className="table-wrap">
           <table className="crm-table">
             <thead>
@@ -231,7 +371,8 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {isPayment && (row.paid ? (
                         <span className="badge badge-green">
-                          <CheckCircle2 size={12} /> שולם ₪{row.total} — אפשר להכניס
+                          <CheckCircle2 size={12} /> שולם ₪{row.total}
+                          {row.grants_entry ? ' — אפשר להכניס' : ''}
                         </span>
                       ) : (
                         <span className="badge badge-amber">
@@ -251,6 +392,10 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   <td style={{ minWidth: 190 }}>
                     {waitingForMoney ? (
                       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לסליקה</span>
+                    ) : isPayment && !row.needs_safety ? (
+                      // אישור על תשלום אינו חתימה על כלום — רק „ראיתי שהכסף נכנס”.
+                      // בורר עובד כאן שאל שאלה שאין לה משמעות בתיק של אף אחד.
+                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לאישור הדלפק</span>
                     ) : (
                       <EmployeeSelect
                         className="input select input-sm"
@@ -271,7 +416,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                           disabled={savingId === row.id}
                           onClick={() => clearPayment(row)}
                         >
-                          <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'ראיתי — הסר'}
+                          <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'אישור'}
                         </button>
                       )}
                       {row.needs_safety && row.student_id && (

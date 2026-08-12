@@ -46,8 +46,11 @@ import {
   EQUIPMENT_ICONS,
   EQUIPMENT_ICON_COLORS,
   EQUIPMENT_LABELS,
+  EQUIPMENT_SHEET_TONE,
+  EQUIPMENT_SHEET_TONE_ORDER,
   applyEquipmentTone,
   equipmentItemTone,
+  equipmentSheetTone,
   equipmentToneColor,
   equipmentToneBg,
   equipmentToneLabel,
@@ -172,34 +175,10 @@ function IntroPill() {
  * מה שהמדריך צריך למסור היום. נעליים הילדים לוקחים בעצמם, ולכן הן
  * מוצגות רק כדי לומר „מהבית — לא צריך לחפש”.
  */
-/**
- * ארבעה מצבים בלבד בגיליון הנוכחות, צבע אחד לכל משמעות. זה מכוון
- * להיות פחות מדויק מסטטוס הציוד המלא: המדריך צריך לדעת רק אם יש לו
- * פעולה לעשות, והפירוט המלא נמצא בחלון העריכה ובטאב הציוד.
- */
-const SHEET_TONE = {
-  give: { color: '#FBBF24', bg: 'rgba(251,191,36,0.18)', border: 'AA', label: 'לתת עכשיו' },
-  ready: { color: '#4ADE80', bg: 'rgba(74,222,128,0.16)', border: '55', label: 'תקין' },
-  blocked: { color: '#FB7185', bg: 'rgba(251,113,133,0.16)', border: '55', label: 'ממתין לתשלום' },
-  // אפור מלא ולא דהוי: „אין מה לעשות” הוא סטטוס, לא היעדר סטטוס.
-  na: { color: '#94A3B8', bg: 'rgba(148,163,184,0.20)', border: '77', label: 'לא רלוונטי' },
-};
-
-const SHEET_TONE_ORDER = ['give', 'blocked', 'ready', 'na'];
-
-function equipmentSheetTone(item) {
-  if (!item) return 'na';
-  // נגזר מ-equipmentItemTone כדי שיהיה מקור אמת אחד — שם כבר מנורמל
-  // „לא מעוניינים” על נעליים ל„ממתין לתשלום”.
-  const tone = equipmentItemTone(item);
-  // „מהבית” = הילד מצויד, בדיוק כמו פריט שנמסר.
-  if (tone === 'own' || tone === 'given') return 'ready';
-  // „לא מעוניינים” הוא המצב היחיד שבו אין פריט ואין מה לעשות בנידון.
-  if (tone === 'declined') return 'na';
-  if (tone === 'unpaid') return 'blocked';
-  // נעליים לא נמסרות מהמחסן — מי ששילם פשוט לוקח זוג.
-  return item.item_type === 'shoes' ? 'ready' : 'give';
-}
+// הטבלה עצמה חיה ב-equipmentUtils, כי אייקון הציוד בראש תיק הלקוח
+// צובע מאותם ערכים בדיוק.
+const SHEET_TONE = EQUIPMENT_SHEET_TONE;
+const SHEET_TONE_ORDER = EQUIPMENT_SHEET_TONE_ORDER;
 
 // ─── רוחב חלונית הקבוצה ──────────────────────────────────────────────────────
 const PANEL_WIDTH_DEFAULT = 420;

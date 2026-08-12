@@ -1,9 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveMessages } from '../hooks/useLiveMessages.js';
 import {
   Send,
   MessageCircle,
   Paperclip,
+  Reply,
+  SmilePlus,
+  Mic,
+  Square,
   FileText,
   Bookmark,
   RefreshCw,
@@ -32,6 +36,14 @@ import {
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 import AppSelect from './AppSelect.jsx';
 import MessageMedia from './MessageMedia.jsx';
+import {
+  mediaKindOf,
+  mediaLabel,
+  isReactionRow,
+  reactionTargetOf,
+  reactionEmojiOf,
+  replyTargetOf,
+} from '../utils/mediaRef.js';
 
 const CHANNEL_LABELS = {
   whatsapp: 'וואטסאפ',
@@ -116,6 +128,178 @@ const DELIVERY_MARKS = {
   undelivered: { Icon: AlertCircle, color: '#ef4444', label: 'לא נמסרה' },
   error: { Icon: AlertCircle, color: '#ef4444', label: 'שגיאת שליחה' },
 };
+
+/**
+ * Rearrange a thread the way WhatsApp shows it.
+ *
+ * Reactions arrive as ordinary messages — a row whose whole text is
+ * «ריאקציה: 👍». Left alone they read as the customer saying that out loud,
+ * which is how they looked in the panel until now. Here each one is attached to
+ * the bubble it answers, and a reaction pointing at a bubble we do not hold is
+ * kept in place rather than dropped.
+ *
+ * Also indexes every bubble by its Meta id, so a quoting message can show what
+ * it quotes without another pass over the thread.
+ */
+function foldThread(rows) {
+  const quotedByMetaId = new Map();
+  for (const row of rows) {
+    if (row.meta_message_id) quotedByMetaId.set(String(row.meta_message_id), row);
+  }
+
+  const reactionsByTarget = new Map();
+  const messages = [];
+  for (const row of rows) {
+    const target = isReactionRow(row) ? reactionTargetOf(row) : '';
+    if (target && quotedByMetaId.has(target)) {
+      const list = reactionsByTarget.get(target) || [];
+      const emoji = reactionEmojiOf(row);
+      // An empty emoji is a removal: it takes back this sender's earlier one.
+      const rest = list.filter((r) => r.inbound !== (row.direction === 'inbound'));
+      reactionsByTarget.set(target, emoji ? [...rest, { emoji, inbound: row.direction === 'inbound' }] : rest);
+      continue;
+    }
+    messages.push(row);
+  }
+  return { messages, reactionsByTarget, quotedByMetaId };
+}
+
+/** The emoji sitting on a bubble, as a small overlapping pill. */
+function ReactionPills({ reactions }) {
+  if (!reactions?.length) return null;
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 3,
+      marginTop: -4,
+      marginBottom: -6,
+      alignSelf: 'flex-start',
+    }}>
+      {reactions.map((r, index) => (
+        <span
+          key={`${r.emoji}-${index}`}
+          title={r.inbound ? 'הלקוח הגיב' : 'הגבנו'}
+          style={{
+            fontSize: 12,
+            lineHeight: 1,
+            padding: '3px 5px',
+            borderRadius: 999,
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          {r.emoji}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// WhatsApp's own six, in its own order. Staff already know this row by sight.
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+/** Reply and react, revealed on hover over a bubble. */
+function BubbleActions({ inbound, open, busy, onReply, onToggle, onPick }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: -12,
+        [inbound ? 'insetInlineEnd' : 'insetInlineStart']: -6,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 2,
+        padding: 2,
+        borderRadius: 999,
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+        zIndex: 3,
+      }}
+    >
+      {open ? (
+        <>
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              disabled={busy}
+              onClick={() => onPick(emoji)}
+              title={`להגיב ${emoji}`}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 15,
+                lineHeight: 1,
+                padding: '3px 2px',
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onPick('')}
+            title="הסרת התגובה"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '3px 4px', color: 'var(--text-3)' }}
+          >
+            <X size={12} />
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={onReply}
+            title="תגובה להודעה זו"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '3px 5px', color: 'var(--text-2)' }}
+          >
+            <Reply size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={onToggle}
+            title="ריאקציה"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '3px 5px', color: 'var(--text-2)' }}
+          >
+            <SmilePlus size={13} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The message being answered, shown above the answer — as WhatsApp does. */
+function QuotedPreview({ quoted, compact = false }) {
+  if (!quoted) return null;
+  const kind = mediaKindOf(quoted);
+  const body = String(quoted.message || quoted.body || quoted.text || '').trim();
+  const label = kind ? `${mediaLabel(kind).icon} ${mediaLabel(kind).noun}` : '';
+  return (
+    <div style={{
+      borderInlineStart: `3px solid ${BRAND_ORANGE}`,
+      background: 'rgba(255,255,255,0.05)',
+      borderRadius: 6,
+      padding: '4px 7px',
+      marginBottom: compact ? 0 : 5,
+      fontSize: 11,
+      color: 'var(--text-3)',
+      maxHeight: 44,
+      overflow: 'hidden',
+    }}>
+      <div style={{ fontWeight: 700, color: BRAND_ORANGE, marginBottom: 1 }}>
+        {quoted.direction === 'inbound' ? 'הלקוח כתב' : 'כתבנו'}
+      </div>
+      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {label && <span>{label} </span>}
+        {body.slice(0, 120) || (label ? '' : '(ללא תוכן)')}
+      </div>
+    </div>
+  );
+}
 
 /** The human name of the template a message was sent from, when we still hold it. */
 function templateLabel(message, templates) {
@@ -590,6 +774,12 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   // The file staged for sending: { base64, name, mimeType, size }.
   const [attachment, setAttachment] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [hoveredMessage, setHoveredMessage] = useState('');
+  const [reactionFor, setReactionFor] = useState('');
+  const [reactionBusy, setReactionBusy] = useState('');
+  // The message the next send will quote, or null for an ordinary message.
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [recording, setRecording] = useState(false);
   const [botBusy, setBotBusy] = useState(false);
   const [botContinuing, setBotContinuing] = useState(false);
   const [botMenuOpen, setBotMenuOpen] = useState(false);
@@ -612,6 +802,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   // Half-written reply in the composer. `load` runs from a stale closure on the
   // poll, so this has to be a ref rather than the state it mirrors.
   const composingRef = useRef(false);
+  const recorderRef = useRef(null);
   // Quiet polls keep an old `load` closure — read the live thread id from a ref
   // so a refresh never drags the user back to the parent thread.
   const activeThreadIdRef = useRef(selectedThreadId || 'parent');
@@ -639,27 +830,24 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     try {
       // Quiet polls only refresh the thread — templates and saved replies barely
       // change, and re-fetching them every few seconds delayed new messages.
-      let convRes;
-      if (quiet) {
-        convRes = await fetch(`/api/conversations/${requestedParentId}`);
-      } else {
-        const [cRes, resources] = await Promise.all([
-          fetch(`/api/conversations/${requestedParentId}`),
-          loadComposerResources(),
-        ]);
-        convRes = cRes;
-
-        // Templates / saved replies first — don't lose them if conversation load fails
-        const tpls = resources.templates;
-        // A round trip that failed must not empty the picker. Background polls
-        // run while the API restarts, and overwriting the list with [] made that
-        // read as "Meta approved nothing" — sending staff to press a sync button
-        // that fixes nothing, on a list that was fine a second earlier.
-        setTemplatesUnavailable(!Array.isArray(tpls));
-        if (Array.isArray(tpls)) setTemplates(tpls);
-        const srs = resources.savedReplies;
-        if (Array.isArray(srs)) setSavedReplies(srs);
+      // The messages are what the desk opened the customer for; the templates
+      // and saved replies only fill the composer under them. Awaiting the two
+      // together held a thread that had already arrived behind a template list
+      // nobody was looking at yet, so they now land on their own.
+      if (!quiet) {
+        loadComposerResources().then((resources) => {
+          const tpls = resources.templates;
+          // A round trip that failed must not empty the picker. Background polls
+          // run while the API restarts, and overwriting the list with [] made that
+          // read as "Meta approved nothing" — sending staff to press a sync button
+          // that fixes nothing, on a list that was fine a second earlier.
+          setTemplatesUnavailable(!Array.isArray(tpls));
+          if (Array.isArray(tpls)) setTemplates(tpls);
+          const srs = resources.savedReplies;
+          if (Array.isArray(srs)) setSavedReplies(srs);
+        }).catch(() => {});
       }
+      const convRes = await fetch(`/api/conversations/${requestedParentId}`);
 
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
@@ -739,6 +927,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     setTemplateVars([]);
     setReplyText('');
     setAttachment(null);
+    setReplyingTo(null);
     setBotMenuOpen(false);
     setBotContinuing(false);
     composingRef.current = false;
@@ -808,7 +997,14 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     : (parentName || activeThread?.label || 'לקוח');
   const threadChannels = activeThread?.channels || data?.channels || {};
   const allMessages = data?.messages || [];
-  const messages = allMessages.filter((m) => messageMatchesThread(m, activeThread, parent?.phone));
+  const threadMessages = allMessages.filter((m) => messageMatchesThread(m, activeThread, parent?.phone));
+  // A reaction is not a message in the conversation — it belongs on the bubble
+  // it answers, the way WhatsApp shows it. Reactions whose target is not in
+  // this thread stay visible on their own, so nothing silently disappears.
+  const { messages, reactionsByTarget, quotedByMetaId } = useMemo(
+    () => foldThread(threadMessages),
+    [threadMessages]
+  );
 
   useEffect(() => {
     if (threadChannels[channel]) return;
@@ -850,6 +1046,17 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     if (freeformBlocked || (mode !== 'text' && mode !== 'attachment')) return;
     replyInputRef.current?.focus();
   }, [sending, freeformBlocked, mode]);
+
+  // Blue ticks on the customer's phone once the desk actually has the thread up.
+  // Fire-and-forget: a failure here changes nothing the desk can see, and the
+  // ref keeps a background poll from calling it again for the same customer.
+  const readSentForRef = useRef('');
+  useEffect(() => {
+    const parentId = parent?.id;
+    if (!parentId || !messages.length || readSentForRef.current === parentId) return;
+    readSentForRef.current = parentId;
+    fetch(`/api/conversations/${parentId}/read`, { method: 'POST' }).catch(() => {});
+  }, [parent?.id, messages.length]);
 
   const findInboundBefore = (index) => {
     for (let i = index - 1; i >= 0; i -= 1) {
@@ -927,6 +1134,81 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     reader.readAsDataURL(file);
   }, []);
 
+  /** Quote a bubble in the next message, and put the caret where staff type. */
+  const startReplyTo = (message) => {
+    setReplyingTo(message);
+    setReactionFor('');
+    if (mode !== 'attachment') setMode('text');
+    replyInputRef.current?.focus();
+  };
+
+  const sendReaction = async (message, emoji) => {
+    if (!parent?.id || reactionBusy) return;
+    setReactionBusy(message.id);
+    setError('');
+    try {
+      const res = await fetch(`/api/conversations/${parent.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel: 'whatsapp',
+          type: 'reaction',
+          messageId: message.id,
+          emoji,
+          studentId: activeThread?.studentId || null,
+          targetPhone: activeThread?.phone || null,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || (json ? 'שליחת הריאקציה נכשלה' : SERVER_DOWN_MESSAGE));
+      }
+      setReactionFor('');
+      await load({ quiet: true });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReactionBusy('');
+    }
+  };
+
+  /**
+   * Record a voice note in the browser and stage it like any other attachment.
+   * Chrome and Edge give us webm/opus; WhatsApp takes it as an audio message.
+   */
+  const toggleRecording = async () => {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('הדפדפן הזה לא תומך בהקלטה. אפשר לצרף קובץ שמע קיים');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
+      recorder.onstop = () => {
+        // Release the microphone the moment recording ends — otherwise the
+        // browser keeps showing the tab as listening for the whole session.
+        stream.getTracks().forEach((track) => track.stop());
+        setRecording(false);
+        recorderRef.current = null;
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (!blob.size) return;
+        acceptFile(new File([blob], `voice-${Date.now()}.webm`, { type: blob.type }));
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      setError('');
+    } catch (err) {
+      setError(err.name === 'NotAllowedError' ? 'אין הרשאה למיקרופון' : 'ההקלטה נכשלה');
+    }
+  };
+
   const onPickFile = (e) => {
     acceptFile(e.target.files?.[0]);
     // Clearing lets the same file be picked twice in a row after a failed send.
@@ -963,6 +1245,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
         type: mode === 'saved' ? 'saved_reply' : mode,
         studentId: activeThread?.studentId || null,
         targetPhone: activeThread?.phone || null,
+        replyToMessageId: replyingTo?.id || null,
       };
       if (mode === 'text') {
         if (!replyText.trim()) return;
@@ -1006,6 +1289,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       }
       setReplyText('');
       setAttachment(null);
+      setReplyingTo(null);
       setDraftInfo(null);
       await load({ quiet: true });
     } catch (err) {
@@ -1513,6 +1797,14 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                   : null;
                 const dayKey = messageDayKey(m.created_at);
                 const startsNewDay = !!dayKey && dayKey !== messageDayKey(messages[i - 1]?.created_at);
+                const reactions = m.meta_message_id
+                  ? reactionsByTarget.get(String(m.meta_message_id))
+                  : null;
+                const quoted = quotedByMetaId.get(replyTargetOf(m)) || null;
+                const gone = !!(m.deleted_at || m.status === 'deleted');
+                // Reacting and quoting both name a bubble at Meta, so a message
+                // that never got a Meta id can be neither answered nor reacted to.
+                const canAct = !!m.meta_message_id && !gone && ch === 'whatsapp';
                 return (
                   <React.Fragment key={m.id || i}>
                   {startsNewDay && (
@@ -1540,7 +1832,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                     </div>
                   )}
                   <div
+                    onMouseEnter={() => setHoveredMessage(m.id)}
+                    onMouseLeave={() => setHoveredMessage((prev) => (prev === m.id ? '' : prev))}
                     style={{
+                      position: 'relative',
                       alignSelf: inbound ? 'flex-start' : 'flex-end',
                       maxWidth: '88%',
                       fontSize: 12,
@@ -1550,6 +1845,17 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       border: '1px solid var(--border)',
                     }}
                   >
+                    {canAct && (hoveredMessage === m.id || reactionFor === m.id) && (
+                      <BubbleActions
+                        inbound={inbound}
+                        open={reactionFor === m.id}
+                        busy={reactionBusy === m.id}
+                        onReply={() => startReplyTo(m)}
+                        onToggle={() => setReactionFor((prev) => (prev === m.id ? '' : m.id))}
+                        onPick={(emoji) => sendReaction(m, emoji)}
+                      />
+                    )}
+                    <QuotedPreview quoted={quoted} />
                     <div style={{
                       fontSize: 10,
                       color: 'var(--text-3)',
@@ -1661,6 +1967,11 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                         )}
                       </div>
                     )}
+                  </div>
+                  {/* Outside the bubble, so it overlaps its bottom edge the way
+                      WhatsApp draws it rather than sitting inside the text. */}
+                  <div style={{ alignSelf: inbound ? 'flex-start' : 'flex-end' }}>
+                    <ReactionPills reactions={reactions} />
                   </div>
                   </React.Fragment>
                 );
@@ -1886,6 +2197,23 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
 
             <input ref={fileRef} type="file" hidden onChange={onPickFile} />
 
+            {replyingTo && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <QuotedPreview quoted={replyingTo} compact />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => setReplyingTo(null)}
+                  title="ביטול הציטוט"
+                  style={{ flexShrink: 0 }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
             {mode === 'attachment' && (
               <div style={{ marginBottom: 8 }}>
                 {attachment ? (
@@ -1942,16 +2270,28 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
             {(mode === 'text' || mode === 'attachment') && (
               <div style={{ display: 'flex', gap: 8 }}>
                 {mode === 'text' && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => fileRef.current?.click()}
-                    disabled={sending || freeformBlocked || channel !== 'whatsapp'}
-                    title={channel === 'whatsapp' ? 'צירוף קובץ' : 'צירוף קבצים זמין בוואטסאפ'}
-                    style={{ flexShrink: 0, padding: '0 9px' }}
-                  >
-                    <Paperclip size={15} />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={sending || freeformBlocked || channel !== 'whatsapp'}
+                      title={channel === 'whatsapp' ? 'צירוף קובץ' : 'צירוף קבצים זמין בוואטסאפ'}
+                      style={{ flexShrink: 0, padding: '0 9px' }}
+                    >
+                      <Paperclip size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${recording ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={toggleRecording}
+                      disabled={sending || freeformBlocked || channel !== 'whatsapp'}
+                      title={recording ? 'עצירת ההקלטה' : 'הקלטת הודעה קולית'}
+                      style={{ flexShrink: 0, padding: '0 9px', color: recording ? undefined : '#F87171' }}
+                    >
+                      {recording ? <Square size={14} /> : <Mic size={15} />}
+                    </button>
+                  </>
                 )}
                 <input
                   ref={replyInputRef}

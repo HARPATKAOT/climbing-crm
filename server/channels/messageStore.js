@@ -75,8 +75,20 @@ export function normalizeMessage(input = {}) {
     recipient_id: input.recipient_id || null,
     edited_at: input.edited_at || null,
     deleted_at: input.deleted_at || null,
+    // What this message points at: reply_to / reaction_to, both wamids. Kept
+    // out of media_url so that column means one thing again — where the file is.
+    meta: normalizeMessageMeta(input.meta),
     created_at: input.created_at || new Date().toISOString(),
   };
+}
+
+/** Only the keys we know, and null rather than an empty object. */
+export function normalizeMessageMeta(input) {
+  if (!input || typeof input !== 'object') return null;
+  const meta = {};
+  if (input.reply_to || input.replyTo) meta.reply_to = String(input.reply_to || input.replyTo);
+  if (input.reaction_to || input.reactionTo) meta.reaction_to = String(input.reaction_to || input.reactionTo);
+  return Object.keys(meta).length ? meta : null;
 }
 
 /** Local mirror row in the legacy `whatsapp_logs` shape. */
@@ -98,6 +110,7 @@ export function toLogRow(message) {
     student_id: message.student_id || null,
     edited_at: message.edited_at || null,
     deleted_at: message.deleted_at || null,
+    meta: message.meta || null,
     created_at: message.created_at,
   };
 }

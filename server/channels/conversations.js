@@ -852,6 +852,35 @@ export async function getConversationMedia(parentId, messageId) {
 }
 
 /**
+ * Turn the customer's ticks blue once the desk actually opened the thread.
+ *
+ * Marking the newest inbound message read marks everything before it read too,
+ * so one call per open is enough. Best effort throughout — the customer seeing
+ * grey ticks is a cosmetic loss, and it must never fail opening a conversation.
+ */
+export async function markThreadRead(parentId) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+
+  const newestInbound = [...mergeThread(parent)]
+    .reverse()
+    .find((m) => m.direction === 'inbound'
+      && (m.channel || 'whatsapp') === 'whatsapp'
+      && m.meta_message_id
+      && m.status !== 'deleted');
+
+  if (!newestInbound) return { success: true, skipped: 'no_inbound' };
+
+  try {
+    const result = await whatsappService.markMessageRead(newestInbound.meta_message_id);
+    return { success: true, marked: !!result?.success, messageId: newestInbound.id };
+  } catch (err) {
+    console.warn('marking thread read failed:', err.message);
+    return { success: true, marked: false };
+  }
+}
+
+/**
  * Manual override of the auto-reply bot for one customer.
  * `mute` is permanent until someone resumes it; `pause` is timed;
  * `resume` clears both the opt-out and any timed pause.
@@ -1133,10 +1162,40 @@ export async function replyToParent(parentId, payload = {}) {
     text = applySavedReplyVars(reply.body, parent, replyStudents);
   }
 
+  // The Meta id of the bubble this answers. Resolved from our own row id, so
+  // the panel never has to know what a wamid is — and a message we never got a
+  // Meta id for simply goes out unquoted rather than failing the send.
+  const quoted = payload.replyToMessageId
+    ? messages.find((m) => String(m.id) === String(payload.replyToMessageId))
+    : null;
   const sendOpts = {
     parentId: parent.id,
     studentId: target.studentId || null,
+    replyTo: quoted?.meta_message_id || '',
   };
+
+  // A reaction is not a message and does not open or need the 24h window —
+  // Meta accepts it as long as the bubble it points at is still there.
+  if (type === 'reaction') {
+    if (channel !== 'whatsapp') {
+      return { success: false, error: 'ריאקציות זמינות בוואטסאפ בלבד', status: 400 };
+    }
+    if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
+    const targetRow = messages.find((m) => String(m.id) === String(payload.messageId));
+    if (!targetRow?.meta_message_id) {
+      return {
+        success: false,
+        // History-synced and simulator rows never had one.
+        error: 'אי אפשר להגיב להודעה הזו — היא לא נשלחה דרך וואטסאפ',
+        status: 400,
+      };
+    }
+    return whatsappService.sendReaction(
+      target.phone,
+      { messageId: targetRow.meta_message_id, emoji: String(payload.emoji || '') },
+      sendOpts
+    );
+  }
 
   if (type === 'template') {
     const templateName = payload.templateName || payload.templateId;
@@ -1218,14 +1277,18 @@ export async function replyToParent(parentId, payload = {}) {
         const storagePath = storagePathForMedia(`out-${Date.now()}`, mimeType);
         const stored = await supa.uploadClientDocument(storagePath, buffer, mimeType);
         if (stored?.ok) {
-          mediaRef = encodeMediaRef({ kind: 'storage', id: storagePath, mime: mimeType, filename });
+          mediaRef = encodeMediaRef({
+            kind: 'storage', id: storagePath, mime: mimeType, filename, replyTo: sendOpts.replyTo,
+          });
         }
       } catch (err) {
         console.warn('mirroring outbound media failed:', err.message);
       }
     }
     if (!mediaRef) {
-      mediaRef = encodeMediaRef({ kind: 'meta', id: mediaId, mime: mimeType, filename });
+      mediaRef = encodeMediaRef({
+        kind: 'meta', id: mediaId, mime: mimeType, filename, replyTo: sendOpts.replyTo,
+      });
     }
 
     const caption = withStaffMark(text || payload.caption || '');

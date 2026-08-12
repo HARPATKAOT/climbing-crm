@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 're
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
+import { icountClientUrl } from '../utils/icountLinks.js';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -90,9 +91,11 @@ import {
   EQUIPMENT_ICON_COLORS,
   EQUIPMENT_LABELS,
   EQUIPMENT_ORDER,
+  EQUIPMENT_SHEET_TONE,
   EQUIPMENT_STATUS_TONES,
   applyEquipmentTone,
   equipmentItemTone,
+  equipmentOverallTone,
   equipmentToneBg,
   equipmentToneColor,
   equipmentToneLabel,
@@ -101,6 +104,27 @@ import {
 } from './equipmentUtils.js';
 import AppSelect from './AppSelect.jsx';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
+
+/** One shared empty list, so "nothing loaded yet" is a stable identity. */
+const EMPTY_ROWS = Object.freeze([]);
+
+/**
+ * The declaration feeds this screen holds carry no signature image and no form
+ * snapshot — they would weigh a megabyte if they did. The PDF builder needs
+ * both, so it pulls the one record it is about to draw.
+ */
+async function withDeclarationSignature(decl) {
+  if (!decl?.id) return decl;
+  if (decl.signature_url || decl.signatureUrl || decl.formSnapshot) return decl;
+  try {
+    const res = await fetch(`/api/health-declarations/${encodeURIComponent(decl.id)}`);
+    if (!res.ok) return decl;
+    const full = await res.json();
+    return full && full.id ? full : decl;
+  } catch {
+    return decl;
+  }
+}
 
 const COUPON_STATE_BADGE = {
   active: { label: 'בתוקף', cls: 'badge badge-green' },
@@ -466,6 +490,35 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
    * tab that opens both sides of an adult who is also a payer.
    */
   const parentOnly = isParentOnlyLead(student);
+
+  /**
+   * What the desk opened the file for — the WhatsApp thread and the approval
+   * marks above it — has to arrive before the folders stacked underneath. This
+   * card asks the API for a dozen different things the moment it opens, and the
+   * server answers them one at a time; a coupon list nobody has scrolled to used
+   * to be ahead of the messages in that queue. The folder loads therefore wait
+   * for the first paint, and only then leave. Anything reloaded after an action
+   * — a sale cancelled, a coupon issued — still goes out immediately.
+   */
+  // Held as "which climber is settled" rather than a yes/no. A flag would still
+  // read yes on the render where the sibling changed — state lands a render
+  // later — and every folder load fired once on that stale yes and once more
+  // when it came back, doubling the very requests this is here to hold back.
+  const [settledStudentId, setSettledStudentId] = useState(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettledStudentId(student.id), 300);
+    return () => clearTimeout(timer);
+  }, [student.id]);
+  const foldersReady = settledStudentId === student.id;
+
+  // The same wait for what does not change between siblings, so switching
+  // between them doesn't re-ask for it.
+  const [deferredOnce, setDeferredOnce] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setDeferredOnce(true), 300);
+    return () => clearTimeout(timer);
+  }, []);
+
   const familyMemberTabs = useMemo(
     () => buildFamilyMemberTabs(siblings, allParents),
     [siblings, allParents]
@@ -610,7 +663,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [healthDecl, setHealthDecl] = useState(null);
   // All of this student's declarations, one per activity they signed for.
   const [studentDeclarations, setStudentDeclarations] = useState([]);
-  const [participationWaivers, setParticipationWaivers] = useState([]);
+  // Held together with the climber they belong to. Read apart, a sibling switch
+  // showed the previous child's approvals — green for the wrong person — until
+  // the new answer arrived.
+  const [participationWaivers, setParticipationWaivers] = useState({ studentId: null, rows: [] });
   const [sendingHealth, setSendingHealth] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
   const [healthSendLink, setHealthSendLink] = useState('');
@@ -811,23 +867,29 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   useEffect(() => {
     if (parentOnly || !student?.id) {
-      setParticipationWaivers([]);
+      setParticipationWaivers({ studentId: null, rows: [] });
       return;
     }
     let cancelled = false;
-    fetch(`/api/students/${encodeURIComponent(student.id)}/participation-waivers`)
+    const targetId = student.id;
+    fetch(`/api/students/${encodeURIComponent(targetId)}/participation-waivers`)
       .then((res) => (res.ok ? res.json() : []))
       .then((rows) => {
-        if (!cancelled) setParticipationWaivers(Array.isArray(rows) ? rows : []);
+        if (!cancelled) setParticipationWaivers({ studentId: targetId, rows: Array.isArray(rows) ? rows : [] });
       })
       .catch(() => {
-        if (!cancelled) setParticipationWaivers([]);
+        if (!cancelled) setParticipationWaivers({ studentId: targetId, rows: [] });
       });
     return () => { cancelled = true; };
     // knownDeclarations only changes when the server feed actually changed
     // (the page-level refresh compares bytes) — a form signed while this card
     // is open lands here without closing and reopening the file.
   }, [parentOnly, student.id, knownDeclarations]);
+
+  // The approvals this card may act on: the rows the server sent for the
+  // climber on screen, and nothing at all while a switch is still in flight.
+  const waiversLoaded = participationWaivers.studentId === student.id;
+  const studentWaivers = waiversLoaded ? participationWaivers.rows : EMPTY_ROWS;
 
   const healthOnlySelected = selectedFormSlug === 'health-renewal';
   const selectedTemplate = healthOnlySelected
@@ -901,7 +963,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (cancelled) break;
         pdfBackfillRef.current.add(decl.id);
         try {
-          const { blob, fileName } = await buildHealthDeclarationPdf(decl);
+          const { blob, fileName } = await buildHealthDeclarationPdf(await withDeclarationSignature(decl));
           const pdfBase64 = await blobToBase64(blob);
           const res = await fetch(`/api/health-declarations/${encodeURIComponent(decl.id)}/pdf`, {
             method: 'POST',
@@ -1532,6 +1594,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setActivityHistory([]);
       return;
     }
+    if (!foldersReady) return;
     let cancelled = false;
     setActivityHistoryLoading(true);
     fetch(`/api/students/${encodeURIComponent(student.id)}/activity-registrations?cached=1`)
@@ -1546,7 +1609,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (!cancelled) setActivityHistoryLoading(false);
       });
     return () => { cancelled = true; };
-  }, [parentOnly, student.id]);
+  }, [parentOnly, student.id, foldersReady]);
 
   // Marking a day here writes the same row the activity's attendance list does.
   const markActivityDay = async (row, date, status) => {
@@ -1680,16 +1743,16 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   }, [parentOnly, student.id]);
 
   useEffect(() => {
-    refreshCoupons();
     setShowIssueCoupon(false);
     setCouponError('');
+    if (foldersReady) refreshCoupons();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentOnly, student.id, parent?.id]);
+  }, [parentOnly, student.id, parent?.id, foldersReady]);
 
   useEffect(() => {
-    refreshSales();
+    if (foldersReady) refreshSales();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentOnly, student.id, parent?.id]);
+  }, [parentOnly, student.id, parent?.id, foldersReady]);
 
   // הניקוב הוא אישור הצוות בדלפק שהמתאמן יכול לטפס, ולכן הוא סגור למי
   // שאין לו הצהרת בריאות והסרת אחריות בתוקף או מבחן אבטחה בתוקף. השרת
@@ -1763,20 +1826,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   };
 
   // Fetch student level tests history. Loaded for everyone, not only billing
-  // users: the punch button reads the safety test from here.
+  // users: the punch button reads the safety test from here. Narrowed by the
+  // server — the whole club's tests used to cross the wire on every switch
+  // between siblings so the card could keep three rows of them.
   useEffect(() => {
-    fetch('/api/level-tests')
+    if (!student?.id) return undefined;
+    let cancelled = false;
+    setLevelTestsHistory([]);
+    fetch(`/api/level-tests?studentId=${encodeURIComponent(student.id)}`)
       .then(res => res.ok ? res.json() : [])
       .then(data => {
-        const studentTests = (Array.isArray(data) ? data : []).filter(t => t.studentId === student.id);
-        setLevelTestsHistory(studentTests);
+        if (!cancelled) setLevelTestsHistory(Array.isArray(data) ? data : []);
       })
       .catch(err => console.error(err));
+    return () => { cancelled = true; };
   }, [student.id]);
 
   // Fetch employees for examiner picker (security / lead tests)
   useEffect(() => {
-    if (!canManageBilling) return;
+    if (!canManageBilling || !deferredOnce || employees.length) return;
     fetch('/api/employees')
       .then(res => res.ok ? res.json() : [])
       .then(data => {
@@ -1785,10 +1853,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (list.length > 0) setTestExaminerId(prev => prev || list[0].id);
       })
       .catch(err => console.error(err));
-  }, [canManageBilling]);
+  }, [canManageBilling, deferredOnce, employees.length]);
 
   useEffect(() => {
-    if (!parent?.id) return;
+    if (!parent?.id || !deferredOnce) return;
     setEditingBroadcastLists(false);
     setLoadingLists(true);
     Promise.all([
@@ -1801,7 +1869,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       })
       .catch((err) => console.error(err))
       .finally(() => setLoadingLists(false));
-  }, [parent?.id]);
+  }, [parent?.id, deferredOnce]);
 
   const handleListToggle = async (listKey) => {
     if (!parent?.id) return;
@@ -2677,7 +2745,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  const participationValidity = participationScopeValidity(participationWaivers);
+  const participationValidity = participationScopeValidity(studentWaivers);
   const summaryIconSize = 23;
   const summaryIconBoxSize = 25;
   const summaryIconStrokeWidth = 1.9;
@@ -2685,6 +2753,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     {
       key: 'health',
       label: 'בריאות',
+      // Answered from the declaration feed the screen already holds, so this
+      // one is right from the first frame — no waiting, on any sibling.
       valid: isHealthSigned && !healthExpired,
       Icon: HeartPulse,
     },
@@ -2694,6 +2764,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         key: scope,
         label: kind.label,
         valid: participationValidity[scope],
+        // Until this climber's own approvals land, the mark says nothing
+        // rather than saying "missing" — a red icon that turns green a moment
+        // later reads as a real problem, and the desk acted on it.
+        pending: !waiversLoaded,
         Icon: kind.Icon,
       };
     }),
@@ -2704,8 +2778,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       style={{ display: 'inline-flex', alignItems: 'center', gap: 7, direction: 'rtl' }}
     >
       {documentStatusItems.map((item) => {
-        const color = item.valid ? '#34D399' : '#F87171';
-        const title = `${item.label}: ${item.valid ? 'בתוקף' : 'חסר או לא בתוקף'}`;
+        const color = item.pending ? 'var(--text-3)' : (item.valid ? '#34D399' : '#F87171');
+        const title = item.pending
+          ? `${item.label}: נטען…`
+          : `${item.label}: ${item.valid ? 'בתוקף' : 'חסר או לא בתוקף'}`;
         const documentFilter = item.key === 'health' ? 'health' : `participation:${item.key}`;
         return (
           <button
@@ -2736,6 +2812,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       })}
     </span>
   );
+  // אייקון הציוד בשורת הסיכום. אותם שלושה צבעים שהמדריך רואה בגיליון
+  // הנוכחות, כדי שאותו מצב ייראה אותו דבר בשני המסכים. „מהבית” ו„נמסר”
+  // שניהם ירוקים — מבחינת המשרד שניהם סגורים.
+  const equipmentHeadTone = showEquipment ? equipmentOverallTone(equipmentItems) : null;
+  const equipmentHeadLabel = equipmentHeadTone === 'blocked'
+    ? 'ממתין לתשלום'
+    : equipmentHeadTone === 'give'
+      ? 'שולם — ממתין למסירה'
+      : 'הושלם';
   const climbingLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
   const climbingLevelTint = climbingLevel?.startsWith('5')
     ? '#3B82F6'
@@ -2829,9 +2914,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       : salesPending > 0
         ? `${salesCountLabel} · ${salesPending} ממתין לתשלום`
         : salesCountLabel;
-  const equipmentUnpaid = equipmentItems.filter((i) => i.payment_status !== 'paid').length;
+  // דרך equipmentItemTone ולא דרך payment_status ישירות: „מהבית” ו„לא
+  // מעוניינים” אינם 'paid', ובלי זה הם נספרו כחוב ופריט מסודר הוצג
+  // כ„ממתין לתשלום”.
+  const equipmentUnpaid = equipmentItems.filter(
+    (i) => equipmentItemTone(i) === 'unpaid'
+  ).length;
   const equipmentAwaiting = equipmentItems.filter(
-    (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
+    (i) => equipmentItemTone(i) === 'awaiting'
   ).length;
   const equipmentSummary = !showEquipment
     ? ''
@@ -2857,7 +2947,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     ? 'אין תשלומים'
     : `${studentPayments.length} רשומות`;
   // Same client for every row here, so the first one that carries a link wins.
-  const icountClientLink = studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url || '';
+  // הקישור הגיע עד היום רק דרך שורת תשלום, ולכן לא הופיע ללקוח שעוד לא שילם
+  // דרך המערכת. מזהה התיק שמור על הלקוח עצמו, וזה מקור אמין יותר.
+  const icountClientLink =
+    studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url
+    || icountClientUrl(parent?.icount_client_id)
+    || '';
   const sortedLevelTests = useMemo(
     () =>
       [...levelTestsHistory].sort((a, b) =>
@@ -3656,6 +3751,30 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
                       >
                         {documentsSummary}
+                        {equipmentHeadTone && (
+                          <button
+                            type="button"
+                            onClick={() => openFolderView('equipment')}
+                            title={`ציוד: ${equipmentHeadLabel}`}
+                            aria-label={`ציוד: ${equipmentHeadLabel}`}
+                            aria-pressed={openFolder === 'equipment'}
+                            style={{
+                              width: summaryIconBoxSize,
+                              height: summaryIconBoxSize,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: EQUIPMENT_SHEET_TONE[equipmentHeadTone].color,
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Package size={summaryIconSize} strokeWidth={summaryIconStrokeWidth} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => openFolderView('tests', { testFilter: 'security' })}
@@ -4318,7 +4437,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 ];
                 const participationRows = [
                   ...physicalParticipationDocs.map((doc) => {
-                    const waiver = participationWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null;
+                    const waiver = studentWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null;
                     return {
                       category: 'participation',
                       scope: participationDocumentScope(doc, waiver),
@@ -4327,7 +4446,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       waiver,
                     };
                   }),
-                  ...participationWaivers
+                  ...studentWaivers
                     .filter((waiver) => !participationDocsByWaiverId.has(String(waiver.id)))
                     .map((waiver) => ({
                       category: 'participation',
@@ -4404,7 +4523,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     setDownloadingPdf(busyKey);
                     setHealthSendMsg('');
                     try {
-                      await downloadHealthDeclarationPdf(source);
+                      await downloadHealthDeclarationPdf(await withDeclarationSignature(source));
                       setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                     } catch (err) {
                       console.error(err);
@@ -4504,7 +4623,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.error || 'delete failed');
                     if (waiverId) {
-                      setParticipationWaivers((prev) => prev.filter((row) => String(row.id) !== String(waiverId)));
+                      setParticipationWaivers((prev) => ({
+                        ...prev,
+                        rows: prev.rows.filter((row) => String(row.id) !== String(waiverId)),
+                      }));
                     }
                     const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
                     setClientDocuments(docsRes.ok ? await docsRes.json() : []);
@@ -4677,7 +4799,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                 setDownloadingPdf('virtual-health');
                                 setHealthSendMsg('');
                                 try {
-                                  await downloadHealthDeclarationPdf(healthDecl);
+                                  await downloadHealthDeclarationPdf(await withDeclarationSignature(healthDecl));
                                   setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                                 } catch (err) {
                                   console.error(err);
@@ -5436,8 +5558,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       })
                       .join(' · ');
                     // אין חשבונית ואין תשלום — אין מה לזכות, רק לבטל.
+                    // רכישת ציוד אינה מכירה בקופה: הביטול שלה הוא בתיק הציוד,
+                    // ולכן אין כאן כפתור שינסה לבטל שורה שלא קיימת.
                     const cancellable =
                       canManageBilling &&
+                      sale.source !== 'equipment_payment' &&
                       sale.status !== 'paid' &&
                       sale.status !== 'refunded' &&
                       sale.status !== 'cancelled' &&
@@ -7145,11 +7270,13 @@ export default function Leads({
   const [filters, setFilters] = useState(EMPTY_LEAD_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   // The whole declaration feed, so the table can mark each climber without
-  // opening their file. One fetch for the list, not one per row.
+  // opening their file. One fetch for the list, not one per row — and without
+  // the signature images, which nothing on this screen draws and which are 30
+  // times the weight of everything the marks actually read.
   const [declarations, setDeclarations] = useState([]);
 
   useEffect(() => {
-    fetch('/api/health-declarations')
+    fetch('/api/health-declarations?summary=1')
       .then(res => res.ok ? res.text() : '[]')
       .then(text => {
         const list = JSON.parse(text);
@@ -7232,7 +7359,7 @@ export default function Leads({
       const [studentsResponse, parentsResponse, declarationsResponse] = await Promise.all([
         fetch('/api/students'),
         fetch('/api/parents'),
-        fetch('/api/health-declarations'),
+        fetch('/api/health-declarations?summary=1'),
       ]);
       if (!studentsResponse.ok || !parentsResponse.ok) return;
       // Compared as text: byte-exact, and cheaper than re-serialising the state.

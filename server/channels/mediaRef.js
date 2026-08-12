@@ -1,20 +1,28 @@
-// One string format for "where the bytes of this message live".
+// One string format for where a message's bytes live.
 //
-// The `messages` table cannot grow columns from here (no migration access), and
 // `media_url` was already carrying three different things: a bare Meta media id
 // from sendImageMessage, a public https link from sendDocumentMessage, and null.
-// Rather than add a fourth unwritten convention, everything is encoded here:
+// Rather than add a fourth unwritten convention, the file pointer is encoded
+// here, and nothing else:
 //
 //   wa-media:<metaMediaId>?mime=image%2Fjpeg&name=IMG_1234.jpg
 //   storage:wa-media/2026/08/wh123.pdf?mime=application%2Fpdf&name=חשבונית.pdf
 //   https://…                       public link — left exactly as it was
 //   1234567890                      legacy bare Meta id, read as wa-media:
 //
+// What a message *points at* — the bubble it quotes, or the one it reacts to —
+// lives in the `meta` jsonb column instead. For a few hours before that column
+// existed it rode here too, under a `ctx:` scheme and as extra query keys; those
+// rows are still read (see messageContext), and no new ones are written.
+//
 // `media_type` keeps holding the WhatsApp type word ('image' / 'document' / …)
 // and is never overloaded with a mime type.
 
 const META_SCHEME = 'wa-media:';
 const STORAGE_SCHEME = 'storage:';
+// A message that only points at another message: a reaction, or a text reply
+// that quotes something. No file, so no id — just the query string.
+const CONTEXT_SCHEME = 'ctx:';
 
 /** Meta ids are long digit strings. Anything else is not a legacy bare id. */
 const BARE_META_ID = /^\d{6,}$/;
@@ -67,8 +75,12 @@ export function mediaKindForMime(mimeType) {
 
 /**
  * Build the stored `media_url` string. Returns null when there is nothing to
- * point at — including when the caller passes null outright, which is the
- * ordinary case: every text message has no media reference at all.
+ * record — including when the caller passes null outright, which is the
+ * ordinary case: most messages have neither a file nor a message they point at.
+ *
+ * `replyTo` and `reactionTo` are wamids of another bubble. They ride alongside
+ * a file when there is one (a quoted photo has both), and on their own under
+ * the `ctx:` scheme when there is not (a reaction, or a quoted text reply).
  */
 export function encodeMediaRef(ref) {
   const { kind, id, mime, filename } = ref || {};
@@ -86,9 +98,36 @@ export function encodeMediaRef(ref) {
   return params.length ? `${base}?${params.join('&')}` : base;
 }
 
+/** The `meta` column value for a webhook reference, or null when it points nowhere. */
+export function metaFromMediaRef(ref) {
+  const meta = {};
+  if (ref?.replyTo) meta.reply_to = String(ref.replyTo);
+  if (ref?.reactionTo) meta.reaction_to = String(ref.reactionTo);
+  return Object.keys(meta).length ? meta : null;
+}
+
+/**
+ * What a message points at, from wherever it was stored.
+ *
+ * The `meta` column is the home for this now. Rows written in the hours before
+ * it existed carry the same two values as query keys on media_url, so both are
+ * read and the column wins.
+ */
+export function messageContext(row = {}) {
+  const legacy = parseMediaRef(row.media_url) || {};
+  return {
+    replyTo: row.meta?.reply_to || legacy.replyTo || '',
+    reactionTo: row.meta?.reaction_to || legacy.reactionTo || '',
+  };
+}
+
+/** Everything a stored reference can say, with nothing missing. */
+const EMPTY_REF = { kind: '', id: '', mime: '', filename: '', replyTo: '', reactionTo: '' };
+
 /**
  * Read a stored `media_url` back.
- * Returns { kind, id, mime, filename } — or null when the row points nowhere.
+ * Returns { kind, id, mime, filename, replyTo, reactionTo } — or null when the
+ * row records nothing at all.
  * Never throws: this runs on every message the panel renders.
  */
 export function parseMediaRef(mediaUrl) {
@@ -102,9 +141,9 @@ export function parseMediaRef(mediaUrl) {
     if (/^https?:\/\//i.test(raw)) {
       const path = raw.split('?')[0];
       return {
+        ...EMPTY_REF,
         kind: 'link',
         id: raw,
-        mime: '',
         filename: decodeURIComponent(path.slice(path.lastIndexOf('/') + 1) || ''),
       };
     }
@@ -112,19 +151,28 @@ export function parseMediaRef(mediaUrl) {
     const queryAt = raw.indexOf('?');
     const head = queryAt === -1 ? raw : raw.slice(0, queryAt);
     const params = new URLSearchParams(queryAt === -1 ? '' : raw.slice(queryAt + 1));
-    const mime = params.get('mime') || '';
-    const filename = params.get('name') || '';
+    const common = {
+      mime: params.get('mime') || '',
+      filename: params.get('name') || '',
+      replyTo: params.get('reply_to') || '',
+      reactionTo: params.get('reaction_to') || '',
+    };
 
+    if (head === CONTEXT_SCHEME) {
+      // Nothing but a pointer at another bubble. Worth nothing if it points nowhere.
+      if (!common.replyTo && !common.reactionTo) return null;
+      return { ...EMPTY_REF, ...common, kind: 'context' };
+    }
     if (head.startsWith(STORAGE_SCHEME)) {
       const id = head.slice(STORAGE_SCHEME.length);
-      return id ? { kind: 'storage', id, mime, filename } : null;
+      return id ? { ...EMPTY_REF, ...common, kind: 'storage', id } : null;
     }
     if (head.startsWith(META_SCHEME)) {
       const id = head.slice(META_SCHEME.length);
-      return id ? { kind: 'meta', id, mime, filename } : null;
+      return id ? { ...EMPTY_REF, ...common, kind: 'meta', id } : null;
     }
     // Legacy rows from sendImageMessage stored the bare Meta media id.
-    if (BARE_META_ID.test(head)) return { kind: 'meta', id: head, mime, filename };
+    if (BARE_META_ID.test(head)) return { ...EMPTY_REF, ...common, kind: 'meta', id: head };
     return null;
   } catch (_) {
     return null;

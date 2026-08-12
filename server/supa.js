@@ -329,6 +329,12 @@ export const mappers = {
       created_at: r.created_at || null,
       healthSignedAt: r.health_signed_at || null,
       waiverSignedAt: r.waiver_signed_at || null,
+      // A placement holds its seat for a few days — see placementHold.js.
+      // Without these on the row the hold would be forgotten on every restart
+      // and the seat would quietly open again.
+      placement_hold_until: r.placement_hold_until || null,
+      placement_hold_firm: r.placement_hold_firm === true,
+      placement_reported_at: r.placement_reported_at || null,
     }),
     toRow: (o) => ({
       id: o.id,
@@ -352,6 +358,9 @@ export const mappers = {
       created_at: emptyToNull(o.created_at),
       health_signed_at: emptyToNull(o.healthSignedAt),
       waiver_signed_at: emptyToNull(o.waiverSignedAt),
+      placement_hold_until: emptyToNull(o.placement_hold_until),
+      placement_hold_firm: o.placement_hold_firm === true,
+      placement_reported_at: emptyToNull(o.placement_reported_at),
     }),
   },
 
@@ -689,6 +698,9 @@ mappers.messages = columnMapper([
   'id', 'parent_id', 'student_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
   'template_name', 'status', 'source', 'is_ai', 'meta_message_id', 'phone', 'recipient_id',
   'edited_at', 'deleted_at',
+  // מה שההודעה מצביעה עליו — ציטוט וריאקציה. jsonb, כדי שהשדה הבא לא ידרוש
+  // מיגרציה נוספת. אל תבלבל עם meta_message_id, שהוא המזהה של ההודעה ב-Meta.
+  'meta',
   'created_at', 'updated_at',
 ]);
 mappers.message_templates = columnMapper([

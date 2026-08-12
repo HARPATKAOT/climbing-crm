@@ -68,6 +68,12 @@ export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, i
  * שורה ששולמה ונוקתה כבר אינה כאן; שורה ששולמה ולא נוקתה נשארת דווקא כן —
  * היא ההודעה למדריך שהכסף נכנס.
  */
+/** האם המכירה כוללת פריט שמקנה כניסה לקיר. */
+export function saleGrantsEntry(sale) {
+  return (Array.isArray(sale?.items) ? sale.items : [])
+    .some((line) => line?.grants_wall_climbing === true);
+}
+
 export function paymentRows({ sales = [], today, dateOf, studentOf }) {
   return (Array.isArray(sales) ? sales : [])
     .filter((sale) => {
@@ -94,6 +100,9 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
       paid: sale.status === 'paid',
       paid_at: sale.status === 'paid' ? (sale.updated_at || null) : null,
       total: Number(sale.total) || 0,
+      // „אפשר להכניס” נאמר רק על מכירה שקונה כניסה. זוג נעליים ששולם אינו
+      // אישור כניסה, והכיתוב הזה על שורה של נעליים שולח מטפס לקיר בלי שקנה.
+      grants_entry: saleGrantsEntry(sale),
       items: (Array.isArray(sale.items) ? sale.items : [])
         .map((line) => line?.name)
         .filter(Boolean)
@@ -117,6 +126,61 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
  * מי נמצא עכשיו על הקיר, וזה מידע אחר לגמרי מרשימת המשימות — ולכן שתי
  * לשוניות ולא טבלה אחת עם דגלים.
  */
+/**
+ * כל המכירות של היום — הלשונית „מכירות במשמרת”.
+ *
+ * מכירה במזומן או בסליקה במסופון אינה ממתינה לכלום: העובד שגבה אותה ראה את
+ * הכסף. היא לא צריכה לעבור דרך רשימת המשימות, אבל היא כן צריכה להיות איפשהו
+ * — אחרת אין בדלפק שום תמונה של מה נמכר במשמרת.
+ *
+ * מכירה שעדיין ממתינה לטיפול אינה כאן: אדם אחד, מקום אחד. קישור תשלום פתוח
+ * שמופיע גם ברשימת המשימות וגם במכירות נראה כמו שתי עסקאות.
+ *
+ * @param openSaleIds מזהי מכירות שנמצאות עכשיו ברשימת הממתינים
+ */
+export function shiftSales({
+  sales = [], today, dateOf, studentOf, parentOf, openSaleIds = new Set(), dismissedIds = [],
+}) {
+  // שורה שהוסרה ביד לא חוזרת דרך הדלת האחורית: קישור שנשלח בסכום שגוי נמחק
+  // מהרשימה, ואם הוא היה מופיע כאן ההסרה הייתה חסרת ערך.
+  const dismissed = new Set(dismissedIds || []);
+  return (Array.isArray(sales) ? sales : [])
+    .filter((sale) => {
+      const at = sale?.created_at || sale?.updated_at;
+      if (!at || dateOf(at) !== today || sale?.status === 'cancelled') return false;
+      if (dismissed.has(`payment:${sale.id}`)) return false;
+      return !openSaleIds.has(String(sale.id));
+    })
+    .map((sale) => {
+      const student = sale.student_id && studentOf ? studentOf(sale.student_id) : null;
+      const parent = sale.parent_id && parentOf ? parentOf(sale.parent_id) : null;
+      return {
+        id: `sale:${sale.id}`,
+        sale_id: sale.id,
+        student_id: sale.student_id || null,
+        name: student?.name || sale.customer_name || 'לקוח',
+        payer_name: sale.customer_name || '',
+        at: sale.created_at || sale.updated_at,
+        method: sale.payment_method || '',
+        paid: sale.status === 'paid',
+        total: Number(sale.total) || 0,
+        grants_entry: saleGrantsEntry(sale),
+        seller_name: sale.employee_name || sale.seller_name || '',
+        status: sale.status || '',
+        parent_id: sale.parent_id || null,
+        doc_number: sale.icount_doc_number || null,
+        // תיק הלקוח ב-iCount — קיים רק למי שכבר הופקה לו שם חשבונית.
+        icount_client_id: parent?.icount_client_id || null,
+        refunded: sale.status === 'refunded' || !!sale.refund_doc_number,
+        items: (Array.isArray(sale.items) ? sale.items : [])
+          .map((line) => line?.name)
+          .filter(Boolean)
+          .join(', '),
+      };
+    })
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
 export function buildCounterQueues(parts) {
   const pending = buildPendingQueue(parts);
   const pendingStudents = new Set(pending.map((row) => row.student_id).filter(Boolean));
@@ -126,7 +190,8 @@ export function buildCounterQueues(parts) {
       && !pendingStudents.has(row.student_id)
       && !dismissed.has(row.id))
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
-  return { pending, active };
+  const openSaleIds = new Set(pending.map((row) => row.sale_id).filter(Boolean).map(String));
+  return { pending, active, sales: shiftSales({ ...parts, openSaleIds }) };
 }
 
 export function buildPendingQueue(parts) {
