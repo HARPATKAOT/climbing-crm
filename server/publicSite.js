@@ -10,6 +10,7 @@
 import { israelDateStr } from './attendanceUtils.js';
 import { activeRegistrations, registrationIsOpen, remainingCapacity } from './activityRegistration.js';
 import { spotsLeft } from './groupCapacity.js';
+import { getGroupDays } from './attendanceUtils.js';
 
 /** Slug the public registration page is served under. */
 export function activityPublicSlug(activity) {
@@ -123,6 +124,9 @@ export function publicGroups(db) {
         id: group.id,
         name: group.name || '',
         day: Number(group.day),
+        // A group can meet twice a week ("— ב׳+ה׳"); the site must show it on
+        // every one of its days, not only the one stored in `day`.
+        days: getGroupDays(group),
         time: group.time || '',
         duration: Number(group.duration) || null,
         age_category: group.ageCategory || '',

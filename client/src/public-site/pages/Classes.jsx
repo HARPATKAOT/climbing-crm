@@ -1,5 +1,6 @@
 import React from 'react';
 import { useGroups, weekdayName, WHATSAPP_URL } from '../publicData.js';
+import Testimonials from '../components/Testimonials.jsx';
 
 /* Mirrors the CRM's weekly board (client/src/components/Schedule.jsx): hours
    down the side, days across, each class placed by its real start time, and
@@ -29,11 +30,19 @@ function ageColor(category) {
   return band ? band.color : 'var(--ks-grey)';
 }
 
-/** The stored name repeats the day and time shown by the grid itself. */
+/** Days the group actually meets — a group may run twice a week. */
+function groupDays(group) {
+  const days = Array.isArray(group.days) && group.days.length ? group.days : [group.day];
+  return days.map(Number).filter((d) => Number.isInteger(d));
+}
+
+/** The stored name repeats the day and time the grid already shows. */
 function cleanName(group) {
   let name = String(group.name || '').trim();
   name = name.replace(/\s*[—–-]\s*יום\s*[א-ו]['׳]?\s*\d{1,2}:\d{2}.*$/u, '');
   name = name.replace(/\s+יום\s*[א-ו]['׳]?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s*[—–-]\s*[א-ו]['׳]?\s*\+\s*[א-ו]['׳]?\s*/u, ' ');
+  name = name.replace(/\s*\d{1,2}:\d{2}\s*$/u, '');
   name = name.replace(/\s+/g, ' ').trim();
   return name || (group.age_category ? `כיתות ${group.age_category}` : 'חוג טיפוס');
 }
@@ -64,7 +73,7 @@ function WeekBoard({ groups }) {
         <div className="ks-board-head">
           <div className="ks-board-hourcol">שעה</div>
           {DAYS.map((day) => {
-            const count = groups.filter((g) => Number(g.day) === day).length;
+            const count = groups.filter((g) => groupDays(g).includes(day)).length;
             return (
               <div className="ks-board-day" key={day}>
                 {weekdayName(day)}
@@ -89,7 +98,7 @@ function WeekBoard({ groups }) {
                 <span key={h} className="ks-board-line" style={{ top: i * 60 * PX_PER_MIN }} />
               ))}
               {groups
-                .filter((g) => Number(g.day) === day)
+                .filter((g) => groupDays(g).includes(day))
                 .map((group) => {
                   const top = minutesFromStart(group.time);
                   if (top == null) return null;
@@ -97,7 +106,7 @@ function WeekBoard({ groups }) {
                   return (
                     <div
                       className="ks-chip"
-                      key={group.id}
+                      key={`${group.id}-${day}`}
                       style={{
                         top: top * PX_PER_MIN,
                         height: Math.max((group.duration || 50) * PX_PER_MIN, 38),
@@ -119,10 +128,10 @@ function WeekBoard({ groups }) {
 }
 
 function DayList({ groups }) {
-  const byDay = groups.reduce((acc, g) => {
-    (acc[g.day] ||= []).push(g);
-    return acc;
-  }, {});
+  const byDay = {};
+  for (const g of groups) {
+    for (const d of groupDays(g)) (byDay[d] ||= []).push(g);
+  }
   return (
     <div className="ks-daylist">
       {Object.keys(byDay).sort((a, b) => a - b).map((day) => (
@@ -133,7 +142,7 @@ function DayList({ groups }) {
             return (
               <div
                 className="ks-daylist-row"
-                key={group.id}
+                key={`${group.id}-${day}`}
                 style={{ borderInlineStartColor: color }}
               >
                 <strong style={{ color }}>{group.time}</strong>
@@ -184,6 +193,13 @@ export default function Classes() {
             </div>
           </>
         )}
+      </div>
+
+      <div className="ks-wrap" style={{ marginTop: 64 }}>
+        <div className="ks-sectionhead">
+          <h2>מה הורים מספרים</h2>
+        </div>
+        <Testimonials />
       </div>
     </section>
   );
