@@ -466,6 +466,8 @@ mappers.activities = columnMapper([
   // Opt-in publishing to the marketing site — separate from having a
   // registration link, so private events are never advertised.
   'show_on_site',
+  // רעיון: אוסף מתעניינים בלי תאריך. ראו activityIdeas.js.
+  'collect_interest',
   'collect_registration_payment', 'registration_page_title', 'registration_page_body',
   'audience', 'included', 'what_to_bring', 'important_info',
   'cancellation_policy_id', 'cancellation_policy_disabled',

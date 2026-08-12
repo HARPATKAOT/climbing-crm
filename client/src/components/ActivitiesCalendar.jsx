@@ -3,7 +3,7 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
+  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw, Lightbulb,
   StickyNote, ClipboardList, UserPlus, CalendarClock, FileStack,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
@@ -418,6 +418,7 @@ function emptyForm(dateStr = '', opts = {}) {
     host_parent_id: null,
     payment_status: 'unpaid',
     registration_enabled: false,
+    collect_interest: false,
     collect_registration_payment: false,
     registration_mode: 'paid_per_participant',
     // המחיר שנרשם על אירוע הוא מה שהלקוח משלם בפועל, ולכן הוא כולל מע״מ.
@@ -1712,7 +1713,9 @@ function RegularActivityModal({
                       type="date"
                       value={form.date || ''}
                       onChange={(event) => set('date', event.target.value)}
-                      required
+                      // רעיון הוא בדיוק פעילות שעדיין אין לה תאריך; ברגע
+                      // שימולא כאן תאריך, כל מי שברשימה יקבל הודעה.
+                      required={!form.collect_interest}
                       disabled={readOnly}
                     />
                   </label>
@@ -2096,24 +2099,29 @@ function RegularActivityModal({
  * and the second one nowhere on the screen, and the bot never offered them.
  */
 function registrationVisibility(form = {}) {
+  // רעיון קודם לשאר: הוא מצב שבו עוד אין מה לפרסם ואין למה להירשם.
+  if (form.collect_interest && !form.date) return 'idea';
   if (!form.registration_enabled) return 'closed';
   return form.show_on_site ? 'public' : 'link';
 }
 
 function visibilityFields(value) {
-  if (value === 'public') return { registration_enabled: true, show_on_site: true };
-  if (value === 'link') return { registration_enabled: true, show_on_site: false };
-  return { registration_enabled: false, show_on_site: false };
+  if (value === 'idea') return { registration_enabled: false, show_on_site: false, collect_interest: true };
+  if (value === 'public') return { registration_enabled: true, show_on_site: true, collect_interest: false };
+  if (value === 'link') return { registration_enabled: true, show_on_site: false, collect_interest: false };
+  return { registration_enabled: false, show_on_site: false, collect_interest: false };
 }
 
 /** Grey is off, blue is a link you hand out, green is out in the world. */
 const VISIBILITY_CHOICES = [
+  { value: 'idea', label: 'רעיון', icon: Lightbulb, accent: '#FBBF24' },
   { value: 'closed', label: 'סגור', icon: Lock, accent: 'var(--text-3)' },
   { value: 'link', label: 'קישור פרטי', icon: Link2, accent: '#A78BFA' },
   { value: 'public', label: 'מפורסם', icon: Globe, accent: '#34D399' },
 ];
 
 const VISIBILITY_HINTS = {
+  idea: 'עדיין אין תאריך. הפעילות לא מפורסמת ואי אפשר להירשם אליה, אבל הבוט מספר עליה למי ששואל על טיולים ואוסף מתעניינים — וברגע שתמלא תאריך, כולם יקבלו הודעה.',
   closed: 'ההרשמה נעשית על ידי הצוות בלבד.',
   link: 'הקישור עובד ומי שקיבל אותו יכול להירשם, אבל הפעילות לא מפורסמת והבוט לא מזכיר אותה. כך נשאר אירוע פרטי.',
   public: 'הפעילות מופיעה באתר, והבוט מציע אותה ללקוחות ששואלים על טיולים ואירועים.',
@@ -2217,7 +2225,8 @@ function ActivityFormModal({
       setLocalError(isTemplateEdit ? 'חסר שם לתבנית' : 'חסרה כותרת לאירוע');
       return;
     }
-    if (!isTemplateEdit && !form.date) {
+    // רעיון נשמר בלי תאריך — זו כל מהותו.
+    if (!isTemplateEdit && !form.date && !form.collect_interest) {
       setLocalError('חסר תאריך');
       return;
     }

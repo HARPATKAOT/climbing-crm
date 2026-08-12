@@ -124,6 +124,29 @@ test('הכול נסגר בינתיים — אין הודעה בכלל', () => {
   );
 });
 
+test('מעקב על טופס שלא מולא — ונופל מעצמו ברגע שהוא נחתם', async () => {
+  const { formStillMissing, replyOffersForm, formFollowUpLine } = await import('./formFollowUp.js');
+
+  // אורטל: קיבלה קישור לטופס ולא מילאה, ואיש לא חזר אליה.
+  assert.equal(replyOffersForm('טופס השתתפות: https://app.kirboaz.co.il/api/fp/972500000000'), true);
+  assert.equal(replyOffersForm('https://app.kirboaz.co.il/api/f/st-1/health-renewal'), true);
+  assert.equal(replyOffersForm('הקבוצה מתאמנת ביום ג׳'), false);
+
+  // כרטיס בלי מתאמנים הוא בדיוק המקרה — הטופס הוא שפותח את הכרטיס.
+  assert.equal(formStillMissing([], () => ({ eligible: true })), true);
+  assert.equal(formStillMissing([{ id: 'a' }], () => ({ eligible: false })), true);
+  assert.equal(formStillMissing([{ id: 'a' }], () => ({ eligible: true })), false);
+
+  const msg = followUpMessage({ reason: 'form_not_filled' }, {
+    firstName: 'אורטל',
+    formLine: formFollowUpLine({ link: LINK }),
+  });
+  assert.match(msg, /היי אורטל/);
+  assert.ok(msg.includes(LINK));
+  // מולא בינתיים — אין שורה, ולכן אין הודעה.
+  assert.equal(followUpMessage({ reason: 'form_not_filled' }, { firstName: 'אורטל', formLine: '' }), '');
+});
+
 test('מעקב ציוד בלבד אינו שואל על ההרשמה', () => {
   const msg = followUpMessage({ reason: 'equipment_unpaid', subject: 'אלה' }, {
     firstName: 'יובל',
