@@ -208,8 +208,14 @@ function MiniBlock({ group, top, height, checked, disabled, onToggle, scale = 0.
  * both ways to find a class — a window of its own means the whole week is on
  * screen at once.
  */
-export function GroupPickerField({ groups = [], selectedIds = [], onToggle, disabled = false }) {
-  const [open, setOpen] = useState(false);
+export function GroupPickerField({
+  groups = [],
+  selectedIds = [],
+  onToggle,
+  disabled = false,
+  initiallyOpen = false,
+}) {
+  const [open, setOpen] = useState(initiallyOpen);
   const chosen = groups.filter((g) => selectedIds.map(String).includes(String(g.id)));
 
   return (

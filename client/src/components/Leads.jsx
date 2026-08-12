@@ -5102,6 +5102,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       groups={groups}
                       selectedIds={editGroupIds}
                       disabled={savingGroup}
+                      initiallyOpen
                       onToggle={(id) => {
                         setEditGroupIds((prev) => (
                           prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
