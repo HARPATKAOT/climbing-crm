@@ -27,6 +27,7 @@ import {
   releaseFollowUpSend,
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
+import { abandonedClaims, markClaimReported } from './botReplyClaims.js';
 import {
   equipmentOpenLine,
   familyEquipmentStanding,
@@ -590,6 +591,57 @@ export const automationsService = {
     const followup = await automationsService.runIntroFollowups();
     const stalled = await automationsService.runStalledSignupNotice();
     return { reminder, followup, stalled };
+  },
+
+  /**
+   * Turns that died before their answer went out.
+   *
+   * A reply is claimed before the model runs and closed after the send, so a
+   * worker that disappears in between — a deploy replacing the instance is
+   * enough — leaves a customer who was answered by nobody. It happened while a
+   * daughter was being placed: the placement saved, the message with the links
+   * never sent, and nothing anywhere said so.
+   *
+   * The turn is not re-run. Its tools already did their work, and guessing at
+   * the rest is worse than a person reading the thread. This turns the silence
+   * into a line on somebody's phone.
+   */
+  runAbandonedReplySweep: async ({ now = new Date() } = {}) => {
+    const stuck = abandonedClaims(db, { now });
+    if (!stuck.length) return { event: 'abandoned_replies', found: 0 };
+
+    const settings = db.getSettings ? db.getSettings() : {};
+    const rows = stuck.map((claim) => {
+      const parent = (db.get('parents') || []).find((p) => phonesMatch(p.phone, claim.phone));
+      return { claim, parent };
+    });
+    const lines = rows.slice(0, 10).map(({ claim, parent }) => (
+      `• ${parent?.name || '—'} · ${claim.phone || ''}`
+    ));
+    const body = [
+      '🔇 הבוט לא סיים תשובה — הלקוח לא קיבל כלום',
+      ...lines,
+      rows.length > lines.length ? `ועוד ${rows.length - lines.length}…` : '',
+      '← כדאי לפתוח את השיחה ולהמשיך ידנית.',
+    ].filter(Boolean).join('\n');
+
+    const { phones } = alertRecipients(db, 'handoff', settings);
+    let notified = 0;
+    for (const staffPhone of phones) {
+      try {
+        const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
+          source: 'staff_notify',
+          clip: false,
+        });
+        if (result?.success) notified += 1;
+      } catch (err) {
+        console.error('abandoned reply notice failed:', err.message);
+      }
+    }
+    for (const { claim } of rows) {
+      await markClaimReported(db, persistCore, claim.id, { now });
+    }
+    return { event: 'abandoned_replies', found: rows.length, notified };
   },
 
   /**

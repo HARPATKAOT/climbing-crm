@@ -77,6 +77,42 @@ export async function finishBotReplyClaim(db, persist, replyKey, {
   return updated;
 }
 
+/**
+ * Turns that were claimed and never finished.
+ *
+ * The stale window above lets a *later* attempt take the claim again — but
+ * nothing attempts it. The key belongs to one burst of inbound messages, so
+ * unless the customer writes again, the answer that died with the worker is
+ * simply never sent. That is what happened to a family whose daughter was
+ * placed mid-turn: the placement was saved, the message with the links was
+ * not, and nobody knew. A deploy is enough to cause it — the instance is
+ * replaced while a turn is in flight.
+ *
+ * Nothing here re-runs a model turn: the tools it already called did happen,
+ * and running them again on a guess is worse than a person picking it up.
+ * Marking them is what turns silence into a queue somebody can see.
+ */
+export function abandonedClaims(db, { now = new Date(), withinMs = 24 * 60 * 60 * 1000 } = {}) {
+  const nowMs = new Date(now).getTime();
+  return (db.get(BOT_REPLY_CLAIMS) || []).filter((row) => {
+    if (row?.status !== 'sending') return false;
+    if (row.staff_notified_at) return false;
+    const at = Date.parse(row.claimed_at || '');
+    if (!Number.isFinite(at)) return false;
+    return nowMs - at > CLAIM_STALE_MS && nowMs - at < withinMs;
+  });
+}
+
+/** Said once. A queue that repeats every scan is a queue nobody reads. */
+export async function markClaimReported(db, persist, replyKey, { now = new Date() } = {}) {
+  const updated = db.update(BOT_REPLY_CLAIMS, replyKey, {
+    status: 'abandoned',
+    staff_notified_at: new Date(now).toISOString(),
+  });
+  if (updated && typeof persist === 'function') await persist(BOT_REPLY_CLAIMS, updated);
+  return updated;
+}
+
 export async function releaseBotReplyClaim(db, replyKey) {
   if (!replyKey) return true;
   if (typeof db.deleteDurable === 'function') {

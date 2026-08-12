@@ -18904,6 +18904,10 @@ app.listen(PORT, () => {
   setInterval(() => {
     automationsService.runBotFollowUps().catch((err) =>
       console.error('bot follow-ups failed:', err.message));
+    // On the same beat: a turn that died before its answer went out leaves a
+    // customer answered by nobody, and nothing else would ever say so.
+    automationsService.runAbandonedReplySweep().catch((err) =>
+      console.error('abandoned reply sweep failed:', err.message));
   }, 15 * 60 * 1000);
 
   setTimeout(() => {
