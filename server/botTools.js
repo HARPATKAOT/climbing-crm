@@ -26,6 +26,7 @@ import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
+import { isOpenIdea, openActivityIdeas } from './activityIdeas.js';
 import {
   frequencyForRequest,
   groupsForFrequency,
@@ -337,7 +338,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     name: 'getEvents',
     description:
       'אירועים וטיולים שסומנו לפרסום: שם, תאריך, מקום, מחיר, מקומות פנויים '
-      + 'וקישור הרשמה. לכל אירוע מוחזר «מזהה» — יש להעביר אותו ל-addActivityInterest.',
+      + 'וקישור הרשמה. לכל אירוע מוחזר «מזהה» — יש להעביר אותו ל-addActivityInterest. '
+      + 'אחרי מסירת הפרטים תמיד שואלים אם לרשום לרשימת המתעניינים.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -1282,10 +1284,35 @@ export function buildCustomerTools({
         תיאור: String(event.description || '').slice(0, 300),
         קישור: eventPublicUrl(event.slug) || '',
       }));
-      if (!events.length) return { אירועים: [], הערה: 'אין אירועים פתוחים להרשמה' };
+      // רעיונות: פעילויות שעדיין אין להן תאריך ובכל זאת אוספות מתעניינים.
+      // בלעדיהן „אין אירועים פתוחים” היה סוף הדרך גם כשידענו שהטיול בדרך.
+      const ideas = openActivityIdeas(db).map((idea) => ({
+        מזהה: idea.id,
+        שם: idea.name,
+        תיאור: idea.description,
+        ...(idea.location ? { מיקום: idea.location } : {}),
+        מצב: 'עדיין אין תאריך',
+      }));
+      if (!events.length && !ideas.length) return { אירועים: [], הערה: 'אין אירועים פתוחים להרשמה' };
+      if (!events.length) {
+        return {
+          אירועים: [],
+          רעיונות: ideas,
+          הערה: 'אין כרגע אירוע עם תאריך, אבל יש פעילויות בדרך. יש לומר שעדיין אין '
+            + 'תאריך, ולשאול אם לרשום אותם לרשימת המתעניינים כדי שנעדכן ברגע שייקבע. '
+            + 'ברגע שאישרו — addActivityInterest עם ה«מזהה» של הרעיון.',
+        };
+      }
       return {
         אירועים: events,
-        הערה: 'אם הלקוח מתעניין באחד מהם — אפשר לרשום אותו כמתעניין עם addActivityInterest.',
+        ...(ideas.length ? { רעיונות: ideas } : {}),
+        // שאלה על טיול אינה בקשה להירשם, ולכן אין לרשום מיוזמתנו — אבל מי
+        // ששאל ולא נשאל בחזרה פשוט נעלם. לקוחה קיבלה את כל פרטי הטיול, איש
+        // לא הציע לה להישמר ברשימה, והעניין שלה לא נרשם בשום מקום.
+        הערה: 'אחרי מסירת הפרטים חובה לשאול בסוף התשובה אם לרשום אותם לרשימת '
+          + 'המתעניינים — משפט אחד, למשל «לרשום אתכם לרשימת המתעניינים?». '
+          + 'אין לרשום בלי שהלקוח אישר; ברגע שאישר יש לקרוא ל-addActivityInterest '
+          + 'עם ה«מזהה» של האירוע.',
       };
     },
 
@@ -1302,10 +1329,15 @@ export function buildCustomerTools({
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
 
       const published = upcomingPublicActivities(db).some((e) => e.slug === slug);
-      const activity = (db.get('activities') || []).find(
+      // רעיון מזוהה במזהה שלו ולא ב-slug: אין לו דף הרשמה, ובכל זאת אפשר
+      // להישמר ברשימה שלו — זו כל מהותו.
+      const idea = (db.get('activities') || []).find(
+        (a) => String(a.id) === slug && isOpenIdea(a)
+      );
+      const activity = idea || (db.get('activities') || []).find(
         (a) => activityPublicSlug(a) === slug
       );
-      if (!activity || !published) {
+      if (!activity || (!published && !idea)) {
         return { error: 'אין אירוע פתוח להרשמה עם המזהה הזה — יש לקרוא שוב ל-getEvents' };
       }
 
