@@ -26,7 +26,12 @@ import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
-import { groupsForFrequency, holdExpiryFrom, holdNoticeForCustomer } from './placementHold.js';
+import {
+  frequencyForRequest,
+  groupsForFrequency,
+  holdExpiryFrom,
+  holdNoticeForCustomer,
+} from './placementHold.js';
 import { enrollmentId } from './studentGroups.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
@@ -424,7 +429,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
       properties: {
         grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
-        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת. חובה להעביר כשהלקוח נקב ביום — יום שנאמר הוא גם התדירות, ובלעדיו יישאל שוב פעם או פעמיים בשבוע' },
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
@@ -477,7 +482,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         childName: { type: 'string', description: 'שם המתאמן/ת' },
         grade: { type: 'string', description: 'הכיתה הנוכחית' },
         band: { type: 'string', description: 'חטיבה / תיכון / בוגרים' },
-        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת. חובה להעביר כשהלקוח נקב ביום — יום שנאמר הוא גם התדירות, ובלעדיו יישאל שוב פעם או פעמיים בשבוע' },
         time: { type: 'string', description: 'שעת הקבוצה' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
@@ -496,7 +501,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
         grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
-        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת. חובה להעביר כשהלקוח נקב ביום — יום שנאמר הוא גם התדירות, ובלעדיו יישאל שוב פעם או פעמיים בשבוע' },
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
@@ -542,7 +547,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
         grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
         band: { type: 'string', description: 'שכבה שאינה כיתה' },
-        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת. חובה להעביר כשהלקוח נקב ביום — יום שנאמר הוא גם התדירות, ובלעדיו יישאל שוב פעם או פעמיים בשבוע' },
         time: { type: 'string', description: 'שעת הקבוצה' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
@@ -1568,7 +1573,9 @@ export function buildCustomerTools({
       }
       const group = groups[0];
       const frequencies = availableGroupFrequencies(group);
-      if (!frequency && frequencies.length > 1) {
+      // A named day has already answered "once or twice" — see frequencyForRequest.
+      const askedFrequency = frequencyForRequest({ frequency, day, frequencies });
+      if (!askedFrequency && frequencies.length > 1) {
         return {
           קישורים: [],
           קבוצה: describeGroup(group),
@@ -1576,7 +1583,7 @@ export function buildCustomerTools({
           הערה: 'לקבוצה יש יותר מתדירות אחת — יש לשאול פעם או פעמיים בשבוע לפני שליחת קישור',
         };
       }
-      const selectedFrequency = frequency || frequencies[0] || '';
+      const selectedFrequency = askedFrequency || frequencies[0] || '';
       const week = selectedFrequency === 'פעם בשבוע' && group.signupLinkWeek
         ? buildRedirectUrl('s', group.id, 1)
         : '';
@@ -2175,8 +2182,10 @@ export function buildCustomerTools({
       // Same rule as getSignupLink: the intake form is not a link to send back
       // to a family that has already filled it.
       const frequencies = picked.error ? [] : availableGroupFrequencies(picked.group);
-      const needsFrequency = !picked.error && !frequency && frequencies.length > 1;
-      const selectedFrequency = frequency || frequencies[0] || '';
+      // A named day has already answered "once or twice" — see frequencyForRequest.
+      const askedFrequency = frequencyForRequest({ frequency, day, frequencies });
+      const needsFrequency = !picked.error && !askedFrequency && frequencies.length > 1;
+      const selectedFrequency = askedFrequency || frequencies[0] || '';
       const groupLink = picked.error || needsFrequency
         ? ''
         : (selectedFrequency === 'פעמיים בשבוע'
