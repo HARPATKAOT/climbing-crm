@@ -784,6 +784,39 @@ async function scheduleSignupCheck({ parent, phone, student, settings }) {
  * carries the equipment line too, and two reminders the next morning read as
  * two people who did not talk to each other.
  */
+/**
+ * The same check, for a form link that was just sent.
+ *
+ * A customer who got the link and never filled it in had nothing waiting for
+ * them: a reminder is only set after a placement, and this is the step before
+ * one. By the time anybody noticed, the 24-hour window had closed and even an
+ * answer was no longer possible.
+ */
+export async function scheduleFormCheck({ parent, phone, settings }) {
+  if (!parent?.id) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'form_not_filled' })) return;
+  const plan = planFollowUp({
+    days: 1,
+    lastInboundAt: parent.last_inbound_whatsapp,
+    settings: settings || (db.getSettings ? db.getSettings() : {}),
+  });
+  if (!plan) return;
+  const row = db.insert(FOLLOWUP_COLLECTION, {
+    id: newFollowUpId(),
+    parent_id: parent.id,
+    phone: parent.phone || phone || '',
+    reason: 'form_not_filled',
+    note: 'טופס ההשתתפות',
+    subject: '',
+    student_id: null,
+    ...plan,
+    status: FOLLOWUP_OPEN,
+    created_by: 'bot',
+    created_at: new Date().toISOString(),
+  });
+  if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
+}
+
 async function scheduleEquipmentCheck({ parent, phone, student }) {
   if (!parent?.id) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;

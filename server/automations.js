@@ -28,6 +28,9 @@ import {
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
 import { abandonedClaims, markClaimReported } from './botReplyClaims.js';
+import { formFollowUpLine, formStillMissing } from './formFollowUp.js';
+import { participationEligibility } from './participationEligibility.js';
+import { buildRedirectUrl } from './publicLinks.js';
 import {
   equipmentOpenLine,
   familyEquipmentStanding,
@@ -60,7 +63,20 @@ function liveFollowUpState(row, parent) {
       && (!c.expires_at || new Date(c.expires_at).getTime() > now)
   );
   const link = checkout?.id ? buildEquipmentRedirectUrl(checkout.id) : '';
-  return { awaitingRegistration, equipmentLine: equipmentOpenLine(standing, { link }) };
+
+  // The form is the first step of all of them: it is what opens the trainee
+  // card. A family that filled it overnight must not be asked for it again.
+  const digits = String(parent.phone || '').replace(/\D/g, '');
+  const formLine = formStillMissing(students, (id) => participationEligibility(db, { studentId: id }))
+    && digits
+    ? formFollowUpLine({ link: buildRedirectUrl('fp', digits) })
+    : '';
+
+  return {
+    awaitingRegistration,
+    equipmentLine: equipmentOpenLine(standing, { link }),
+    formLine,
+  };
 }
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
@@ -708,7 +724,9 @@ export const automationsService = {
           // is actually still open — not the one the row was created for.
           const subject = (row.reason === 'pending_signup' && live.awaitingRegistration.length)
             ? `ההרשמה של ${live.awaitingRegistration.join(' ו')} במתנ״ס`
-            : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו'));
+            : (row.reason === 'form_not_filled'
+              ? 'טופס ההשתתפות'
+              : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו')));
           const result = await whatsappService.sendTemplateMessage(
             phone,
             FOLLOWUP_TEMPLATE_NAME,
@@ -766,9 +784,11 @@ export const automationsService = {
       const lines = needStaff.slice(0, 15).map(({ row, parent }) => {
         const what = row.reason === 'equipment_unpaid'
           ? `ציוד של ${row.subject || 'מתאמן'}`
-          : (row.reason === 'pending_signup'
-            ? `הרשמה של ${row.subject || 'מתאמן'}`
-            : (row.note || 'מעקב'));
+          : (row.reason === 'form_not_filled'
+            ? 'טופס השתתפות שלא מולא'
+            : (row.reason === 'pending_signup'
+              ? `הרשמה של ${row.subject || 'מתאמן'}`
+              : (row.note || 'מעקב')));
         return `• ${parent.name || '—'} · ${parent.phone || ''} — ${what}`;
       });
       const body = [

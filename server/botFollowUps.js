@@ -34,6 +34,7 @@ export const FOLLOWUP_REASONS = new Set([
   'customer_asked',   // "תבדוק איתי מחר"
   'pending_signup',   // נשלח קישור הרשמה — לבדוק אם נרשמו
   'equipment_unpaid', // נשלח קישור ציוד — לבדוק אם הוסדר
+  'form_not_filled',  // נשלח קישור לטופס — לבדוק אם מולא
   'general',
 ]);
 
@@ -340,11 +341,19 @@ export function followUpMessage(row, {
   firstName = '',
   awaitingRegistration = [],
   equipmentLine = '',
+  formLine = '',
 } = {}) {
   const hello = firstName ? `היי ${firstName},` : 'היי,';
   const note = clean(row?.note);
   const reason = String(row?.reason);
   const equipment = clean(equipmentLine);
+
+  // The form comes before everything: without it there is no trainee card, so
+  // there is nothing to place and nothing to equip. A customer who filled it
+  // in overnight is asked about nothing at all.
+  if (reason === 'form_not_filled') {
+    return clean(formLine) ? `${hello} ${clean(formLine)}` : '';
+  }
 
   if (reason === 'pending_signup' || reason === 'equipment_unpaid') {
     const waiting = (Array.isArray(awaitingRegistration) ? awaitingRegistration : [])

@@ -79,6 +79,8 @@ import {
 } from './whatsappBot.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
 import { alertRecipients } from './staffAlerts.js';
+import { replyOffersForm } from './formFollowUp.js';
+import { scheduleFormCheck } from './botTools.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { buildCentreReport, formatReportDate } from './centreReport.js';
@@ -185,6 +187,22 @@ const MEDIA_LOG_WORDS = {
 export function isSensitivePersonalEvent(text = '') {
   return /(?:נפטר|נפטרה|נפטרו|מוות|הלווי[יה]|בית\s+אבל|ימי\s+אבל|אבלים|יושב(?:ים|ת)?\s+שבעה|טיפול\s+נמרץ|מאושפז|מאושפזת|אירוע\s+מוחי|שבץ\s+מוחי|סרטן|מחלה\s+קשה|תאונה\s+קשה)/u
     .test(String(text || ''));
+}
+
+/**
+ * The link to the form is the one moment we can be sure we asked for it.
+ *
+ * It goes out from every possible route — a first enquiry, a renewal, a staff
+ * request — so the reminder is set by looking at the message that left rather
+ * than at the tool that built it.
+ */
+async function scheduleFormCheckIfOffered(replyText, parent, phone, settings) {
+  try {
+    if (!parent?.id || !replyOffersForm(replyText)) return;
+    await scheduleFormCheck({ parent, phone, settings });
+  } catch (err) {
+    console.error('form follow-up scheduling failed:', err.message);
+  }
 }
 
 /** Any Hebrew letter — a name from the community centre always has one. */
@@ -1384,6 +1402,7 @@ export const whatsappService = {
           isSimulator: false,
         });
       }
+      await scheduleFormCheckIfOffered(aiResult.text, currentParent, normalizedPhone, settings);
 
       return {
         success: true,
@@ -1868,6 +1887,9 @@ export const whatsappService = {
       replyKey,
       replyClaimed: aiTurnClaimed,
     });
+    if (!isSimulator) {
+      await scheduleFormCheckIfOffered(aiResult.text, parent, normalizedPhone, settings);
+    }
     return { parent, student, isNew, replied: true, reply: aiResult.text };
     } finally {
       releaseInboundMetaId(metaMessageId);
