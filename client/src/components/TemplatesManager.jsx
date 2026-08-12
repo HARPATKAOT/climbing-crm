@@ -7,6 +7,7 @@ import {
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { invalidateComposerResources } from './composerResources.js';
 import AppSelect from './AppSelect.jsx';
 
 const EVENT_SYSTEM_META_NAMES = new Set([
@@ -783,6 +784,33 @@ export default function TemplatesManager() {
     }
   };
 
+  /**
+   * Which templates the conversation composer offers. Saved per template rather
+   * than as one list so the row the owner is looking at is the row they toggle.
+   */
+  const setManualSend = async (t, enabled) => {
+    setBusyId(t.id);
+    setError('');
+    try {
+      const res = await fetch(`/api/message-templates/${t.id}/manual-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'עדכון נכשל');
+      setSuccess(enabled
+        ? 'התבנית תופיע בשליחה ידנית מכרטיס לקוח'
+        : 'התבנית לא תופיע יותר בשליחה ידנית');
+      invalidateComposerResources();
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const move = async (id, direction) => {
     setBusyId(id);
     setError('');
@@ -830,7 +858,7 @@ export default function TemplatesManager() {
     if (!list.length) {
       return (
         <tr>
-          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
+          <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
             אין תבניות בקבוצה זו
           </td>
         </tr>
@@ -874,6 +902,23 @@ export default function TemplatesManager() {
             <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{t.meta_name}</td>
             <td style={{ textAlign: 'center' }}><CategoryIcon category={t.category} /></td>
             <td><StatusBadge status={status} /></td>
+            <td style={{ textAlign: 'center' }}>
+              <label
+                title={t.manual_send_block || 'הצגת התבנית בשליחה ידנית מתוך כרטיס לקוח'}
+                style={{
+                  display: 'inline-flex',
+                  cursor: t.manual_send_block ? 'not-allowed' : 'pointer',
+                  opacity: t.manual_send_block ? 0.35 : 1,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!t.manual_send}
+                  disabled={busy || !!t.manual_send_block}
+                  onChange={(e) => setManualSend(t, e.target.checked)}
+                />
+              </label>
+            </td>
             <td style={{ whiteSpace: 'nowrap' }}>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {showMove && (
@@ -921,7 +966,7 @@ export default function TemplatesManager() {
           </tr>
           {isEditing && editForm && (
             <tr>
-              <td colSpan={5} style={{ background: 'var(--bg-input)', padding: 14 }}>
+              <td colSpan={6} style={{ background: 'var(--bg-input)', padding: 14 }}>
                 <div className="template-builder-layout">
                 <div style={{ display: 'grid', gap: 10, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>
@@ -1303,13 +1348,14 @@ export default function TemplatesManager() {
               <th>Meta</th>
               <th style={{ textAlign: 'center' }}>קטגוריה</th>
               <th>סטטוס</th>
+              <th style={{ textAlign: 'center' }} title="סימון תבנית יוסיף אותה לרשימת השליחה הידנית בכרטיס לקוח">שליחה ידנית</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {activeTemplates.length === 0 && !loading ? (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
+                <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
                   {templates.length === 0 ? 'אין תבניות עדיין — סנכרנו מ-Meta או צרו תבנית חדשה' : 'אין תבניות התואמות את הסינון'}
                 </td>
               </tr>
@@ -1333,12 +1379,13 @@ export default function TemplatesManager() {
                 <th>Meta</th>
                 <th style={{ textAlign: 'center' }}>קטגוריה</th>
                 <th>סטטוס</th>
+                <th style={{ textAlign: 'center' }} title="סימון תבנית יוסיף אותה לרשימת השליחה הידנית בכרטיס לקוח">שליחה ידנית</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {archivedTemplates.length === 0 ? (
-                <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות בארכיון התואמות את הסינון</td></tr>
+                <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות בארכיון התואמות את הסינון</td></tr>
               ) : renderTemplateRows(archivedTemplates, { showMove: showMoveArrows })}
             </tbody>
           </table>

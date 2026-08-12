@@ -33,6 +33,11 @@ import {
   conversationTemplates,
   isParticipationFormTemplate,
 } from './conversationTemplatePicker.js';
+import {
+  cachedComposerTemplates,
+  cachedSavedReplies,
+  loadComposerResources,
+} from './composerResources.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 import AppSelect from './AppSelect.jsx';
 import MessageMedia from './MessageMedia.jsx';
@@ -717,36 +722,7 @@ function messageMatchesThread(message, thread, parentPhone) {
   return phonesMatchClient(message.phone, thread.phone);
 }
 
-// These lists are shared by every conversation. Keeping them at module scope
-// prevents two identical API round trips each time staff move to another
-// customer, while the conversation itself can still refresh normally.
-let approvedTemplatesCache = null;
-let savedRepliesCache = null;
-let composerResourcesPromise = null;
 const conversationCache = new Map();
-
-async function loadComposerResources() {
-  if (Array.isArray(approvedTemplatesCache) && Array.isArray(savedRepliesCache)) {
-    return { templates: approvedTemplatesCache, savedReplies: savedRepliesCache };
-  }
-  if (!composerResourcesPromise) {
-    composerResourcesPromise = Promise.all([
-      fetch('/api/message-templates?approved=1&archived=1')
-        .then((res) => (res.ok ? res.json() : null))
-        .catch(() => null),
-      fetch('/api/saved-replies')
-        .then((res) => (res.ok ? res.json() : null))
-        .catch(() => null),
-    ]).then(([templates, savedReplies]) => {
-      if (Array.isArray(templates)) approvedTemplatesCache = templates;
-      if (Array.isArray(savedReplies)) savedRepliesCache = savedReplies;
-      return { templates, savedReplies };
-    }).finally(() => {
-      composerResourcesPromise = null;
-    });
-  }
-  return composerResourcesPromise;
-}
 
 export default function ConversationPanel({ parent, student, selectedThreadId = 'parent', fillHeight = false, onClose, onHandled, onConversationChange }) {
   const navigate = useNavigate();
@@ -764,8 +740,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const [channel, setChannel] = useState('whatsapp');
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId || 'parent');
   const [mode, setMode] = useState('text'); // text | template | saved | attachment
-  const [templates, setTemplates] = useState(() => approvedTemplatesCache || []);
-  const [savedReplies, setSavedReplies] = useState(() => savedRepliesCache || []);
+  const [templates, setTemplates] = useState(() => cachedComposerTemplates() || []);
+  const [savedReplies, setSavedReplies] = useState(() => cachedSavedReplies() || []);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateVars, setTemplateVars] = useState([]);
   // The last template fetch failed — different from "Meta approved nothing".

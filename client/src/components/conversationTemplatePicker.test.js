@@ -32,6 +32,22 @@ test('archived manual templates stay out of the working picker', () => {
   assert.equal(templates.length, 0);
 });
 
+test('once the owner picks the list, the flag on the row decides — not the catalog', () => {
+  const picked = conversationTemplates([
+    { id: 'join', meta_name: 'customer_details_v2', manual_send: false },
+    { id: 'hello', meta_name: 'hello', name: 'ברכה', body: 'שלום {{1}}', manual_send: true },
+  ], { hasStudent: true });
+  assert.deepEqual(picked.map((t) => t.id), ['hello']);
+  assert.equal(picked[0].presentation.title, 'ברכה');
+});
+
+test('a template the owner added shows its opening line, not an empty description', () => {
+  const [picked] = conversationTemplates([
+    { id: 'x', meta_name: 'x', name: 'תזכורת', body: '\nשלום {{1}}, נתראה מחר\nפרטים בהמשך', manual_send: true },
+  ], { hasStudent: false });
+  assert.equal(picked.presentation.description, 'שלום {{1}}, נתראה מחר');
+});
+
 test('the participation form is recognised by its stable Meta name', () => {
   assert.equal(isParticipationFormTemplate({ meta_name: 'participation_form_link' }), true);
   assert.equal(isParticipationFormTemplate({ meta_name: 'event_participant_link_v4' }), false);

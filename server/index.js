@@ -431,6 +431,12 @@ import {
 import { ensureOnboardingLinkTemplate } from './onboardingWhatsappTemplate.js';
 import { ensureAgendaDigestTemplate } from './agendaDigestTemplate.js';
 import {
+  DEFAULT_MANUAL_TEMPLATE_NAMES,
+  loadManualTemplateNames,
+  setManualTemplate,
+  withManualSendFlag,
+} from './conversationTemplateSettings.js';
+import {
   PARTICIPATION_FORM_TEMPLATE,
   ensureParticipationFormWhatsappTemplate,
   findApprovedParticipationFormTemplate,
@@ -2171,7 +2177,7 @@ app.post('/api/conversations/:parentId/draft', async (req, res) => {
 });
 
 // ─── Message templates ───────────────────────────────────────────────────────
-app.get('/api/message-templates', (req, res) => {
+app.get('/api/message-templates', async (req, res) => {
   try {
     ensureEventWhatsappTemplates({
       db,
@@ -2185,7 +2191,23 @@ app.get('/api/message-templates', (req, res) => {
   }
   const approvedOnly = req.query.approved === '1' || req.query.approved === 'true';
   const includeArchived = req.query.archived === '1' || req.query.archived === 'true';
-  res.json(approvedOnly ? listApprovedTemplates({ includeArchived }) : listLocalTemplates());
+  const rows = approvedOnly ? listApprovedTemplates({ includeArchived }) : listLocalTemplates();
+  // Which of these a staff member may send by hand from a customer card is a
+  // setting, not a hardcoded list — every consumer of this route reads it off
+  // the row so nobody has to fetch the setting separately.
+  const manualNames = await loadManualTemplateNames().catch(() => DEFAULT_MANUAL_TEMPLATE_NAMES);
+  res.json(withManualSendFlag(rows, manualNames));
+});
+
+app.post('/api/message-templates/:id/manual-send', requireOwner, async (req, res) => {
+  try {
+    const template = (db.get('message_templates') || []).find((t) => t.id === req.params.id);
+    if (!template) throw new Error('התבנית לא נמצאה');
+    const names = await setManualTemplate(template, req.body?.enabled !== false);
+    res.json({ success: true, names });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.post('/api/message-templates', requireOwner, (req, res) => {
