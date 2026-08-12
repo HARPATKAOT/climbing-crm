@@ -1,16 +1,36 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Award, Trophy, ChevronDown, ChevronUp, Medal, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Award, Trophy, ChevronDown, ChevronUp, Medal, Edit2, Trash2, BarChart3, SlidersHorizontal, RotateCcw, Search } from 'lucide-react';
 import { Modal } from './UI.jsx';
-import { LEVELS, LEVEL_COLOR, LEVEL_POINTS, ROUTE_STYLE, routeStyleMeta } from '../utils/levelGrades.js';
+import { LEVELS, LEVEL_COLOR, LEVEL_POINTS, ROUTE_STYLE, routeStyleMeta, levelRank } from '../utils/levelGrades.js';
 import {
   TEST_KINDS,
   TEST_TYPE_COLORS,
   testKindMeta,
+  normalizeTestKindKey,
 } from '../utils/levelTestKinds.js';
+import { studentInGroup } from '../utils/studentGroups.js';
 import AppSelect from './AppSelect.jsx';
 import { useAuth } from './AuthGate.jsx';
 
 const ROUTE_TYPES = Object.values(ROUTE_STYLE);
+
+const isoToday = () => new Date().toISOString().slice(0, 10);
+
+function isoMonthsAgo(months) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - months);
+  return d.toISOString().slice(0, 10);
+}
+
+/** קווי הסרגל האנכי — עד 5 מספרים עגולים שמכסים את העמודה הגבוהה. */
+function axisScale(max) {
+  const steps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000];
+  const step = steps.find((s) => max / s <= 4) || Math.ceil(max / 4);
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  const ticks = [];
+  for (let v = top; v >= 0; v -= step) ticks.push(v);
+  return { top, ticks };
+}
 
 function normalizeTest(t) {
   const studentId = t.studentId || t.climber_id || null;
@@ -228,6 +248,90 @@ function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS,
   );
 }
 
+/**
+ * התפלגות לפי רמה — ציר X הוא הרמה, גובה העמודה הוא הכמות.
+ * לחיצה על עמודה מסננת את הטבלה לאותה רמה, ולחיצה חוזרת מנקה.
+ */
+function LevelDistributionChart({ rows, mode, onModeChange, activeLevel, onPickLevel }) {
+  const total = rows.reduce((sum, r) => sum + r.count, 0);
+  const { top, ticks } = axisScale(Math.max(1, ...rows.map((r) => r.count)));
+  const busiest = rows.reduce((best, r) => (r.count > (best?.count || 0) ? r : best), null);
+  const unit = mode === 'climbers' ? 'מתאמנים' : 'מבחנים';
+
+  return (
+    <div className="card card-p" style={{ marginBottom: 20 }}>
+      <div className="section-header" style={{ marginBottom: 14, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <BarChart3 size={17} style={{ color: 'var(--cyan)', flexShrink: 0 }} />
+          <div>
+            <div className="section-title" style={{ fontSize: 14 }}>התפלגות לפי רמה</div>
+            <div className="section-sub" style={{ fontSize: 11 }}>
+              {mode === 'climbers'
+                ? 'כל מתאמן נספר פעם אחת — לפי הרמה הגבוהה ביותר שעבר'
+                : 'מספר המבחנים שנרשמו בכל רמה'}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[
+            { val: 'climbers', label: 'לפי מתאמן' },
+            { val: 'tests',    label: 'לפי מבחן' },
+          ].map((m) => (
+            <button key={m.val} className={`btn btn-xs ${mode === m.val ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => onModeChange(m.val)}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {total === 0 ? (
+        <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-3)', fontSize: 13 }}>
+          אין נתוני רמה שמתאימים לסינון
+        </div>
+      ) : (
+        <>
+          <div className="level-dist-plot">
+            <div className="level-dist-grid">
+              {ticks.map((t) => (
+                <span key={t} style={{ bottom: `${(t / top) * 100}%` }}>{t}</span>
+              ))}
+            </div>
+            {rows.map((r) => {
+              const color = LEVEL_COLOR[r.level] || '#38BDF8';
+              const isActive = activeLevel === r.level;
+              return (
+                <button
+                  key={r.level}
+                  type="button"
+                  className={`level-dist-col${isActive ? ' is-active' : ''}${activeLevel !== 'all' && !isActive ? ' is-dim' : ''}`}
+                  style={{ '--lv': color }}
+                  title={`רמה ${r.level} · ${r.count} ${unit}`}
+                  onClick={() => onPickLevel(isActive ? 'all' : r.level)}
+                >
+                  <span className="level-dist-track">
+                    <i className="level-dist-bar" style={{ height: `${(r.count / top) * 100}%` }}>
+                      {r.count > 0 && <b>{r.count}</b>}
+                    </i>
+                  </span>
+                  <em>{r.level}</em>
+                </button>
+              );
+            })}
+          </div>
+          <div className="level-dist-foot">
+            <span>סה"כ <b>{total}</b> {unit}</span>
+            {busiest?.count > 0 && (
+              <span>הרמה השכיחה: <b style={{ color: LEVEL_COLOR[busiest.level] }}>{busiest.level}</b> ({busiest.count})</span>
+            )}
+            <span style={{ color: 'var(--text-3)' }}>לחיצה על עמודה מסננת את הטבלה</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function StudentLevelCard({ student, tests, groups, onEdit, onDelete, canEditTest = () => true }) {
   const [expanded, setExpanded] = useState(false);
   const myTests = tests
@@ -368,6 +472,15 @@ export default function LevelTests({ students, groups }) {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterKind, setFilterKind]     = useState('all');
   const [activeTab, setActiveTab]       = useState('tests'); // tests | leaderboard
+  const [showAdvanced, setShowAdvanced]         = useState(false);
+  const [filterEnrollment, setFilterEnrollment] = useState('all'); // all | registered | unregistered
+  const [filterGroup, setFilterGroup]           = useState('all');
+  const [filterExaminer, setFilterExaminer]     = useState('all');
+  const [filterRoute, setFilterRoute]           = useState('all'); // all | top-rope | lead
+  const [dateFrom, setDateFrom]                 = useState('');
+  const [dateTo, setDateTo]                     = useState('');
+  const [searchName, setSearchName]             = useState('');
+  const [chartMode, setChartMode]               = useState('climbers'); // climbers | tests
 
   const refreshTests = async () => {
     try {
@@ -429,17 +542,100 @@ export default function LevelTests({ students, groups }) {
   const passed  = tests.filter(t => t.status === 'passed').length;
   const trophies = tests.filter(t => t.ceremony && t.status === 'passed').length;
 
+  const studentById = useMemo(
+    () => new Map(students.map(s => [String(s.id), s])),
+    [students]
+  );
+
+  /** כל הסינונים חוץ מהרמה — הגרף צריך אותם בלי לאבד את ציר ה־X. */
+  const matchesFilters = useMemo(() => {
+    const examinerName = filterExaminer === 'all'
+      ? null
+      : employees.find(e => e.id === filterExaminer)?.name || null;
+    const query = searchName.trim().toLowerCase();
+
+    return (t, { ignoreStatus = false } = {}) => {
+      const kind = normalizeTestKindKey(t.test_type);
+      if (filterKind !== 'all' && kind !== filterKind) return false;
+      if (!ignoreStatus && filterStatus !== 'all' && t.status !== filterStatus) return false;
+
+      const date = String(t.date || '').slice(0, 10);
+      if (dateFrom && (!date || date < dateFrom)) return false;
+      if (dateTo && (!date || date > dateTo)) return false;
+
+      if (filterRoute !== 'all') {
+        if (kind !== 'level') return false;
+        if ((routeStyleMeta(t.route_style || t.route_type)?.key || null) !== filterRoute) return false;
+      }
+
+      if (filterExaminer !== 'all'
+        && t.examinerId !== filterExaminer
+        && (!examinerName || t.examiner !== examinerName)) return false;
+
+      const student = studentById.get(String(t.climber_id || t.studentId || ''));
+      if (filterEnrollment === 'registered' && student?.status !== 'registered') return false;
+      if (filterEnrollment === 'unregistered' && student?.status === 'registered') return false;
+      if (filterGroup !== 'all' && !studentInGroup(student, filterGroup)) return false;
+
+      if (query && !String(student?.name || t.studentName || '').toLowerCase().includes(query)) return false;
+      return true;
+    };
+  }, [filterKind, filterStatus, dateFrom, dateTo, filterRoute, filterExaminer, filterEnrollment,
+      filterGroup, searchName, employees, studentById]);
+
   const filteredTests = useMemo(() => {
     return tests
-      .filter(t => {
-        const kind = t.test_type === 'top-rope' || t.test_type === 'top_rope' ? 'level' : (t.test_type || 'level');
-        const matchKind   = filterKind === 'all' || kind === filterKind;
-        const matchLevel  = filterLevel === 'all' || t.grade === filterLevel;
-        const matchStatus = filterStatus === 'all' || t.status === filterStatus;
-        return matchKind && matchLevel && matchStatus;
-      })
+      .filter(t => matchesFilters(t) && (filterLevel === 'all' || t.grade === filterLevel))
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  }, [tests, filterKind, filterLevel, filterStatus]);
+  }, [tests, matchesFilters, filterLevel]);
+
+  /** במצב "מתאמנים" סופרים כל מטפס פעם אחת, לפי המבחן הגבוה שעבר. */
+  const levelDistribution = useMemo(() => {
+    const counts = Object.fromEntries(LEVELS.map(l => [l, 0]));
+    const climbersMode = chartMode === 'climbers';
+    const relevant = tests.filter(t =>
+      normalizeTestKindKey(t.test_type) === 'level'
+      && matchesFilters(t, { ignoreStatus: climbersMode })
+    );
+
+    if (!climbersMode) {
+      relevant.forEach(t => {
+        const grade = t.grade || t.level;
+        if (counts[grade] !== undefined) counts[grade] += 1;
+      });
+    } else {
+      const best = new Map();
+      relevant.forEach(t => {
+        if (t.status !== 'passed') return;
+        const rank = levelRank(t.grade || t.level);
+        const climberId = String(t.climber_id || t.studentId || '');
+        if (rank < 0 || !climberId) return;
+        if (rank > (best.get(climberId) ?? -1)) best.set(climberId, rank);
+      });
+      best.forEach(rank => { counts[LEVELS[rank]] += 1; });
+    }
+
+    return LEVELS.map(level => ({ level, count: counts[level] }));
+  }, [tests, matchesFilters, chartMode]);
+
+  const activeFilterCount = [
+    filterEnrollment !== 'all',
+    filterGroup !== 'all',
+    filterExaminer !== 'all',
+    filterRoute !== 'all',
+    !!dateFrom || !!dateTo,
+    !!searchName.trim(),
+  ].filter(Boolean).length;
+
+  const resetAdvanced = () => {
+    setFilterEnrollment('all');
+    setFilterGroup('all');
+    setFilterExaminer('all');
+    setFilterRoute('all');
+    setDateFrom('');
+    setDateTo('');
+    setSearchName('');
+  };
 
   const studentsWithTests = students.filter(s => tests.some(t => (t.climber_id || t.studentId) === s.id));
 
@@ -599,7 +795,134 @@ export default function LevelTests({ students, groups }) {
                 ))}
               </div>
             </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+              <button className={`btn btn-xs ${showAdvanced || activeFilterCount ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <SlidersHorizontal size={13} strokeWidth={2.3} />
+                סינון מתקדם
+                {activeFilterCount > 0 && (
+                  <span style={{
+                    background: 'var(--cyan)', color: '#0B1020', borderRadius: 999,
+                    fontSize: 10, fontWeight: 900, padding: '0 5px', minWidth: 15, textAlign: 'center',
+                  }}>{activeFilterCount}</span>
+                )}
+                {showAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              </button>
+              {activeFilterCount > 0 && (
+                <button className="btn btn-xs btn-ghost" onClick={resetAdvanced}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--text-3)' }}>
+                  <RotateCcw size={12} /> נקה
+                </button>
+              )}
+            </div>
           </div>
+
+          {showAdvanced && (
+            <div className="card card-p level-filters">
+              <div className="form-group">
+                <label className="form-label">שם מתאמן</label>
+                <div style={{ position: 'relative' }}>
+                  <Search size={14} style={{
+                    position: 'absolute', insetInlineStart: 10, top: '50%', transform: 'translateY(-50%)',
+                    color: 'var(--text-3)', pointerEvents: 'none',
+                  }} />
+                  <input className="input" placeholder="חיפוש לפי שם..." value={searchName}
+                    onChange={e => setSearchName(e.target.value)} style={{ paddingInlineStart: 30 }} />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">רישום לחוג</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[
+                    { val: 'all',          label: 'הכל' },
+                    { val: 'registered',   label: 'רשומים לחוג' },
+                    { val: 'unregistered', label: 'לא רשומים' },
+                  ].map(f => (
+                    <button key={f.val} className={`btn btn-xs ${filterEnrollment === f.val ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setFilterEnrollment(f.val)}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">חוג</label>
+                <AppSelect className="input select" value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
+                  <option value="all">כל החוגים</option>
+                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </AppSelect>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">בוחן</label>
+                <AppSelect className="input select" value={filterExaminer} onChange={e => setFilterExaminer(e.target.value)}>
+                  <option value="all">כל הבוחנים</option>
+                  {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+                </AppSelect>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">סגנון מסלול</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button className={`btn btn-xs ${filterRoute === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setFilterRoute('all')}>הכל</button>
+                  {ROUTE_TYPES.map(rt => (
+                    <button key={rt.key} className={`btn btn-xs ${filterRoute === rt.key ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setFilterRoute(rt.key)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        ...(filterRoute === rt.key
+                          ? { background: `${rt.color}22`, color: rt.color, borderColor: rt.color, fontWeight: 800 }
+                          : { color: rt.color }),
+                      }}>
+                      <rt.Icon size={13} strokeWidth={2.4} />
+                      {rt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group level-filters-dates">
+                <label className="form-label">תאריך המבחן</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input className="input" type="date" value={dateFrom} max={dateTo || undefined}
+                    onChange={e => setDateFrom(e.target.value)} style={{ width: 155 }} />
+                  <span style={{ color: 'var(--text-3)', fontSize: 12 }}>עד</span>
+                  <input className="input" type="date" value={dateTo} min={dateFrom || undefined}
+                    onChange={e => setDateTo(e.target.value)} style={{ width: 155 }} />
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {[
+                      { label: 'החודש',    from: () => `${isoToday().slice(0, 7)}-01` },
+                      { label: '3 חודשים', from: () => isoMonthsAgo(3) },
+                      { label: 'שנה',      from: () => isoMonthsAgo(12) },
+                    ].map(p => (
+                      <button key={p.label} className="btn btn-xs btn-ghost"
+                        onClick={() => { setDateFrom(p.from()); setDateTo(isoToday()); }}>
+                        {p.label}
+                      </button>
+                    ))}
+                    {(dateFrom || dateTo) && (
+                      <button className="btn btn-xs btn-ghost" style={{ color: 'var(--text-3)' }}
+                        onClick={() => { setDateFrom(''); setDateTo(''); }}>
+                        כל הזמנים
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <LevelDistributionChart
+            rows={levelDistribution}
+            mode={chartMode}
+            onModeChange={setChartMode}
+            activeLevel={filterLevel}
+            onPickLevel={setFilterLevel}
+          />
 
           <div style={{ marginBottom: 28 }}>
             <div className="card">

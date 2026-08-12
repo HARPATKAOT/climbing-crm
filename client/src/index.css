@@ -1547,6 +1547,71 @@ select option, select optgroup {
 .pos-seller-field > span > svg { color: #fb7185; }
 .pos-seller-field > small { color: var(--text-3); font-size: 10px; line-height: 1.45; }
 
+/* === התפלגות רמות (מסך מבחנים) === */
+.level-dist-plot {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: clamp(3px, 1vw, 12px);
+  height: 230px;
+  padding: 22px 0 0;
+  padding-inline-start: 30px;
+  border-bottom: 1px solid var(--border);
+}
+.level-dist-grid { position: absolute; inset: 22px 0 0; pointer-events: none; }
+.level-dist-grid span {
+  position: absolute; inset-inline: 0;
+  border-top: 1px dashed var(--border);
+  font-size: 10px; color: var(--text-3); line-height: 1;
+  direction: ltr; text-align: right;
+  padding-inline-end: 4px; margin-bottom: -1px;
+}
+.level-dist-col {
+  flex: 1; min-width: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  transition: opacity var(--t-fast);
+}
+.level-dist-col.is-dim { opacity: .4; }
+.level-dist-col:hover { opacity: 1; }
+.level-dist-track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.level-dist-bar {
+  position: relative;
+  width: min(34px, 74%); min-height: 3px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(180deg, var(--lv) 0%, color-mix(in srgb, var(--lv) 55%, transparent) 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lv) 45%, transparent) inset;
+  transition: filter var(--t-fast), height .45s ease;
+}
+.level-dist-col:hover .level-dist-bar { filter: brightness(1.25); }
+.level-dist-col.is-active .level-dist-bar { box-shadow: 0 0 0 2px var(--lv), 0 6px 18px -6px var(--lv); }
+.level-dist-bar b {
+  position: absolute; inset-inline: -6px; top: -17px;
+  font-size: 11px; font-weight: 800; font-style: normal; color: var(--text-2);
+  text-align: center; font-variant-numeric: tabular-nums; direction: ltr;
+}
+.level-dist-col em {
+  font-style: normal; font-size: 11px; font-weight: 800;
+  color: var(--lv); direction: ltr;
+}
+.level-dist-col.is-active em { text-decoration: underline; text-underline-offset: 3px; }
+.level-dist-foot {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin-top: 12px; font-size: 11px; color: var(--text-2);
+}
+.level-dist-foot b { color: var(--text-1); font-weight: 800; }
+.level-filters {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px; margin-bottom: 20px; align-items: start;
+}
+.level-filters .form-group { margin: 0; }
+.level-filters-dates { grid-column: 1 / -1; }
+@media (max-width: 640px) {
+  .level-dist-plot { height: 190px; padding-inline-start: 24px; }
+  .level-dist-bar { width: min(22px, 80%); }
+  .level-dist-col em { font-size: 10px; }
+}
+
 /* === DIVIDER === */
 .divider { height: 1px; background: var(--border); margin: 20px 0; }
 .divider-sm { height: 1px; background: var(--border); margin: 12px 0; }
