@@ -13088,9 +13088,14 @@ app.post('/api/safety/incidents', (req, res) => {
   res.status(201).json(record);
 });
 
-// Level Tests history
+// Level Tests history. `studentId` narrows it to one climber — the customer
+// file wants the safety test and the grade of the person on screen, and used to
+// download all 1400 tests in the club to find the three that were theirs.
 app.get('/api/level-tests', (req, res) => {
-  res.json((db.get('level_tests') || []).filter((test) => canAccessLevelTest(req.crmUser, test, 'view')));
+  const studentId = String(req.query.studentId || '').trim();
+  res.json((db.get('level_tests') || [])
+    .filter((test) => !studentId || String(test.studentId || '') === studentId)
+    .filter((test) => canAccessLevelTest(req.crmUser, test, 'view')));
 });
 
 /**
@@ -15905,8 +15910,34 @@ app.post('/api/pos/checkout-links/:token/cancel', async (req, res) => {
 });
 
 // Health Declarations endpoints
+//
+// The signature image and the form snapshot are 90% of this feed's weight — a
+// megabyte of them — and only the PDF builder ever opens either one. Everything
+// that asks "is this climber signed, for which activity, until when" reads the
+// other twenty fields, so `?summary=1` leaves the two heavy ones behind and the
+// PDF paths pull the one record they need from the route below.
+const HEAVY_DECLARATION_FIELDS = ['signature_url', 'signatureUrl', 'formSnapshot', 'form_snapshot'];
+
+function declarationSummary(row) {
+  const light = { ...row };
+  for (const field of HEAVY_DECLARATION_FIELDS) delete light[field];
+  return light;
+}
+
 app.get('/api/health-declarations', (req, res) => {
-  res.json(db.get('health_declarations'));
+  const rows = db.get('health_declarations') || [];
+  if (String(req.query.summary || '') === '1') {
+    return res.json(rows.map(declarationSummary));
+  }
+  res.json(rows);
+});
+
+// One full declaration, signature and snapshot included, for building its PDF.
+app.get('/api/health-declarations/:declarationId', (req, res) => {
+  const row = (db.get('health_declarations') || [])
+    .find((decl) => String(decl.id) === String(req.params.declarationId));
+  if (!row) return res.status(404).json({ error: 'ההצהרה לא נמצאה' });
+  res.json(row);
 });
 
 app.post('/api/health-declarations', (req, res) => {
@@ -17883,16 +17914,11 @@ app.post('/api/public/onboard/waivers/:waiverId/pdf', publicFormRateLimit, async
 // Staff: list documents in personal file
 app.get('/api/students/:id/documents', async (req, res) => {
   const studentId = req.params.id;
-  // Always re-read the durable store. A long-lived process can keep deleted
-  // copies in memory after a cleanup, and the folder then looks full again.
-  if (supa.isEnabled()) {
-    try {
-      const remote = await supa.getAll('client_documents');
-      if (remote) db.set('client_documents', remote);
-    } catch (err) {
-      console.error('client_documents refresh failed:', err.message);
-    }
-  }
+  // Answered from memory, refreshed behind the answer. The durable re-read was
+  // here so a cleanup elsewhere could not leave deleted copies looking present;
+  // the refresh still happens, it just no longer holds the folder shut while it
+  // runs. Every delete path in this file writes through to memory anyway.
+  await readTable('client_documents');
   const docs = (db.get('client_documents') || [])
     .filter((d) => d.studentId === studentId)
     .slice()
@@ -17906,14 +17932,12 @@ app.get('/api/students/:id/documents', async (req, res) => {
 // a file name or from a health declaration's template.
 app.get('/api/students/:id/participation-waivers', async (req, res) => {
   const studentId = String(req.params.id || '');
-  if (supa.isEnabled()) {
-    try {
-      const remote = await supa.getAll('participation_waivers');
-      if (remote) db.set('participation_waivers', remote);
-    } catch (err) {
-      console.error('participation_waivers refresh failed:', err.message);
-    }
-  }
+  // Served from memory. This answer feeds the approval icons at the top of the
+  // customer file, and downloading the whole table from the durable store first
+  // — 700KB of signature images for two rows the desk actually wanted — is what
+  // made those icons take seconds to turn green, and take them again on every
+  // switch between siblings.
+  await readTable('participation_waivers');
   const rows = (db.get('participation_waivers') || [])
     .filter((row) => String(row.student_id || row.studentId || '') === studentId)
     .map((row) => ({

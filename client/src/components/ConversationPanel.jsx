@@ -830,27 +830,24 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     try {
       // Quiet polls only refresh the thread — templates and saved replies barely
       // change, and re-fetching them every few seconds delayed new messages.
-      let convRes;
-      if (quiet) {
-        convRes = await fetch(`/api/conversations/${requestedParentId}`);
-      } else {
-        const [cRes, resources] = await Promise.all([
-          fetch(`/api/conversations/${requestedParentId}`),
-          loadComposerResources(),
-        ]);
-        convRes = cRes;
-
-        // Templates / saved replies first — don't lose them if conversation load fails
-        const tpls = resources.templates;
-        // A round trip that failed must not empty the picker. Background polls
-        // run while the API restarts, and overwriting the list with [] made that
-        // read as "Meta approved nothing" — sending staff to press a sync button
-        // that fixes nothing, on a list that was fine a second earlier.
-        setTemplatesUnavailable(!Array.isArray(tpls));
-        if (Array.isArray(tpls)) setTemplates(tpls);
-        const srs = resources.savedReplies;
-        if (Array.isArray(srs)) setSavedReplies(srs);
+      // The messages are what the desk opened the customer for; the templates
+      // and saved replies only fill the composer under them. Awaiting the two
+      // together held a thread that had already arrived behind a template list
+      // nobody was looking at yet, so they now land on their own.
+      if (!quiet) {
+        loadComposerResources().then((resources) => {
+          const tpls = resources.templates;
+          // A round trip that failed must not empty the picker. Background polls
+          // run while the API restarts, and overwriting the list with [] made that
+          // read as "Meta approved nothing" — sending staff to press a sync button
+          // that fixes nothing, on a list that was fine a second earlier.
+          setTemplatesUnavailable(!Array.isArray(tpls));
+          if (Array.isArray(tpls)) setTemplates(tpls);
+          const srs = resources.savedReplies;
+          if (Array.isArray(srs)) setSavedReplies(srs);
+        }).catch(() => {});
       }
+      const convRes = await fetch(`/api/conversations/${requestedParentId}`);
 
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
