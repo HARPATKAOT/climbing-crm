@@ -208,8 +208,8 @@ test('מכירה במזומן אינה ממתינה לטיפול, אבל היא 
   };
   const { pending, sales } = buildCounterQueues(parts);
   assert.deepEqual(pending.map((r) => r.name), ['ממתין לקישור']);
-  // הכי חדש בראש.
-  assert.deepEqual(sales.map((r) => r.name), ['ממתין לקישור', 'קונה במזומן']);
+  // הקישור הפתוח נמצא ברשימת הממתינים בלבד; במכירות רק מה שנסגר.
+  assert.deepEqual(sales.map((r) => r.name), ['קונה במזומן']);
   assert.equal(sales.find((r) => r.sale_id === 'c1').method, 'cash');
 });
 
@@ -224,4 +224,50 @@ test('מכירה מבוטלת אינה נספרת במכירות המשמרת', 
     studentOf,
   });
   assert.deepEqual(rows.map((r) => r.name), ['תקין']);
+});
+
+test('קישור תשלום פתוח נמצא ברשימת הממתינים בלבד, ולא גם במכירות', () => {
+  // אותה עסקה בשתי לשוניות נראית כמו שתי עסקאות.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid', student_id: 's1',
+      customer_name: 'יעל חורב', total: 350, created_at: '2026-08-10T08:30:00.000Z',
+      items: [{ name: 'נעלי REFLEX', grants_wall_climbing: false }],
+    }],
+  };
+  const open = buildCounterQueues(parts);
+  assert.deepEqual(open.pending.map((r) => r.sale_id), ['ps1']);
+  assert.deepEqual(open.sales, []);
+
+  // אחרי שהדלפק אישר שראה את הכסף, המכירה עוברת ללשונית המכירות.
+  const handled = buildCounterQueues({
+    ...parts,
+    sales: [{ ...parts.sales[0], handled_at: '2026-08-10T08:40:00.000Z' }],
+  });
+  assert.deepEqual(handled.pending, []);
+  assert.deepEqual(handled.sales.map((r) => r.sale_id), ['ps1']);
+});
+
+test('שורת תשלום שנמחקה ביד אינה צצה במכירות המשמרת', () => {
+  // הקישור נשלח בסכום שגוי. אם ההסרה רק מעבירה אותו ללשונית אחרת היא חסרת ערך.
+  const parts = {
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    dismissedIds: ['payment:ps1'],
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid',
+      customer_name: 'יעל חורב', total: 350, created_at: '2026-08-10T08:30:00.000Z',
+    }],
+  };
+  const { pending, sales } = buildCounterQueues(parts);
+  assert.deepEqual(pending, []);
+  assert.deepEqual(sales, []);
 });

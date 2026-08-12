@@ -132,12 +132,24 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
  * מכירה במזומן או בסליקה במסופון אינה ממתינה לכלום: העובד שגבה אותה ראה את
  * הכסף. היא לא צריכה לעבור דרך רשימת המשימות, אבל היא כן צריכה להיות איפשהו
  * — אחרת אין בדלפק שום תמונה של מה נמכר במשמרת.
+ *
+ * מכירה שעדיין ממתינה לטיפול אינה כאן: אדם אחד, מקום אחד. קישור תשלום פתוח
+ * שמופיע גם ברשימת המשימות וגם במכירות נראה כמו שתי עסקאות.
+ *
+ * @param openSaleIds מזהי מכירות שנמצאות עכשיו ברשימת הממתינים
  */
-export function shiftSales({ sales = [], today, dateOf, studentOf }) {
+export function shiftSales({
+  sales = [], today, dateOf, studentOf, openSaleIds = new Set(), dismissedIds = [],
+}) {
+  // שורה שהוסרה ביד לא חוזרת דרך הדלת האחורית: קישור שנשלח בסכום שגוי נמחק
+  // מהרשימה, ואם הוא היה מופיע כאן ההסרה הייתה חסרת ערך.
+  const dismissed = new Set(dismissedIds || []);
   return (Array.isArray(sales) ? sales : [])
     .filter((sale) => {
       const at = sale?.created_at || sale?.updated_at;
-      return !!at && dateOf(at) === today && sale?.status !== 'cancelled';
+      if (!at || dateOf(at) !== today || sale?.status === 'cancelled') return false;
+      if (dismissed.has(`payment:${sale.id}`)) return false;
+      return !openSaleIds.has(String(sale.id));
     })
     .map((sale) => {
       const student = sale.student_id && studentOf ? studentOf(sale.student_id) : null;
@@ -153,6 +165,10 @@ export function shiftSales({ sales = [], today, dateOf, studentOf }) {
         total: Number(sale.total) || 0,
         grants_entry: saleGrantsEntry(sale),
         seller_name: sale.employee_name || sale.seller_name || '',
+        status: sale.status || '',
+        parent_id: sale.parent_id || null,
+        doc_number: sale.icount_doc_number || null,
+        refunded: sale.status === 'refunded' || !!sale.refund_doc_number,
         items: (Array.isArray(sale.items) ? sale.items : [])
           .map((line) => line?.name)
           .filter(Boolean)
@@ -171,7 +187,8 @@ export function buildCounterQueues(parts) {
       && !pendingStudents.has(row.student_id)
       && !dismissed.has(row.id))
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
-  return { pending, active, sales: shiftSales(parts) };
+  const openSaleIds = new Set(pending.map((row) => row.sale_id).filter(Boolean).map(String));
+  return { pending, active, sales: shiftSales({ ...parts, openSaleIds }) };
 }
 
 export function buildPendingQueue(parts) {
