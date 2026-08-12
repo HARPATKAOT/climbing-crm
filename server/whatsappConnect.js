@@ -94,6 +94,11 @@ const MEDIA_PAYLOAD_KEYS = ['image', 'video', 'audio', 'document', 'sticker'];
  */
 function extractMediaRef(message = {}) {
   try {
+    // What this message answers. `context.id` is set when the customer used
+    // WhatsApp's own reply; `reaction.message_id` is the bubble reacted to.
+    const replyTo = String(message?.context?.id || '');
+    const reactionTo = String(message?.reaction?.message_id || '');
+
     for (const key of MEDIA_PAYLOAD_KEYS) {
       const payload = message?.[key];
       if (!payload?.id) continue;
@@ -102,8 +107,12 @@ function extractMediaRef(message = {}) {
         id: String(payload.id),
         mime: String(payload.mime_type || '').split(';')[0].trim(),
         filename: String(payload.filename || ''),
+        replyTo,
+        reactionTo,
       };
     }
+    // No file, but still worth remembering when it points at another bubble.
+    if (replyTo || reactionTo) return { kind: '', id: '', mime: '', filename: '', replyTo, reactionTo };
     return null;
   } catch (_) {
     return null;

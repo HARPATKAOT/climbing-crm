@@ -44,6 +44,8 @@ test('a bare digit string is read as a legacy Meta media id', () => {
     id: '987654321098',
     mime: '',
     filename: '',
+    replyTo: '',
+    reactionTo: '',
   });
 });
 
@@ -78,7 +80,40 @@ test('a reference with no metadata still parses', () => {
     id: 'abc123',
     mime: '',
     filename: '',
+    replyTo: '',
+    reactionTo: '',
   });
+});
+
+test('a message that only points at another bubble needs no file', () => {
+  const reaction = encodeMediaRef({ reactionTo: 'wamid.TARGET1' });
+  assert.equal(reaction, 'ctx:?reaction_to=wamid.TARGET1');
+  assert.equal(parseMediaRef(reaction).kind, 'context');
+  assert.equal(parseMediaRef(reaction).reactionTo, 'wamid.TARGET1');
+  assert.equal(parseMediaRef(reaction).id, '');
+
+  const quote = encodeMediaRef({ replyTo: 'wamid.TARGET2' });
+  assert.equal(parseMediaRef(quote).replyTo, 'wamid.TARGET2');
+});
+
+test('a quoted photo carries both its file and what it answers', () => {
+  const encoded = encodeMediaRef({
+    kind: 'storage',
+    id: 'wa-media/2026/08/x.jpg',
+    mime: 'image/jpeg',
+    replyTo: 'wamid.QUOTED',
+  });
+  const parsed = parseMediaRef(encoded);
+  assert.equal(parsed.kind, 'storage');
+  assert.equal(parsed.id, 'wa-media/2026/08/x.jpg');
+  assert.equal(parsed.mime, 'image/jpeg');
+  assert.equal(parsed.replyTo, 'wamid.QUOTED');
+});
+
+test('a context reference that points nowhere is nothing', () => {
+  assert.equal(encodeMediaRef({ replyTo: '', reactionTo: '' }), null);
+  assert.equal(parseMediaRef('ctx:'), null);
+  assert.equal(parseMediaRef('ctx:?mime=image%2Fjpeg'), null);
 });
 
 test('mime maps to the WhatsApp type word', () => {

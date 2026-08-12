@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mediaKindOf, hasStoredMedia, mediaFilenameOf } from './mediaRef.js';
+import {
+  mediaKindOf,
+  hasStoredMedia,
+  mediaFilenameOf,
+  replyTargetOf,
+  reactionTargetOf,
+  isReactionRow,
+  reactionEmojiOf,
+} from './mediaRef.js';
 
 test('a media kind is read from either collection field name', () => {
   // mergeThread mixes durable `messages` rows (media_type) with the local
@@ -45,4 +53,33 @@ test('the filename is read off the reference, including Hebrew', () => {
   assert.equal(mediaFilenameOf({ media_url: 'https://example.com/docs/invoice-3993.pdf' }), 'invoice-3993.pdf');
   assert.equal(mediaFilenameOf({ media_url: 'wa-media:9' }), '');
   assert.equal(mediaFilenameOf({}), '');
+});
+
+test('a bubble knows which message it quotes', () => {
+  assert.equal(replyTargetOf({ media_url: 'ctx:?reply_to=wamid.ABC' }), 'wamid.ABC');
+  // A quoted photo carries both, and neither reading disturbs the other.
+  const quotedPhoto = { media_url: 'wa-media:42?mime=image%2Fjpeg&reply_to=wamid.ABC' };
+  assert.equal(replyTargetOf(quotedPhoto), 'wamid.ABC');
+  assert.equal(mediaKindOf({ ...quotedPhoto, media_type: 'image' }), 'image');
+  assert.equal(replyTargetOf({ media_url: 'wa-media:42' }), '');
+  assert.equal(replyTargetOf({}), '');
+});
+
+test('a reaction points at its target and carries its emoji', () => {
+  const row = { media_type: 'reaction', media_url: 'ctx:?reaction_to=wamid.XYZ', message: 'ריאקציה: 👍' };
+  assert.equal(isReactionRow(row), true);
+  assert.equal(reactionTargetOf(row), 'wamid.XYZ');
+  assert.equal(reactionEmojiOf(row), '👍');
+  // Removing a reaction stores the same row shape with no emoji.
+  assert.equal(reactionEmojiOf({ ...row, message: 'ריאקציה הוסרה' }), '');
+});
+
+test('an ordinary message is not a reaction', () => {
+  assert.equal(isReactionRow({ media_type: 'text', message: 'ריאקציה: לא באמת' }), false);
+});
+
+test('a public link never has its own query read as ours', () => {
+  const row = { media_url: 'https://example.com/a.pdf?reply_to=not-ours&name=not-ours' };
+  assert.equal(replyTargetOf(row), '');
+  assert.equal(mediaFilenameOf(row), 'a.pdf');
 });

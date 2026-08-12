@@ -25,21 +25,55 @@ export function hasStoredMedia(message = {}) {
   return !!String(message.media_url || '').trim();
 }
 
+/** One query key off the reference, or '' when it is not there. */
+function refParam(message, key) {
+  const raw = String(message.media_url || '').trim();
+  if (!raw || /^https?:\/\//i.test(raw)) return '';
+  try {
+    const queryAt = raw.indexOf('?');
+    if (queryAt === -1) return '';
+    return new URLSearchParams(raw.slice(queryAt + 1)).get(key) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
 /** The filename to show, when the reference carries one. */
 export function mediaFilenameOf(message = {}) {
   const raw = String(message.media_url || '').trim();
   if (!raw) return '';
-  try {
-    if (/^https?:\/\//i.test(raw)) {
-      const path = raw.split('?')[0];
+  if (/^https?:\/\//i.test(raw)) {
+    const path = raw.split('?')[0];
+    try {
       return decodeURIComponent(path.slice(path.lastIndexOf('/') + 1) || '');
+    } catch (_) {
+      return '';
     }
-    const queryAt = raw.indexOf('?');
-    if (queryAt === -1) return '';
-    return new URLSearchParams(raw.slice(queryAt + 1)).get('name') || '';
-  } catch (_) {
-    return '';
   }
+  return refParam(message, 'name');
+}
+
+/** The Meta id of the bubble this message quotes, or '' when it quotes nothing. */
+export function replyTargetOf(message = {}) {
+  return refParam(message, 'reply_to');
+}
+
+/** The Meta id of the bubble this reaction belongs to. */
+export function reactionTargetOf(message = {}) {
+  return refParam(message, 'reaction_to');
+}
+
+/** True when the row is a reaction — it belongs on another bubble, not on its own. */
+export function isReactionRow(message = {}) {
+  const type = String(message.media_type || message.message_type || '').toLowerCase();
+  return type === 'reaction';
+}
+
+/** The emoji inside a stored reaction row ('ריאקציה: 👍'), or '' when removed. */
+export function reactionEmojiOf(message = {}) {
+  const body = String(message.message || message.body || '').trim();
+  const match = body.match(/^ריאקציה:\s*(.+)$/u);
+  return match ? match[1].trim() : '';
 }
 
 const KIND_LABELS = {

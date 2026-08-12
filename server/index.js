@@ -538,6 +538,7 @@ import {
 import {
   getConversation,
   getConversationMedia,
+  markThreadRead,
   listConversations,
   replyToParent,
   updateMessageStatusByMetaId,
@@ -2087,6 +2088,17 @@ app.get('/api/conversations/:parentId/media/:messageId', async (req, res) => {
   } catch (err) {
     console.error('Error serving conversation media:', err);
     res.status(500).json({ error: err.message || 'שליפת הקובץ נכשלה' });
+  }
+});
+
+// Blue ticks on the customer's phone, once the desk has the thread open.
+app.post('/api/conversations/:parentId/read', async (req, res) => {
+  try {
+    const result = await markThreadRead(req.params.parentId);
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
