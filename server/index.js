@@ -123,6 +123,7 @@ import {
 } from './campaignRunner.js';
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
+import { financeRouter } from './financeRoutes.js';
 import {
   accessAtLeast,
   createAccessRole,
@@ -960,6 +961,7 @@ app.get('/api/g/:groupId/:phone', redirectGroupIntake);
 app.get('/api/g/:groupId', redirectGroupIntake);
 
 app.use('/api', apiAuth);
+app.use('/api/finance', financeRouter);
 
 app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
