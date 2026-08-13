@@ -82,6 +82,9 @@ export function upcomingOpeningHours(db, { today = israelDateStr(), days = 14 } 
   for (const activity of activities) {
     if (!activity || activity.cancelled) continue;
     if (activity.type !== 'opening_hours') continue;
+    // Draft hours stay on the internal calendar, but must not reach either the
+    // public site or the bot (which reads this same function).
+    if (activity.status === 'draft') continue;
     const date = String(activity.date || '');
     if (!date || date < today) continue;
     if (!open.has(date)) open.set(date, []);

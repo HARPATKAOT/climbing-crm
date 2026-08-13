@@ -114,6 +114,7 @@ test('opening hours come from the calendar, and a day without an entry is closed
       { id: 'o2', type: 'opening_hours', date: '2026-08-12', all_day: true, name: 'חופש' },
       { id: 'o3', type: 'opening_hours', date: '2026-08-01', start_time: '10:00' },
       { id: 'o4', type: 'opening_hours', date: '2026-08-11', cancelled: true },
+      { id: 'o5', type: 'opening_hours', date: '2026-08-11', status: 'draft', start_time: '09:00', end_time: '12:00' },
       { id: 't1', type: 'trip', date: '2026-08-11', start_time: '08:00' },
     ],
   });
@@ -122,7 +123,7 @@ test('opening hours come from the calendar, and a day without an entry is closed
   assert.equal(days[0].date, TODAY);
   assert.equal(days[0].open, true);
   assert.equal(days[0].slots[0].start_time, '16:00');
-  // A cancelled entry and a trip on the same day leave it closed.
+  // Cancelled and draft entries, plus a trip on the same day, leave it closed.
   assert.equal(days[1].open, false);
   assert.equal(days[2].open, true);
   assert.equal(days[2].slots[0].all_day, true);

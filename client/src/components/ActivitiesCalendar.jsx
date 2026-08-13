@@ -1741,6 +1741,36 @@ function RegularActivityModal({
                     disabled={readOnly}
                   />
                 </label>
+                {form.type === 'opening_hours' && (
+                  <div>
+                    <span className="activity-settings-label">פרסום שעות הפתיחה</span>
+                    <div className="choice-row" style={{ marginTop: 4 }}>
+                      <button
+                        type="button"
+                        className={`choice-pill ${form.status !== 'draft' ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#34D399' }}
+                        disabled={readOnly}
+                        onClick={() => set('status', 'open')}
+                      >
+                        <Globe size={13} /> מפורסם באתר ובבוט
+                      </button>
+                      <button
+                        type="button"
+                        className={`choice-pill ${form.status === 'draft' ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#FBBF24' }}
+                        disabled={readOnly}
+                        onClick={() => set('status', 'draft')}
+                      >
+                        <Clock3 size={13} /> אירוע בהכנה
+                      </button>
+                    </div>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                      {form.status === 'draft'
+                        ? 'נשמר ביומן הפנימי בלבד — לא מופיע באתר ולא זמין לתשובות הבוט.'
+                        : 'השעות מוצגות באתר וזמינות לבוט כשהוא עונה ללקוחות.'}
+                    </span>
+                  </div>
+                )}
               </section>
             )}
             {(isTemplateEdit || !isOps) && (

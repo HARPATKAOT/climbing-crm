@@ -5261,7 +5261,9 @@ function normalizeActivityPayload(body = {}) {
     // scratch on every save, so a field missing from it is not merely ignored —
     // it is erased. That is why an activity saved as published came back
     // private, however it had been set: the flag never survived the next save.
-    show_on_site: !isOps && !!body.registration_enabled && !!body.show_on_site,
+    show_on_site: type === 'opening_hours'
+      ? (body.status || 'open') !== 'draft'
+      : (!isOps && !!body.registration_enabled && !!body.show_on_site),
     // רעיון: פעילות שאוספת מתעניינים. בלי תאריך היא עדיין חוקית — זו כל
     // הנקודה, ולכן גם הבדיקה של „חסר תאריך” מוותרת עליה.
     collect_interest: !isOps && body.collect_interest === true,
