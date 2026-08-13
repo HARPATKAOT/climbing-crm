@@ -8,6 +8,7 @@ import {
   ruleChargeBreakdown,
 } from './activityPricing.js';
 import {
+  describeDuration,
   describeRule,
   ladderFromSingle,
   normalizePriceRule,
@@ -185,8 +186,30 @@ test('שינוי שם לא מעלה גרסה; שינוי מחיר כן', () => {
   );
 });
 
+test('משך מוצג כמו שמדברים עליו, לא כדקות', () => {
+  assert.equal(describeDuration(90), 'שעה וחצי');
+  assert.equal(describeDuration(60), 'שעה');
+  assert.equal(describeDuration(120), 'שעתיים');
+  assert.equal(describeDuration(480), '8 שעות');
+  assert.equal(describeDuration(45), '45 דקות');
+  assert.equal(describeDuration(150), '2 שעות וחצי');
+  assert.equal(describeDuration(0), '');
+  assert.equal(describeDuration(null), '');
+});
+
+test('כל שורות המחירון נושאות משך, והוא לא מעלה גרסה', () => {
+  for (const seed of STARTER_PRICE_RULES) {
+    assert.ok(seed.duration_minutes > 0, `${seed.name} בלי משך`);
+  }
+  const before = normalizePriceRule(STARTER_PRICE_RULES[0]);
+  // המשך מסביר את המחיר, אבל אינו המחיר: שינוי שלו לא אמור להדליק
+  // „המחירון עודכן” על אירועים שכבר תומחרו.
+  assert.equal(ruleNumbersChanged(before, { ...before, duration_minutes: 200 }), false);
+});
+
 test('התקציר אומר על מה גובים ולא רק כמה', () => {
   assert.match(describeRule(STARTER_PRICE_RULES[0]), /4 מדרגות/);
+  assert.match(describeRule(STARTER_PRICE_RULES[0]), /8 שעות/);
   assert.match(
     describeRule(STARTER_PRICE_RULES.find((r) => r.id === 'pr_wall_camp_hosting')),
     /מינימום 20/

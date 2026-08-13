@@ -3,6 +3,7 @@ import {
   Archive, Calculator, CreditCard, Layers, Loader2, Plus, Save, Trash2, Users, Wand2,
 } from 'lucide-react';
 import {
+  describeDuration,
   describePriceRule,
   ladderFromSingle,
   normalizeBrackets,
@@ -54,6 +55,7 @@ const CATEGORIES = [
 const BLANK = {
   name: '',
   category: 'wall',
+  duration_minutes: 90,
   method: 'per_head',
   price_includes_vat: false,
   event_price: '',
@@ -72,6 +74,7 @@ function editableFrom(rule) {
   return {
     name: rule.name || '',
     category: rule.category === 'field' ? 'field' : 'wall',
+    duration_minutes: rule.duration_minutes ?? '',
     method: normalizePriceMethod(rule.method),
     price_includes_vat: !!rule.price_includes_vat,
     event_price: rule.event_price ?? '',
@@ -131,6 +134,14 @@ export default function ActivityPriceBook() {
     setMessage('');
     setError('');
     setDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const durationHours = Math.floor((Number(draft.duration_minutes) || 0) / 60) || '';
+  const durationRest = (Number(draft.duration_minutes) || 0) % 60 || '';
+
+  const setDuration = (hours, minutes) => {
+    const total = (Number(hours) || 0) * 60 + (Number(minutes) || 0);
+    set('duration_minutes', total || '');
   };
 
   const setBracket = (index, key, value) => {
@@ -338,6 +349,36 @@ export default function ActivityPriceBook() {
                 </AppSelect>
               </label>
             </div>
+
+            {/* המשך הוא מה שמסביר את הפרש המחיר: גיבוש של שעה וחצי מול פעילות
+                של שעה. הוא גם מה שקובע את שעת הסיום כשבוחרים את השורה באירוע. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12, marginTop: 12 }}>
+              <label className="form-group">
+                <span>משך — שעות</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="24"
+                  value={durationHours}
+                  onChange={(e) => setDuration(e.target.value, durationRest)}
+                />
+              </label>
+              <label className="form-group">
+                <span>משך — דקות</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="59"
+                  step="5"
+                  value={durationRest}
+                  onChange={(e) => setDuration(durationHours, e.target.value)}
+                />
+              </label>
+              <div className="policy-rule-when" style={{ alignSelf: 'end', paddingBottom: 8 }}>
+                <strong>{describeDuration(draft.duration_minutes) || 'לא הוגדר'}</strong>
+                <small>יקבע את שעת הסיום באירוע</small>
+              </div>
+            </div>
             {!creating && (
               <div className="policy-history" style={{ marginTop: 10 }}>
                 גרסה {selected?.version || 1}
@@ -461,6 +502,10 @@ export default function ActivityPriceBook() {
                 {draft.brackets.map((row, index) => {
                   const amount = Number(row.amount) || 0;
                   const upTo = Number(row.up_to) || 0;
+                  const prev = Number(draft.brackets[index - 1]?.amount) || 0;
+                  const ratio = prev > 0 && amount > 0
+                    ? Math.round((amount / prev) * 1000) / 10
+                    : '';
                   return (
                     <div className="policy-rule price-book-bracket" key={index}>
                       <label className="form-group">
@@ -481,11 +526,36 @@ export default function ActivityPriceBook() {
                           onChange={(e) => setBracket(index, 'amount', e.target.value)}
                         />
                       </label>
+                      {/* אפשר לקבוע את המדרגה גם ביחס לקודמת: „170%” על 3,350
+                          נותן 5,695. שני השדות מציגים את אותה מדרגה משני צדדים,
+                          ומה שנשמר הוא תמיד השקלים — כדי שאפשר יהיה לעגל ביד. */}
+                      <label className="form-group">
+                        <span>{index === 0 ? 'מדרגת בסיס' : 'ביחס לקודמת (%)'}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="5"
+                          value={ratio}
+                          placeholder={index === 0 ? '—' : '170'}
+                          disabled={index === 0 || !prev}
+                          onChange={(e) => {
+                            const pct = Number(e.target.value);
+                            if (!prev || !(pct > 0)) return;
+                            setBracket(index, 'amount', Math.round(prev * pct) / 100);
+                          }}
+                        />
+                      </label>
                       <div className="policy-rule-when">
                         <strong>
                           {amount > 0 && upTo > 0 ? `${formatIls(amount / upTo)} לראש` : '—'}
                         </strong>
-                        <small>במלוא המדרגה</small>
+                        <small>
+                          {index === 0
+                            ? 'במלוא המדרגה'
+                            : ratio
+                              ? `${ratio > 100 ? '+' : ''}${Math.round((ratio - 100) * 10) / 10}% מהקודמת`
+                              : 'במלוא המדרגה'}
+                        </small>
                       </div>
                       <button
                         type="button"
