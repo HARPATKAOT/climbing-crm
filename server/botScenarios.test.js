@@ -1054,7 +1054,8 @@ test('נבחרת חוזרת עם תנאי הכניסה שלה, לא רק עם ה
   });
 
   const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
-  assert.match(CUSTOMER_TOOL_RULES, /רק באישור צוות הקיר/);
+  assert.match(CUSTOMER_TOOL_RULES, /קבלה של מועמד חדש דורשת אישור צוות/);
+  assert.match(CUSTOMER_TOOL_RULES, /returning או approved/);
   assert.match(CUSTOMER_TOOL_RULES, /אינה מתאימה לו בשלב הזה/);
 });
 
