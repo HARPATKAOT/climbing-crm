@@ -18,7 +18,10 @@ import { STATUSES } from '../mockData.js';
 
 const ACTIVE_LEAD_STATUSES = new Set([
   'lead_new',
+  'details_completed',
   'health_signed',
+  'awaiting_parent_confirmation',
+  'awaiting_centre_confirmation',
   'intro_scheduled',
   'intro_paid',
   'waitlist',
@@ -27,6 +30,7 @@ const INTRO_STATUSES = new Set(['intro_scheduled', 'intro_paid']);
 /** אותם שלבים שהשרת מחזיר (FUNNEL_STAGES), כדי לשריין את מקום המשפך כבר בטעינה. */
 const FUNNEL_STAGE_ORDER = [
   'lead_new',
+  'details_completed',
   'health_signed',
   'intro_scheduled',
   'intro_paid',
