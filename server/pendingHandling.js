@@ -162,7 +162,6 @@ export function withPaidEntries({
   }
   return merged;
 }
-
 export function paymentRows({
   sales = [], payments = [], today, dateOf, shiftStartedAt = null, studentOf,
 }) {
