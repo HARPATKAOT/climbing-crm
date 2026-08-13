@@ -1335,6 +1335,69 @@ export default function PosSale({
               </button>
             )}
           </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)', marginBottom: 8 }}>
+              מוצרים מהירים
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: 8,
+            }}>
+              {shortcutProducts.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => addToCart(item)}
+                  className="card"
+                  style={{
+                    padding: 0,
+                    minWidth: 0,
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    border: '1px solid rgba(96,165,250,0.38)',
+                    overflow: 'hidden',
+                    background: 'rgba(96,165,250,0.06)',
+                  }}
+                >
+                  <div style={{
+                    height: 82,
+                    background: 'var(--bg-input)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  }}>
+                    {productImageOf(item) ? (
+                      <img
+                        src={productImageOf(item)}
+                        alt={item.name}
+                        style={{ width: '100%', height: '100%', objectFit: imageFitOf(item) }}
+                      />
+                    ) : (
+                      <Package size={28} style={{ color: 'var(--text-3)' }} />
+                    )}
+                  </div>
+                  <div style={{ padding: '9px 6px 10px' }}>
+                    <div style={{
+                      color: 'var(--text-1)', fontSize: 13, fontWeight: 800, lineHeight: 1.25,
+                      minHeight: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {item.name}
+                    </div>
+                    <div style={{ marginTop: 4, color: '#60A5FA', fontSize: 15, fontWeight: 900 }}>
+                      ₪{Number(item.price || 0).toLocaleString()}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {shortcutProducts.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '8px 0' }}>
+                לא סומנו מוצרים מהירים. אפשר לסמן אותם בניהול המוצרים.
+              </div>
+            )}
+          </div>
           <div style={{ position: 'relative', marginBottom: 12 }}>
             <Search size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
             <input
@@ -1358,70 +1421,6 @@ export default function PosSale({
                 <ArrowRight size={14} /> חזרה לקטגוריות
               </button>
               <strong style={{ fontSize: 13 }}>{activeCat}</strong>
-            </div>
-          )}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ width: '100%', marginBottom: 12, display: 'flex', justifyContent: 'center', gap: 6}}
-            onClick={() => {
-              setShowCustomForm((v) => !v);
-              setError('');
-            }}
-          >
-            <Tag size={13} />
-            {showCustomForm ? 'סגור מוצר בהתאמה אישית' : 'הוסף מוצר בהתאמה אישית'}
-          </button>
-          {showCustomForm && (
-            <div
-              style={{
-                marginBottom: 12,
-                padding: 12,
-                borderRadius: 10,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-input)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">שם המוצר</label>
-                <input
-                  className="input input-sm"
-                  value={customDraft.name}
-                  onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))}
-                  placeholder="למשל: השכרת נעליים"
-                />
-              </div>
-              <div className="form-grid-2" style={{ gap: 8 }}>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">מחיר</label>
-                  <input
-                    className="input input-sm"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={customDraft.price}
-                    onChange={(e) => setCustomDraft((d) => ({ ...d, price: e.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">כמות</label>
-                  <input
-                    className="input input-sm"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={customDraft.quantity}
-                    onChange={(e) => setCustomDraft((d) => ({ ...d, quantity: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <button type="button" className="btn btn-primary btn-sm" onClick={addCustomProduct}>
-                <Plus size={13} /> הוסף לעגלה
-              </button>
             </div>
           )}
           {activeCat === 'הכל' && !productFilter.trim() ? (
@@ -1542,6 +1541,72 @@ export default function PosSale({
               )}
             </div>
           )}
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 14, paddingTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: '100%', display: 'flex', justifyContent: 'center', gap: 6 }}
+              onClick={() => {
+                setShowCustomForm((v) => !v);
+                setError('');
+              }}
+            >
+              <Tag size={13} />
+              {showCustomForm ? 'סגור מוצר בהתאמה אישית' : 'הוסף מוצר בהתאמה אישית'}
+            </button>
+            {showCustomForm && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 10,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-input)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">שם המוצר</label>
+                  <input
+                    className="input input-sm"
+                    value={customDraft.name}
+                    onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))}
+                    placeholder="למשל: השכרת נעליים"
+                  />
+                </div>
+                <div className="form-grid-2" style={{ gap: 8 }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">מחיר</label>
+                    <input
+                      className="input input-sm"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={customDraft.price}
+                      onChange={(e) => setCustomDraft((d) => ({ ...d, price: e.target.value }))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">כמות</label>
+                    <input
+                      className="input input-sm"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={customDraft.quantity}
+                      onChange={(e) => setCustomDraft((d) => ({ ...d, quantity: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <button type="button" className="btn btn-primary btn-sm" onClick={addCustomProduct}>
+                  <Plus size={13} /> הוסף לעגלה
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1782,9 +1847,6 @@ export default function PosSale({
           {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
             studentId: selectedStudentId,
             student: selectedStudent || null,
-            addToCart,
-            shortcutProducts,
-            cartCount: cart.length,
           })}
 
           {/* רק טלפון. המייל היה שדה שאיש לא מילא: החשבונית נשלחת בוואטסאפ,

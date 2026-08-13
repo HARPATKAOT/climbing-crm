@@ -320,15 +320,12 @@ export default function CheckInConsole({
               requireSeller
               sellerEmployeeId={cashier?.employee_id || ''}
               hideInvoiceContactEditor
-              renderCustomerExtra={({ studentId, addToCart, shortcutProducts, cartCount }) => (
+              renderCustomerExtra={({ studentId }) => (
                 <ClimberEntryPanel
                   studentId={studentId}
                   students={students}
                   groups={groups}
                   onEntered={onEntered}
-                  addToCart={addToCart}
-                  shortcutProducts={shortcutProducts}
-                  cartCount={cartCount}
                 />
               )}
             />

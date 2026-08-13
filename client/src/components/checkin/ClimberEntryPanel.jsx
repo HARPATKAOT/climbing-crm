@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  CalendarClock, LogIn, Plus, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus,
+  CalendarClock, LogIn, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus,
 } from 'lucide-react';
 
 /** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
@@ -72,7 +72,6 @@ export function ClimberPicker({
  */
 export default function ClimberEntryPanel({
   studentId, students = [], groups = [], onEntered,
-  addToCart, shortcutProducts = [], cartCount = 0,
 }) {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -326,33 +325,6 @@ export default function ClimberEntryPanel({
           אין כרטיסייה או מנוי — הוסיפו כניסה לעגלה וגבו תשלום לפני רישום הכניסה.
         </div>
       )}
-
-      {/* קיצורי הקופה הם הגדרה של המוצר עצמו. הם נשארים זמינים גם למנוי או
-          לכרטיסייה פעילים, כי השכרת נעליים ומוצרי קיוסק אינם תלויים בזכאות. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>קיצורי דרך בקופה:</div>
-        {(shortcutProducts || []).map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className="btn btn-primary btn-full"
-            style={{ minHeight: 44, fontWeight: 700, fontSize: 15 }}
-            onClick={() => addToCart?.(item)}
-          >
-            <Plus size={15} /> {item.name} · ₪{item.price}
-          </button>
-        ))}
-        {(shortcutProducts || []).length === 0 && (
-          <span style={{ fontSize: 12, color: 'var(--amber)' }}>
-            לא סומנו קיצורי דרך — אפשר לסמן מוצרים בניהול הקטגוריות.
-          </span>
-        )}
-        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-          {cartCount > 0
-            ? 'נוסף לעגלה — אפשר להמשיך לתשלום.'
-            : 'לחיצה מוסיפה את המוצר ישירות לעגלה.'}
-        </div>
-      </div>
 
       {!blocked && punch?.transferable && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
