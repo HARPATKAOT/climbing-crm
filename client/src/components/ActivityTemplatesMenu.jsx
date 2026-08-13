@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowRight, Cake, Clock3, Dumbbell, FileStack, FileText, Footprints,
+  ArrowRight, Backpack, Cake, Clock3, Dumbbell, FileStack, FileText,
   GraduationCap, Handshake, Loader2, Mountain, Pencil, Plus, Search, Sparkles,
   Trash2, TreePine, Users, Waves, X,
 } from 'lucide-react';
@@ -15,7 +15,7 @@ const CATEGORY_META = {
 /** Icons for starter templates (by stable id). */
 const TEMPLATE_ICON_BY_ID = {
   tpl_field_rahaf: { Icon: Waves, color: '#60A5FA' },
-  tpl_field_black_canyon: { Icon: Footprints, color: '#34D399' },
+  tpl_field_black_canyon: { Icon: Backpack, color: '#34D399' },
   tpl_field_kabra: { Icon: TreePine, color: '#A78BFA' },
   tpl_wall_private: { Icon: Dumbbell, color: '#38BDF8' },
   tpl_wall_birthday: { Icon: Cake, color: '#FB923C' },
@@ -31,7 +31,7 @@ const TEMPLATE_ICON_BY_TYPE = {
   opening_hours: { Icon: Clock3, color: '#22D3EE' },
   route_building: { Icon: Mountain, color: '#A78BFA' },
   birthday: { Icon: Cake, color: '#FB923C' },
-  trip: { Icon: Footprints, color: '#34D399' },
+  trip: { Icon: Backpack, color: '#34D399' },
   school: { Icon: GraduationCap, color: '#34D399' },
   company: { Icon: Handshake, color: '#FBBF24' },
   other: { Icon: FileText, color: '#94A3B8' },

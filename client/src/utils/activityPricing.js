@@ -261,25 +261,40 @@ export function describeEventCharge(breakdown) {
   return `${line} · לתשלום ${formatIls(breakdown.gross)}`;
 }
 
+/** „שעה וחצי” / „45 דקות” — הצורה שבה מדברים על משך, לא „90 דקות”. */
+export function describeDuration(minutes) {
+  const total = normalizeCount(minutes);
+  if (!total) return '';
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (!hours) return `${rest} דקות`;
+  if (!rest) return hours === 1 ? 'שעה' : hours === 2 ? 'שעתיים' : `${hours} שעות`;
+  if (rest === 30) return hours === 1 ? 'שעה וחצי' : `${hours} שעות וחצי`;
+  return hours === 1 ? `שעה ו-${rest} דקות` : `${hours} שעות ו-${rest} דקות`;
+}
+
 /**
  * תקציר שורת מחירון — אומר על מה גובים ולא רק כמה.
- * „70₪ לראש · מינימום 20” הוא מה שמבדיל בין שתי שורות שהמחיר הבודד שלהן זהה.
+ * „70₪ לראש · מינימום 20 · שעה וחצי” הוא מה שמבדיל בין שתי שורות שהמחיר הבודד
+ * שלהן זהה, ומסביר למה אחת יקרה מהשנייה.
  */
 export function describePriceRule(rule) {
   if (!rule) return '';
   const method = normalizePriceMethod(rule.method);
   const suffix = normalizePriceIncludesVat(rule.price_includes_vat) ? ' כולל מע״מ' : '';
+  const duration = describeDuration(rule.duration_minutes);
+  const withDuration = (text) => (duration ? `${text} · ${duration}` : text);
   if (method === 'flat') {
     const price = normalizeMoney(rule.event_price);
-    return price ? `${formatIls(price)} לאירוע${suffix}` : 'בלי מחיר';
+    return withDuration(price ? `${formatIls(price)} לאירוע${suffix}` : 'בלי מחיר');
   }
   if (method === 'brackets') {
     const rows = normalizeBrackets(rule.brackets);
-    if (!rows.length) return 'מדרגות — עדיין ריק';
+    if (!rows.length) return withDuration('מדרגות — עדיין ריק');
     const bits = [`${rows.length} מדרגות`, `עד ${rows[rows.length - 1].up_to} משתתפים`];
     const single = normalizeMoney(rule.participant_price);
     if (single) bits.push(`${formatIls(single)} למשתתף יחיד`);
-    return bits.join(' · ');
+    return withDuration(bits.join(' · '));
   }
   const bits = [`${formatIls(normalizeMoney(rule.participant_price) || 0)} לראש${suffix}`];
   const min = normalizeCount(rule.min_participants);
@@ -288,7 +303,7 @@ export function describePriceRule(rule) {
   if (extra && min) bits.push(`${formatIls(extra)} לכל נוסף`);
   const cap = normalizeMoney(rule.max_charge);
   if (cap) bits.push(`עד ${formatIls(cap)}`);
-  return bits.join(' · ');
+  return withDuration(bits.join(' · '));
 }
 
 /** המספרים בלבד — מה שמגדיר כמה עולה, בלי שם והערות. תאום של השרת. */

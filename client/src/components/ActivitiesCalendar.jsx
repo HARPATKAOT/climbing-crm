@@ -13,6 +13,7 @@ import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
 import CancelActivityDialog from './CancelActivityDialog.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import {
+  describeDuration,
   describeEventCharge,
   describePriceRule,
   eventChargeBreakdown,
@@ -1558,6 +1559,17 @@ function RegularActivityModal({
       return;
     }
     const seat = rule.method === 'flat' ? rule.event_price : rule.participant_price;
+    // משך הפעילות מגיע עם המחיר: פעילות של שעה וחצי עולה אחרת מפעילות של שעה,
+    // ואירוע שנקבע לו מחיר של שעה וחצי אמור להיראות ביומן באורך הזה. אם השעות
+    // כבר מולאו והן לא תואמות — שואלים לפני שדורסים.
+    const endFromRule = ruleEndTime(rule, form.start_time);
+    const keepTime = endFromRule
+      && form.end_time
+      && form.end_time !== endFromRule
+      && !window.confirm(
+        `${rule.name} נמשכת ${describeDuration(rule.duration_minutes)}.\n`
+        + `לעדכן את שעת הסיום מ-${form.end_time} ל-${endFromRule}?`
+      );
     setForm((prev) => ({
       ...prev,
       price_rule_id: rule.id,
@@ -1565,6 +1577,7 @@ function RegularActivityModal({
       price: seat ?? '',
       price_includes_vat: normalizePriceIncludesVat(rule.price_includes_vat),
       charge_basis: rule.method === 'flat' ? 'flat' : 'per_participant',
+      end_time: endFromRule && !keepTime && !prev.all_day ? endFromRule : prev.end_time,
       // המספרים המקומיים מתנקים: הכלל הוא המקור, ושארית של מינימום ישן הייתה
       // ממשיכה להשפיע במסלולים שקוראים את שדות האירוע.
       min_participants: '',
@@ -1572,6 +1585,14 @@ function RegularActivityModal({
       max_charge: '',
     }));
   };
+
+  /** שעת הסיום שהמשך במחירון מכתיב, לפי שעת ההתחלה של האירוע. */
+  function ruleEndTime(rule, startTime) {
+    const minutes = normalizeCount(rule?.duration_minutes);
+    const start = timeToMinutes(startTime);
+    if (!minutes || start == null) return '';
+    return minutesToTime(start + minutes);
+  }
 
   /** ניתוק מהמחירון: המספרים של הכלל נכתבים לאירוע והקישור יורד. */
   const detachPriceRule = () => {
@@ -1600,6 +1621,23 @@ function RegularActivityModal({
     && Number(form.price_rule_version) < (Number(priceRule.version) || 1);
 
   const linkedToBook = !!form.price_rule_id;
+
+  /**
+   * חריגה ממשך הפעילות שבמחירון.
+   *
+   * השעות נשארות לעריכה חופשית — אירוע אמיתי יכול להימשך אחרת — אבל אז נאמר
+   * את זה בפירוש, כי המחיר נקבע לפי המשך הזה ולא לפי מה שכתוב ביומן.
+   */
+  const ruleDurationMinutes = normalizeCount(priceRule?.duration_minutes);
+  const eventSpanMinutes = (() => {
+    const start = timeToMinutes(form.start_time);
+    const end = timeToMinutes(form.end_time);
+    if (start == null || end == null || form.all_day) return null;
+    return end - start;
+  })();
+  const durationDeviation = !!ruleDurationMinutes
+    && eventSpanMinutes != null
+    && eventSpanMinutes !== ruleDurationMinutes;
   /**
    * המצב נגזר ממה שכבר יש על האירוע, אבל בחירה מפורשת גוברת עליו.
    *
@@ -2181,6 +2219,25 @@ function RegularActivityModal({
                   {priceMode === 'book' && priceRule && (
                     <div className="activity-settings-hint">
                       {describeEventCharge(chargePreview) || 'בחרו שורת מחירון'}
+                    </div>
+                  )}
+
+                  {durationDeviation && (
+                    <div className="activity-settings-hint" style={{ color: 'var(--amber)' }}>
+                      חריגה ממשך הפעילות במחירון: {priceRule.name} נמשכת
+                      {' '}
+                      {describeDuration(ruleDurationMinutes)}, וכאן נקבעו
+                      {' '}
+                      {describeDuration(eventSpanMinutes) || 'שעות לא תקינות'}.
+                      {' '}
+                      <button
+                        type="button"
+                        className="linklike"
+                        onClick={() => set('end_time', ruleEndTime(priceRule, form.start_time))}
+                        disabled={readOnly || !form.start_time}
+                      >
+                        להתאים לשעות המחירון
+                      </button>
                     </div>
                   )}
 

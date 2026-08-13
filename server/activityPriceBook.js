@@ -49,6 +49,10 @@ export function normalizePriceRule(body = {}) {
     name: String(body.name || '').trim(),
     category: normalizeRuleCategory(body.category),
     notes: body.notes || '',
+    // משך הפעילות בדקות. הוא לא נכנס ל-ruleNumbers ולכן לא מעלה גרסה: הוא לא
+    // משנה כמה עולה, אלא מסביר למה שעה וחצי עולה יותר משעה — ומכתיב את שעת
+    // הסיום כשבוחרים את השורה באירוע.
+    duration_minutes: normalizeCount(body.duration_minutes),
     ...numbers,
     // תקרת משתתפים למדריך. מוצגת בלבד — ראו הערת „למה לא מחשבים מדריכים” למטה.
     participants_per_guide: normalizeCount(body.participants_per_guide),
@@ -118,20 +122,34 @@ export function ladderFromSingle(singlePrice) {
   ];
 }
 
+/** „שעה וחצי” / „45 דקות” — הצורה שבה מדברים על משך, לא „90 דקות”. */
+export function describeDuration(minutes) {
+  const total = normalizeCount(minutes);
+  if (!total) return '';
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (!hours) return `${rest} דקות`;
+  if (!rest) return hours === 1 ? 'שעה' : hours === 2 ? 'שעתיים' : `${hours} שעות`;
+  if (rest === 30) return hours === 1 ? 'שעה וחצי' : `${hours} שעות וחצי`;
+  return hours === 1 ? `שעה ו-${rest} דקות` : `${hours} שעות ו-${rest} דקות`;
+}
+
 /** תקציר לשורה ברשימה ובבורר. */
 export function describeRule(rule) {
   if (!rule) return '';
   const numbers = ruleNumbers(rule);
   const ils = (value) => `₪${roundMoney(value).toLocaleString('en-US')}`;
+  const duration = describeDuration(rule.duration_minutes);
+  const withDuration = (text) => (duration ? `${text} · ${duration}` : text);
   if (numbers.method === 'flat') {
-    return numbers.event_price ? `${ils(numbers.event_price)} לאירוע` : 'בלי מחיר';
+    return withDuration(numbers.event_price ? `${ils(numbers.event_price)} לאירוע` : 'בלי מחיר');
   }
   if (numbers.method === 'brackets') {
     const rows = numbers.brackets;
-    if (!rows.length) return 'מדרגות — עדיין ריק';
+    if (!rows.length) return withDuration('מדרגות — עדיין ריק');
     const bits = [`${rows.length} מדרגות`, `עד ${rows[rows.length - 1].up_to} משתתפים`];
     if (numbers.participant_price) bits.push(`${ils(numbers.participant_price)} למשתתף יחיד`);
-    return bits.join(' · ');
+    return withDuration(bits.join(' · '));
   }
   const bits = [`${ils(numbers.participant_price || 0)} לראש`];
   if (numbers.min_participants) bits.push(`מינימום ${numbers.min_participants}`);
@@ -139,7 +157,7 @@ export function describeRule(rule) {
     bits.push(`${ils(numbers.extra_participant_price)} לכל נוסף`);
   }
   if (numbers.max_charge) bits.push(`עד ${ils(numbers.max_charge)}`);
-  return bits.join(' · ');
+  return withDuration(bits.join(' · '));
 }
 
 /**
@@ -153,6 +171,7 @@ export function describeRule(rule) {
 export const STARTER_PRICE_RULES = [
   {
     id: 'pr_field_trip_day',
+    duration_minutes: 480,
     name: 'יום טיול',
     category: 'field',
     method: 'brackets',
@@ -170,6 +189,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_field_rappel',
+    duration_minutes: 480,
     name: 'גלישה במצוק',
     category: 'field',
     method: 'brackets',
@@ -186,6 +206,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_field_climb_day',
+    duration_minutes: 480,
     name: 'יום טיפוס',
     category: 'field',
     method: 'brackets',
@@ -202,6 +223,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_camp_hosting',
+    duration_minutes: 90,
     name: 'אירוח קייטנה',
     category: 'wall',
     method: 'per_head',
@@ -213,6 +235,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_company_day',
+    duration_minutes: 90,
     name: 'יום פעילות לחברות',
     category: 'wall',
     method: 'per_head',
@@ -224,6 +247,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_birthday_structured',
+    duration_minutes: 120,
     name: 'יום הולדת — אירוע מובנה',
     category: 'wall',
     method: 'per_head',
@@ -236,6 +260,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_birthday_open',
+    duration_minutes: 90,
     name: 'יום הולדת או אירוע — לא מובנה',
     category: 'wall',
     method: 'per_head',
@@ -246,6 +271,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_school_bonding_morning',
+    duration_minutes: 90,
     name: 'גיבוש בית ספר — שעות פתיחה',
     category: 'wall',
     method: 'per_head',
@@ -257,6 +283,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_school_bonding_noon',
+    duration_minutes: 90,
     name: 'גיבוש בית ספר — שעות הצהריים',
     category: 'wall',
     method: 'per_head',
@@ -268,6 +295,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_school_single',
+    duration_minutes: 60,
     name: 'פעילות חד פעמית לבתי ספר',
     category: 'wall',
     method: 'flat',
@@ -277,6 +305,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_school_series_5',
+    duration_minutes: 60,
     name: 'סדרת פעילות לבתי ספר — 5 מפגשים',
     category: 'wall',
     method: 'flat',
@@ -286,6 +315,7 @@ export const STARTER_PRICE_RULES = [
   },
   {
     id: 'pr_wall_school_series_10',
+    duration_minutes: 60,
     name: 'סדרת פעילות לבתי ספר — 10 מפגשים',
     category: 'wall',
     method: 'flat',
@@ -298,10 +328,22 @@ export const STARTER_PRICE_RULES = [
 /** מוסיף שורות חסרות בלבד. לעולם לא דורס עריכה של הצוות. */
 export function ensureSeedPriceRules(db) {
   const existing = db.get('activity_price_rules') || [];
-  const byId = new Set(existing.map((row) => String(row.id)));
+  const byId = new Map(existing.map((row) => [String(row.id), row]));
   let inserted = 0;
+  let filled = 0;
   for (const seed of STARTER_PRICE_RULES) {
-    if (byId.has(seed.id)) continue;
+    const current = byId.get(seed.id);
+    if (current) {
+      // שורות שנזרעו לפני שהיה שדה משך נשארו בלי אחד. מילוי שדה ריק אינו
+      // דריסה — ערך שהצוות הקליד לא ייגע.
+      if (!normalizeCount(current.duration_minutes) && seed.duration_minutes) {
+        db.update('activity_price_rules', current.id, {
+          duration_minutes: seed.duration_minutes,
+        });
+        filled += 1;
+      }
+      continue;
+    }
     db.insert('activity_price_rules', {
       id: seed.id,
       ...normalizePriceRule(seed),
@@ -312,7 +354,7 @@ export function ensureSeedPriceRules(db) {
     });
     inserted += 1;
   }
-  return { inserted, total: (db.get('activity_price_rules') || []).length };
+  return { inserted, filled, total: (db.get('activity_price_rules') || []).length };
 }
 
 export function listPriceRules(db, { includeInactive = false } = {}) {

@@ -5775,7 +5775,11 @@ select option, select optgroup {
 }
 
 .price-book-bracket {
-  grid-template-columns: 140px 150px minmax(0, 1fr) auto;
+  grid-template-columns: 120px 130px 130px minmax(0, 1fr) auto;
+}
+
+@media (max-width: 1100px) {
+  .price-book-bracket { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
 }
 
 @media (max-width: 860px) {
