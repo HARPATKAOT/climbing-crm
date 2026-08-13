@@ -11,14 +11,14 @@ import Testimonials from '../components/Testimonials.jsx';
 const PX_PER_MIN = 1.5;
 const ALL_DAYS = [0, 1, 2, 3, 4, 5];
 
-/* Same bands and order as the CRM legend. */
+/* The brand palette is used as a restrained identifier, never as a solid card fill. */
 const AGE_BANDS = [
-  { key: "א'-ב'", color: '#8B7BE8' },
-  { key: "ג'-ד'", color: '#2FA37A' },
-  { key: "ה'-ו'", color: '#D9A017' },
-  { key: 'חטיבה', color: '#7C5BD6' },
-  { key: 'תיכון', color: '#D9558E' },
-  { key: 'בוגרים', color: '#2E86C8' },
+  { key: "א'-ב'", color: '#179BA2' },
+  { key: "ג'-ד'", color: '#287DB8' },
+  { key: "ה'-ו'", color: '#D69A2D' },
+  { key: 'חטיבה', color: '#0B6F75' },
+  { key: 'תיכון', color: '#B62531' },
+  { key: 'בוגרים', color: '#7A4B22' },
 ];
 
 function ageColor(category) {
@@ -72,7 +72,8 @@ function gridBounds(groups) {
 
 function Legend() {
   return (
-    <div className="ks-legend">
+    <div className="ks-legend" aria-label="מקרא שכבות גיל">
+      <strong className="ks-legend-title">שכבות גיל</strong>
       {AGE_BANDS.map((band) => (
         <span className="ks-legend-item" key={band.key}>
           <i style={{ background: band.color }} />
@@ -132,7 +133,7 @@ function WeekBoard({ groups }) {
                       style={{
                         top: (start - startHour * 60) * PX_PER_MIN,
                         height: Math.max((group.duration || 50) * PX_PER_MIN - 4, 44),
-                        background: color,
+                        '--ks-chip-accent': color,
                       }}
                     >
                       <strong>{group.time}</strong>
@@ -164,9 +165,9 @@ function DayList({ groups }) {
               <div
                 className="ks-daylist-row"
                 key={`${group.id}-${day}`}
-                style={{ borderInlineStartColor: color }}
+                style={{ '--ks-chip-accent': color }}
               >
-                <strong style={{ color }}>{group.time}</strong>
+                <strong>{group.time}</strong>
                 <span>{cleanName(group)}</span>
               </div>
             );
