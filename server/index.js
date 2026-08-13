@@ -933,6 +933,20 @@ app.get('/f/:studentId', redirectIntakeForm);
 app.get('/api/f/:studentId/:slug', redirectIntakeForm);
 app.get('/api/f/:studentId', redirectIntakeForm);
 
+/**
+ * Meta occasionally delivers a dynamic template button without its suffix.
+ * The customer then reaches the frozen base URL (`/f/`) with no student or
+ * phone to prefill. Keep that already-sent link usable: the ordinary register
+ * form can identify the household by phone after it opens.
+ */
+function redirectBlankIntakeForm(_req, res) {
+  return res.redirect(302, `${eventPublicBase()}/register`);
+}
+app.get('/f', redirectBlankIntakeForm);
+app.get('/f/', redirectBlankIntakeForm);
+app.get('/api/f', redirectBlankIntakeForm);
+app.get('/api/f/', redirectBlankIntakeForm);
+
 /** The same form keyed by phone, for a family with no trainee record yet. */
 function redirectIntakeByPhone(req, res) {
   const phone = String(req.params.phone || '').replace(/\D/g, '');
