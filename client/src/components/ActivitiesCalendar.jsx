@@ -3430,6 +3430,25 @@ function PaymentStatusIcon({ status, size = 12, perParticipant = false }) {
   );
 }
 
+function PublicationStatusIcon({ activity, size = 12 }) {
+  const published = activity.type === 'opening_hours'
+    ? activity.status !== 'draft'
+    : !!activity.show_on_site;
+  const Icon = published ? Globe : Clock3;
+  const label = published ? 'מפורסם באתר ובבוט' : 'לא מפורסם';
+  const color = published ? '#34D399' : '#FBBF24';
+
+  return (
+    <span
+      title={`סטטוס פרסום: ${label}`}
+      aria-label={`סטטוס פרסום: ${label}`}
+      style={{ display: 'inline-flex', color, flexShrink: 0 }}
+    >
+      <Icon size={size} strokeWidth={2.4} aria-hidden="true" />
+    </span>
+  );
+}
+
 function EventChip({ activity, onClick, draggable = true }) {
   const meta = activityTypeMeta(activity.type);
   const TypeIcon = activityIcon(activity);
@@ -3497,6 +3516,7 @@ function EventChip({ activity, onClick, draggable = true }) {
           style={{ flexShrink: 0, color: staffIconColor(activity) }}
           aria-hidden="true"
         />
+        <PublicationStatusIcon activity={activity} />
         <PaymentStatusIcon
           status={activity.payment_status}
           perParticipant={isPaidPerParticipant(activity)}
@@ -3743,6 +3763,7 @@ function WeekTimedEvent({
                 aria-hidden="true"
               />
             )}
+            {!isOverlay && <PublicationStatusIcon activity={event} size={11} />}
             {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -3793,6 +3814,7 @@ function WeekTimedEvent({
                 aria-hidden="true"
               />
           )}
+          {!isOverlay && <PublicationStatusIcon activity={event} size={11} />}
           {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -6224,6 +6246,7 @@ export default function ActivitiesCalendar({
                       style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
                       aria-hidden="true"
                     />
+                    <PublicationStatusIcon activity={item} size={14} />
                     <span style={{
                       fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
