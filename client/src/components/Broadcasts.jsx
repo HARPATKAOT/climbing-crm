@@ -5,6 +5,7 @@ import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
 import TemplatesManager, { TemplatePreview, CategoryIcon, CATEGORIES } from './TemplatesManager.jsx';
+import TemplateUsageBadges from './TemplateUsageBadges.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotMasterSwitch from './BotMasterSwitch.jsx';
 import BotCapabilitiesPanel from './BotCapabilitiesPanel.jsx';
@@ -323,6 +324,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         metaName: t.meta_name || '',
         category: String(t.category || 'UTILITY').toUpperCase(),
         archived: !!t.archived,
+        usedBy: Array.isArray(t.used_by) ? t.used_by : [],
         // The preview pane reads these; without them it could only ever show
         // the body, so a template with a button looked like one without.
         header: t.header || '',
@@ -796,6 +798,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <CategoryIcon category={tmpl.category} />
                         <div style={{ fontWeight: 700, fontSize: 13, minWidth: 0 }}>{tmpl.name}</div>
+                        {/* אייקון בלבד כאן: השורה צרה, והשם כבר לוקח אותה. */}
+                        <TemplateUsageBadges usage={tmpl.usedBy} compact />
                         {tmpl.archived && (
                           <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 6px' }}>
                             ארכיון

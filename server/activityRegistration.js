@@ -204,7 +204,8 @@ export function templateFieldsFromActivity(activity = {}) {
     price: Number(activity.price) || 0,
     price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
     max_participants: activity.max_participants ?? null,
-    // התבנית היא שורת מחירון, ולכן היא נושאת גם את כללי התמחור עצמם ולא רק מספר.
+    // תבנית יכולה להצביע על שורת מחירון, או לשאת מספרים משלה — בדיוק כמו אירוע.
+    price_rule_id: activity.price_rule_id || null,
     charge_basis: normalizeChargeBasis(activity.charge_basis),
     min_participants: normalizeCount(activity.min_participants),
     extra_participant_price: normalizeMoney(activity.extra_participant_price),
@@ -260,6 +261,7 @@ export function normalizeTemplatePayload(body = {}) {
       body.max_participants === '' || body.max_participants == null
         ? null
         : Number(body.max_participants) || null,
+    price_rule_id: body.price_rule_id || null,
     charge_basis: normalizeChargeBasis(body.charge_basis),
     min_participants: normalizeCount(body.min_participants),
     extra_participant_price: normalizeMoney(body.extra_participant_price),
@@ -308,6 +310,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
     price: fields.price,
     price_includes_vat: normalizePriceIncludesVat(fields.price_includes_vat),
     max_participants: fields.max_participants,
+    price_rule_id: fields.price_rule_id,
     charge_basis: fields.charge_basis,
     min_participants: fields.min_participants,
     extra_participant_price: fields.extra_participant_price,
@@ -462,6 +465,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   // מקבלים חשבונית אחת על כל הקבוצה, לא קישור לכל ילד.
   {
     id: 'tpl_wall_camp_hosting',
+    price_rule_id: 'pr_wall_camp_hosting',
     category: 'wall',
     sort_order: 40,
     name: 'אירוח קייטנה',
@@ -484,6 +488,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_school_single',
+    price_rule_id: 'pr_wall_school_single',
     category: 'wall',
     sort_order: 50,
     name: 'פעילות חד פעמית לבתי ספר',
@@ -505,6 +510,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_company_day',
+    price_rule_id: 'pr_wall_company_day',
     category: 'wall',
     sort_order: 60,
     name: 'יום פעילות לחברות',
@@ -527,6 +533,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_birthday_structured',
+    price_rule_id: 'pr_wall_birthday_structured',
     category: 'wall',
     sort_order: 70,
     name: 'יום הולדת — אירוע מובנה',
@@ -552,6 +559,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_birthday_open',
+    price_rule_id: 'pr_wall_birthday_open',
     category: 'wall',
     sort_order: 80,
     name: 'יום הולדת או אירוע — לא מובנה',
@@ -575,6 +583,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_school_series_10',
+    price_rule_id: 'pr_wall_school_series_10',
     category: 'wall',
     sort_order: 90,
     name: 'סדרת פעילות לבתי ספר — 10 מפגשים',
@@ -596,6 +605,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_school_series_5',
+    price_rule_id: 'pr_wall_school_series_5',
     category: 'wall',
     sort_order: 100,
     name: 'סדרת פעילות לבתי ספר — 5 מפגשים',
@@ -617,6 +627,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_school_bonding_morning',
+    price_rule_id: 'pr_wall_school_bonding_morning',
     category: 'wall',
     sort_order: 110,
     name: 'פעילות גיבוש לבית ספר — שעות פתיחה',
@@ -640,6 +651,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
   },
   {
     id: 'tpl_wall_school_bonding_noon',
+    price_rule_id: 'pr_wall_school_bonding_noon',
     category: 'wall',
     sort_order: 120,
     name: 'פעילות גיבוש לבית ספר — שעות הצהריים',

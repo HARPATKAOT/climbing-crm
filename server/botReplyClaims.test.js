@@ -2,9 +2,45 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   claimBotReply,
+  conversationReplyLockKey,
   finishBotReplyClaim,
+  releaseBotReplyClaim,
   replyKeyForBurst,
 } from './botReplyClaims.js';
+
+test('all overlapping turns for one phone share one conversation lock', () => {
+  assert.equal(
+    conversationReplyLockKey('972500000000'),
+    conversationReplyLockKey('972500000000')
+  );
+  assert.notEqual(
+    conversationReplyLockKey('972500000000'),
+    conversationReplyLockKey('972500000001')
+  );
+  assert.match(conversationReplyLockKey('972500000000'), /^br-lock-[a-f0-9]{32}$/);
+});
+
+test('different bursts cannot run model turns concurrently for one phone', async () => {
+  const rows = [];
+  const db = {
+    get: () => rows,
+    insert: (_table, record) => {
+      if (rows.some((row) => row.id === record.id)) return null;
+      rows.push({ ...record });
+      return rows.at(-1);
+    },
+    delete: (_table, id) => {
+      const index = rows.findIndex((row) => row.id === id);
+      if (index >= 0) rows.splice(index, 1);
+      return true;
+    },
+  };
+  const lock = conversationReplyLockKey('972500000000');
+  assert.equal((await claimBotReply(db, lock, { kind: 'conversation_lock' })).claimed, true);
+  assert.equal((await claimBotReply(db, lock, { kind: 'conversation_lock' })).claimed, false);
+  await releaseBotReplyClaim(db, lock);
+  assert.equal((await claimBotReply(db, lock, { kind: 'conversation_lock' })).claimed, true);
+});
 
 test('one inbound burst has one stable reply key regardless of webhook order', () => {
   const first = replyKeyForBurst('972500000000', [

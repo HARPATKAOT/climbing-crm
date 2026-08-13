@@ -6,26 +6,41 @@
 
 import { studentInGroup } from './studentGroups.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
-import { holdIsLive } from './placementHold.js';
 
-export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist']);
+export const CAPACITY_EXCLUDED_STATUSES = new Set([
+  'archived',
+  'waitlist',
+  'lead_new',
+  'lead_contacted',
+  'health_signed',
+  'details_completed',
+  'past_registered',
+]);
+
+export const CAPACITY_INCLUDED_STATUSES = new Set([
+  'registered',
+  'active',
+  'awaiting_parent_confirmation',
+  'awaiting_centre_confirmation',
+  'intro_scheduled',
+  'intro_paid',
+]);
 
 /**
- * A placement waiting on the מתנ״ס takes its seat.
- *
- * It used to leave the seat open so waiting on somebody else's confirmation
- * would not block the next family — which meant we kept offering a class that
- * was in fact full, and then had to tell people there was no room after
- * sending them off to register. The seat is held instead, for three days; see
- * placementHold.js for what releases it.
+ * Canonical lifecycle states reserve capacity. Legacy `pending_signup` rows
+ * count only while their old hold deadline is still live.
  */
 export function countsTowardCapacity(student, groupId, { now = new Date() } = {}) {
   if (!student || !groupId) return false;
   if (!studentInGroup(student, groupId)) return false;
   const status = String(student.status || '');
   if (CAPACITY_EXCLUDED_STATUSES.has(status)) return false;
-  if (status === 'pending_signup') return holdIsLive(student, now);
-  return true;
+  if (CAPACITY_INCLUDED_STATUSES.has(status)) return true;
+  if (status === 'pending_signup') {
+    const until = String(student.placement_hold_until || '').trim();
+    return Boolean(until) && new Date(until).getTime() > new Date(now).getTime();
+  }
+  return false;
 }
 
 export function countEnrolled(groupId, students = [], options = {}) {

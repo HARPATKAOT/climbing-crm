@@ -13,7 +13,7 @@
  * customer file.
  */
 
-import { Footprints, FileText, HeartPulse, Stethoscope, createLucideIcon } from 'lucide-react';
+import { Backpack, FileText, HeartPulse, Stethoscope, createLucideIcon } from 'lucide-react';
 
 /** A simple front-facing climber on Lucide's 24×24 grid. */
 export const WallClimber = createLucideIcon('WallClimber', [
@@ -28,7 +28,8 @@ export const WallClimber = createLucideIcon('WallClimber', [
 
 const KINDS = {
   wall: { key: 'wall', label: 'פעילות בקיר', Icon: WallClimber, badge: 'badge-amber', color: '#FCD34D' },
-  trip: { key: 'trip', label: 'יציאה / טיול', Icon: Footprints, badge: 'badge-cyan', color: '#5EEAD4' },
+  // תרמיל ולא עקבות נעליים: היציאות כאן הן ימי סנפלינג וטיפוס, לא הליכה.
+  trip: { key: 'trip', label: 'יציאה / טיול', Icon: Backpack, badge: 'badge-cyan', color: '#5EEAD4' },
 };
 
 /** הצהרות שנחתמו לפני השינוי נושאות את הכינוי הישן, וצריכות להיקרא נכון. */

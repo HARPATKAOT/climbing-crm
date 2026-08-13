@@ -8,22 +8,8 @@ import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables
 import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { invalidateComposerResources } from './composerResources.js';
+import TemplateUsageBadges from './TemplateUsageBadges.jsx';
 import AppSelect from './AppSelect.jsx';
-
-const EVENT_SYSTEM_META_NAMES = new Set([
-  'event_host_payment_v4',
-  'event_participant_link_v4',
-  'event_host_payment_v3',
-  'event_participant_link_v3',
-  'event_host_payment_v2',
-  'event_participant_link_v2',
-  'event_host_payment',
-  'event_participant_link',
-  'equipment_payment',
-  'equipment_payment_link',
-  'participation_form_link',
-  'customer_details_v2',
-]);
 
 // Exported so the send screen labels a template with the same colour and word
 // this screen uses — one category legend for the whole system, not two.
@@ -122,41 +108,6 @@ function ExternalLinkWarning({ template }) {
         הכפתור מוביל ל־{host} — מחוץ למערכת. מה שימולא שם לא ייכנס לתיק הלקוח.
       </span>
     </div>
-  );
-}
-
-function SystemBadge({ template }) {
-  const meta = String(template?.meta_name || template?.name || '');
-  const id = String(template?.id || '');
-  if (
-    !EVENT_SYSTEM_META_NAMES.has(meta) &&
-    !id.startsWith('tpl-event-') &&
-    id !== 'tpl-equipment-payment'
-  ) {
-    return null;
-  }
-  const label = meta.startsWith('event_') || id.startsWith('tpl-event-')
-    ? 'אירוע'
-    : 'ציוד';
-  return (
-    <span
-      title="תבנית מערכת — נשלחת אוטומטית מהמסך המתאים כשהחלון סגור"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        padding: '1px 7px',
-        borderRadius: 999,
-        fontSize: 10,
-        fontWeight: 800,
-        color: '#FCD34D',
-        background: 'rgba(234, 179, 8, 0.16)',
-        border: '1px solid rgba(234, 179, 8, 0.35)',
-        marginInlineStart: 6,
-        verticalAlign: 'middle',
-      }}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -496,13 +447,27 @@ export default function TemplatesManager() {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [sortBy, setSortBy] = useState('custom');
+  const [usageFilter, setUsageFilter] = useState('ALL');
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
 
-  const filtersActive = !!search.trim() || statusFilter !== 'ALL' || categoryFilter !== 'ALL';
+  const filtersActive = !!search.trim()
+    || statusFilter !== 'ALL'
+    || categoryFilter !== 'ALL'
+    || usageFilter !== 'ALL';
+
+  /** אותה שאלה שהתגית עונה עליה בשורה — מי שולח — כמסננת על הרשימה. */
+  const matchesUsage = (t) => {
+    if (usageFilter === 'ALL') return true;
+    const kinds = (Array.isArray(t.used_by) ? t.used_by : []).map((u) => u.kind);
+    if (usageFilter === 'manual') return !!t.manual_send;
+    if (usageFilter === 'none') return !kinds.length && !t.manual_send;
+    return kinds.includes(usageFilter);
+  };
 
   const matchesFilters = (t) => {
+    if (!matchesUsage(t)) return false;
     if (statusFilter !== 'ALL' && String(t.status).toUpperCase() !== statusFilter) return false;
     if (categoryFilter !== 'ALL' && String(t.category || '').toUpperCase() !== categoryFilter) return false;
     if (search.trim()) {
@@ -524,6 +489,7 @@ export default function TemplatesManager() {
     setSearch('');
     setStatusFilter('ALL');
     setCategoryFilter('ALL');
+    setUsageFilter('ALL');
   };
 
   const showMoveArrows = sortBy === 'custom' && !filtersActive;
@@ -877,7 +843,12 @@ export default function TemplatesManager() {
                   <span style={templateTagStyle(t.tag)}>{t.tag}</span>
                 )}
                 <span>{t.name}</span>
-                <SystemBadge template={t} />
+                {/* מי שולח אותה — התשובה שהניקוי האחרון נדרש לחפש בקוד. */}
+                <TemplateUsageBadges
+                  usage={t.used_by}
+                  manualSend={t.manual_send}
+                  showIdle={!t.archived}
+                />
               </div>
               <ExternalLinkWarning template={t} />
               <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
@@ -1305,15 +1276,30 @@ export default function TemplatesManager() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <AppSelect className="input input-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        {/* .input הוא width:100%, ובלי רוחב מפורש כל תפריט תופס שורה שלמה
+            והשורה הופכת לערימה של ארבעה. */}
+        <AppSelect className="input input-sm" style={{ width: 150, flex: '0 0 auto' }}
+          value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="ALL">כל הסטטוסים</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </AppSelect>
-        <AppSelect className="input input-sm" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+        <AppSelect className="input input-sm" style={{ width: 150, flex: '0 0 auto' }}
+          value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
           <option value="ALL">כל הקטגוריות</option>
           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </AppSelect>
-        <AppSelect className="input input-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        <AppSelect className="input input-sm" style={{ width: 168, flex: '0 0 auto' }}
+          value={usageFilter} onChange={(e) => setUsageFilter(e.target.value)}>
+          <option value="ALL">כל השולחים</option>
+          <option value="manual">רק בשליחה ידנית</option>
+          <option value="bot">רק של הבוט</option>
+          <option value="automation">רק של אוטומציות</option>
+          <option value="registration">רק של תהליך ההרשמה</option>
+          <option value="event">רק של מסך אירועים</option>
+          <option value="none">אף אחד לא שולח</option>
+        </AppSelect>
+        <AppSelect className="input input-sm" style={{ width: 160, flex: '0 0 auto' }}
+          value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="custom">מיון: סדר ידני</option>
           <option value="name">מיון: שם</option>
           <option value="status">מיון: סטטוס</option>

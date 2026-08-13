@@ -52,6 +52,7 @@ import {
 } from './groupMetadata.js';
 import {
   PLACEMENT_REQUEST_COLLECTION,
+  canPlaceInRestrictedGroup,
   eligibilityForStudent,
   reviewProgramApproval,
   setProgramGroupEligibility,
@@ -60,6 +61,12 @@ import {
 } from './placementEligibility.js';
 import { announceProgramEligibility } from './eligibilityNotice.js';
 import { buildCustomerTools } from './botTools.js';
+import { createIntroPaymentRequest } from './introPayments.js';
+import {
+  LIFECYCLE_TEMPLATE_NAMES,
+  approvedLifecycleTemplate,
+  ensureRegistrationLifecycleTemplates,
+} from './registrationLifecycleTemplates.js';
 import { loadBrandedBotSettings } from './whatsappBot.js';
 import { continueApprovedPlacement } from './placementApprovalContinuation.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
@@ -175,6 +182,17 @@ import {
   hostChargeBreakdown,
 } from './activityPricing.js';
 import {
+  describeRule,
+  ensureSeedPriceRules,
+  listPriceRules,
+  normalizePriceRule,
+  priceRuleUsage,
+  resolveActivityRule,
+  ruleNumbers,
+  ruleNumbersChanged,
+  MAX_RULE_HISTORY,
+} from './activityPriceBook.js';
+import {
   activityPublicSlug,
   upcomingPublicActivities,
   upcomingOpeningHours,
@@ -274,6 +292,7 @@ import {
   findLatestDeclaration,
   findLatestValidDeclaration,
   saveCrmParticipants,
+  statusAfterHealthSignature,
 } from './crmWaiverService.js';
 import {
   declarationGap,
@@ -452,6 +471,7 @@ import {
   setManualTemplate,
   withManualSendFlag,
 } from './conversationTemplateSettings.js';
+import { withUsage } from './templateUsage.js';
 import {
   PARTICIPATION_FORM_TEMPLATE,
   ensureParticipationFormWhatsappTemplate,
@@ -498,6 +518,30 @@ import { waitForMessages, currentVersion } from './liveUpdates.js';
 import { shouldMarkIntroPaid } from './introStatus.js';
 import { countEnrolled } from './groupCapacity.js';
 import { enrichStudentsWithGroupIds, studentGroupIds, studentInGroup } from './studentGroups.js';
+import {
+  HOLD_COLLECTION,
+  INTRO_COLLECTION,
+  WAITLIST_COLLECTION,
+  REGISTRATION_STATUS,
+  acceptWaitlistOffer,
+  activeHoldForStudent,
+  applyRegistrationLifecycleMigration,
+  capacityForGroup,
+  confirmParentRegistration,
+  confirmIntroPayment,
+  continueAfterIntro,
+  createIntroBooking,
+  joinGroupWaitlist,
+  lifecycleSnapshotForStudent,
+  markPlacementRegistered,
+  migrationDryRun,
+  occupiedSeatIds,
+  offerNextWaitlistee,
+  requeueUndeliveredWaitlistOffer,
+  releasePlacementHold,
+  runRegistrationLifecycle,
+  waitlistEntriesForGroup,
+} from './registrationLifecycle.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -713,25 +757,29 @@ async function businessBrand() {
 /** Short public redirect: WhatsApp template button → iCount payment URL */
 function resolveStoredPaymentUrl(paymentId) {
   const id = String(paymentId || '').trim();
-  if (!id) return '';
+  if (!id) return { url: '', expired: false };
   const payment = db.getOne('payments', id);
-  if (payment?.payment_url) return String(payment.payment_url);
+  const expired = payment?.status !== 'paid'
+    && payment?.expires_at
+    && new Date(payment.expires_at).getTime() <= Date.now();
+  if (expired) return { url: '', expired: true };
+  if (payment?.payment_url) return { url: String(payment.payment_url), expired: false };
   const sales = db.get('pos_sales') || [];
   const sale =
     sales.find((row) => String(row.payment_id || '') === id) ||
     sales.find((row) => String(row.id || '') === String(payment?.pos_sale_id || '')) ||
     null;
-  if (sale?.payment_url) return String(sale.payment_url);
-  return '';
+  if (sale?.payment_url) return { url: String(sale.payment_url), expired: false };
+  return { url: '', expired: false };
 }
 
 function redirectPaymentLink(req, res) {
   const paymentId = String(req.params.paymentId || '').trim();
   if (!paymentId) return res.status(400).send('חסר מזהה תשלום');
-  const payUrl = resolveStoredPaymentUrl(paymentId);
+  const { url: payUrl, expired } = resolveStoredPaymentUrl(paymentId);
   if (!payUrl) {
     return res
-      .status(404)
+      .status(expired ? 410 : 404)
       .type('html')
       .send(
         '<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8" />' +
@@ -1246,7 +1294,10 @@ function customerForRequest(req, row) {
 // seven duplicate durable-store reads and three HTTP round trips.
 app.get('/api/crm/core', requireOwner, (req, res) => {
   const students = db.withStudentRelations(db.get('students') || [])
-    .map((row) => customerForRequest(req, row));
+    .map((row) => customerForRequest(req, {
+      ...row,
+      registrationLifecycle: lifecycleSnapshotForStudent(db, row.id),
+    }));
   const parents = (db.get('parents') || [])
     .map((row) => customerForRequest(req, row));
   const groups = withGroupEnrollmentCounts(db.get('groups') || [], students);
@@ -1269,11 +1320,17 @@ app.get('/api/students', async (req, res) => {
     const [rows] = await readTables('students', 'enrollments', 'student_guardians');
     // A screen must never see a child with groups but no guardians, so the
     // enrichment always runs over the same in-memory snapshot.
-    return res.json(db.withStudentRelations(rows).map((row) => customerForRequest(req, row)));
+    return res.json(db.withStudentRelations(rows).map((row) => customerForRequest(req, {
+      ...row,
+      registrationLifecycle: lifecycleSnapshotForStudent(db, row.id),
+    })));
   } catch (err) {
     console.error('GET /api/students error:', err.message);
   }
-  res.json(db.withStudentRelations(db.get('students')).map((row) => customerForRequest(req, row)));
+  res.json(db.withStudentRelations(db.get('students')).map((row) => customerForRequest(req, {
+    ...row,
+    registrationLifecycle: lifecycleSnapshotForStudent(db, row.id),
+  })));
 });
 
 function withGroupEnrollmentCounts(groups, students) {
@@ -1284,7 +1341,8 @@ function withGroupEnrollmentCounts(groups, students) {
   }
   return enrichGroupsWithBotMeta(db, [...byId.values()]).map(g => ({
     ...g,
-    enrolled: countEnrolled(g.id, students || []),
+    enrolled: occupiedSeatIds(db, g.id).size,
+    waitlistCount: waitlistEntriesForGroup(db, g.id).filter((entry) => entry.status === 'waiting').length,
   }));
 }
 
@@ -1300,18 +1358,193 @@ app.get('/api/groups', async (req, res) => {
   res.json(withGroupEnrollmentCounts(db.get('groups'), db.withStudentRelations(db.get('students'))));
 });
 
+app.get('/api/students/:id/registration-lifecycle', (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  return res.json(lifecycleSnapshotForStudent(db, student.id));
+});
+
+app.get('/api/groups/:id/waitlist', requireOwner, (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  return res.json({
+    group,
+    capacity: capacityForGroup(db, group.id),
+    entries: waitlistEntriesForGroup(db, group.id, { includeInactive: req.query.all === '1' }),
+  });
+});
+
+app.post('/api/groups/:id/waitlist', requireOwner, async (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  const student = db.getOne('students', String(req.body?.studentId || ''));
+  if (!group || !student) return res.status(404).json({ error: 'Group or student not found' });
+  const parent = student.parentId ? db.getOne('parents', student.parentId) : null;
+  const result = await joinGroupWaitlist({ db, persist: persistCore, group, student, parent, source: 'crm' });
+  return res.status(result.ok ? 201 : 409).json(result);
+});
+
+app.post('/api/groups/:id/waitlist/offer-next', requireOwner, async (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const result = await offerNextWaitlistee({
+    db,
+    persist: persistCore,
+    group,
+    isEligible: (student, candidateGroup) => Boolean(student?.id)
+      && canPlaceInRestrictedGroup(db, student, candidateGroup).allowed,
+  });
+  if (!result.ok) return res.status(409).json(result);
+  try {
+    await deliverRegistrationLifecycleMessage({
+      kind: 'waitlist_offer',
+      parent: result.parent,
+      student: result.student,
+      hold: result.hold,
+      text: `התפנה מקום עבור ${result.student.name || 'המתאמן/ת'}. המקום שמור ל־24 שעות — תרצו להתקדם להרשמה?`,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    await requeueUndeliveredWaitlistOffer({ db, persist: persistCore, hold: result.hold });
+    return res.status(503).json({
+      error: 'המקום לא הוצע כי לא ניתן היה לשלוח הודעה מאושרת ללקוח',
+      reason: error.message,
+    });
+  }
+});
+
+app.post('/api/students/:id/waitlist/accept', requireOwner, async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const result = await acceptWaitlistOffer({ db, persist: persistCore, student });
+  return res.status(result.ok ? 200 : 409).json(result);
+});
+
+app.post('/api/students/:id/registration/parent-confirmation', requireOwner, async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const result = await confirmParentRegistration({ db, persist: persistCore, student });
+  return res.status(result.ok ? 200 : 409).json(result);
+});
+
+app.post('/api/students/:id/intro', requireOwner, async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  const group = db.getOne('groups', String(req.body?.groupId || ''));
+  if (!student || !group) return res.status(404).json({ error: 'Student or group not found' });
+  const parent = student.parentId ? db.getOne('parents', student.parentId) : null;
+  const result = await createIntroBooking({
+    db,
+    persist: persistCore,
+    student,
+    parent,
+    group,
+    createPaymentLink: createIntroPaymentRequest,
+  });
+  return res.status(result.ok ? 201 : 409).json(result);
+});
+
+app.post('/api/students/:id/intro/continue', requireOwner, async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const result = await continueAfterIntro({ db, persist: persistCore, student });
+  return res.status(result.ok ? 200 : 409).json(result);
+});
+
+app.post('/api/placement-holds/:id/release', requireOwner, async (req, res) => {
+  const hold = db.getOne(HOLD_COLLECTION, req.params.id);
+  if (!hold) return res.status(404).json({ error: 'Placement hold not found' });
+  const result = await releasePlacementHold({
+    db,
+    persist: persistCore,
+    hold,
+    reason: String(req.body?.reason || 'crm_manual_release'),
+    nextStudentStatus: REGISTRATION_STATUS.DETAILS_COMPLETED,
+  });
+  return res.json(result);
+});
+
+app.get('/api/registration-lifecycle/dry-run', requireOwner, (_req, res) => {
+  return res.json(migrationDryRun({
+    students: db.withStudentRelations(db.get('students') || []),
+    groups: db.get('groups') || [],
+    centreChecks: db.get('centre_registration_checks') || [],
+    waitlists: db.get(WAITLIST_COLLECTION) || [],
+    introBookings: db.get(INTRO_COLLECTION) || [],
+  }));
+});
+
+app.post('/api/registration-lifecycle/migrate', requireOwner, async (req, res) => {
+  if (req.body?.approved !== true || req.body?.confirmation !== 'APPLY_REGISTRATION_LIFECYCLE_MIGRATION') {
+    return res.status(400).json({ error: 'Explicit migration approval is required' });
+  }
+  const missingTemplates = Object.keys(LIFECYCLE_TEMPLATE_NAMES)
+    .filter((kind) => !approvedLifecycleTemplate(db, kind));
+  if (missingTemplates.length) {
+    return res.status(409).json({
+      error: 'WhatsApp lifecycle templates are not all approved',
+      missingTemplates,
+    });
+  }
+  const result = await applyRegistrationLifecycleMigration({
+    db,
+    persist: persistCore,
+    allowMutation: true,
+    sendLegacyWarning: ({ parent, student, hold }) => deliverRegistrationLifecycleMessage({
+      kind: 'legacy_hold_warning',
+      parent,
+      student,
+      hold,
+      text: `עדכון: המקום של ${student.name || 'המתאמן/ת'} שמור לשלושה ימים. השלימו הרשמה במתנ״ס ואשרו לנו שנרשמתם כדי לשמור על השיבוץ.`,
+    }),
+  });
+  return res.status(result.ok ? 200 : 409).json(result);
+});
+
 // Update student status
-app.put('/api/students/:id/status', (req, res) => {
+app.put('/api/students/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const requested = String(req.body?.status || '').trim();
+  const status = requested === 'health_signed' ? REGISTRATION_STATUS.DETAILS_COMPLETED : requested;
+  const current = db.getOne('students', id);
+  if (!current) return res.status(404).json({ error: 'Student not found' });
+  if (status === REGISTRATION_STATUS.REGISTERED) {
+    const result = await markPlacementRegistered({
+      db,
+      persist: persistCore,
+      student: current,
+      source: 'crm_manual',
+    });
+    if (!result.ok) return res.status(409).json({ error: result.reason || 'Registration update failed' });
+    automationsService.triggerEvent('status_changed', { ...result.student, new_status: status });
+    touchGoogleContacts();
+    return res.json({
+      ...result.student,
+      registrationLifecycle: lifecycleSnapshotForStudent(db, id),
+    });
+  }
+  const hold = activeHoldForStudent(db, id);
+  if (hold && ![
+    REGISTRATION_STATUS.AWAITING_PARENT,
+    REGISTRATION_STATUS.AWAITING_CENTRE,
+    REGISTRATION_STATUS.INTRO_SCHEDULED,
+  ].includes(status)) {
+    await releasePlacementHold({
+      db,
+      persist: persistCore,
+      hold,
+      reason: 'manual_status_change',
+      nextStudentStatus: status,
+    });
+  }
   const updated = db.update('students', id, { status });
   if (!updated) return res.status(404).json({ error: 'Student not found' });
+  const durable = await persistCore('students', updated);
+  if (durable?.ok === false) return res.status(503).json({ error: durable.error || 'Status was not saved' });
   
   // Trigger automation event
   automationsService.triggerEvent('status_changed', { ...updated, new_status: status });
   touchGoogleContacts();
 
-  res.json(updated);
+  res.json({ ...updated, registrationLifecycle: lifecycleSnapshotForStudent(db, id) });
 });
 
 // Shared lead intake helper (CRM + public form)
@@ -2213,7 +2446,11 @@ app.get('/api/message-templates', async (req, res) => {
   // setting, not a hardcoded list — every consumer of this route reads it off
   // the row so nobody has to fetch the setting separately.
   const manualNames = await loadManualTemplateNames().catch(() => DEFAULT_MANUAL_TEMPLATE_NAMES);
-  res.json(withManualSendFlag(rows, manualNames));
+  // ומי שולח כל תבנית — הבוט, אוטומציה או אחד המסכים. נגזר כאן ולא נשמר, כדי
+  // שתבנית שנותקה מאוטומציה תפסיק להיות מסומנת באותו רגע.
+  res.json(withUsage(withManualSendFlag(rows, manualNames), {
+    automations: db.get('automations') || [],
+  }));
 });
 
 app.post('/api/message-templates/:id/manual-send', requireOwner, async (req, res) => {
@@ -3788,6 +4025,9 @@ app.put('/api/students/:id', async (req, res) => {
 
   // Strip membership fields from a plain field update; they are handled below.
   const fieldUpdates = { ...rest };
+  if (fieldUpdates.status === 'health_signed') {
+    fieldUpdates.status = REGISTRATION_STATUS.DETAILS_COMPLETED;
+  }
   delete fieldUpdates.groupIds;
   delete fieldUpdates.addGroupId;
   delete fieldUpdates.removeGroupId;
@@ -3833,6 +4073,34 @@ app.put('/api/students/:id', async (req, res) => {
   }
 
   if (!updated) updated = db.withStudentRelation(db.getOne('students', id));
+  if (Object.prototype.hasOwnProperty.call(fieldUpdates, 'status')) {
+    if (fieldUpdates.status === REGISTRATION_STATUS.REGISTERED) {
+      const registered = await markPlacementRegistered({
+        db,
+        persist: persistCore,
+        student: db.getOne('students', id),
+        source: 'crm_edit',
+      });
+      if (!registered.ok) return res.status(409).json({ error: registered.reason || 'Registration update failed' });
+      updated = db.withStudentRelation(registered.student);
+    } else {
+      const hold = activeHoldForStudent(db, id);
+      if (hold && ![
+        REGISTRATION_STATUS.AWAITING_PARENT,
+        REGISTRATION_STATUS.AWAITING_CENTRE,
+        REGISTRATION_STATUS.INTRO_SCHEDULED,
+      ].includes(fieldUpdates.status)) {
+        await releasePlacementHold({
+          db,
+          persist: persistCore,
+          hold,
+          reason: 'crm_edit_status_change',
+          nextStudentStatus: fieldUpdates.status,
+        });
+        updated = db.withStudentRelation(db.getOne('students', id));
+      }
+    }
+  }
   // Same race as parent edit: refresh right after save must see the new fields.
   const durable = await persistCore('students', updated);
   if (durable?.ok === false) {
@@ -5187,6 +5455,7 @@ function normalizeActivityPayload(body = {}) {
     : 'paid_per_participant';
   const category = normalizeTemplateCategory(body.category);
   const isOps = category === 'ops';
+  const perEventPrice = normalizeChargeBasis(body.charge_basis) !== 'per_participant';
   return {
     name: String(body.name || '').trim(),
     type,
@@ -5214,11 +5483,20 @@ function normalizeActivityPayload(body = {}) {
     // תמחור לפי ראש: המינימום הוא רצפת חיוב (12 נרשמים במינימום 15 מחויבים
     // כ-15), התוספת היא המחיר מעבר לרצפה, והתקרה חוסמת את הסכום הכולל.
     // `max_charge` הוא תקרת סכום, בשונה מ-`max_participants` שהוא מכסת נרשמים.
+    //
+    // במחיר קבוע לאירוע שלושתם נמחקים ולא רק מוסתרים: אירוע שהיה „לפי ראש” עם
+    // תקרה של 2,500 ועבר למחיר קבוע של 3,000 היה נשאר עם תקרה שהמסך כבר לא
+    // מציג, וממשיכה לחתוך בשקט.
     charge_basis: isOps ? 'flat' : normalizeChargeBasis(body.charge_basis),
-    min_participants: isOps ? null : normalizeCount(body.min_participants),
-    extra_participant_price: isOps ? null : normalizeMoney(body.extra_participant_price),
-    max_charge: isOps ? null : normalizeMoney(body.max_charge),
+    min_participants: isOps || perEventPrice ? null : normalizeCount(body.min_participants),
+    extra_participant_price:
+      isOps || perEventPrice ? null : normalizeMoney(body.extra_participant_price),
+    max_charge: isOps || perEventPrice ? null : normalizeMoney(body.max_charge),
     price_template_id: isOps ? null : (body.price_template_id || null),
+    // שורת המחירון שהאירוע מתומחר לפיה, והגרסה שנקבעה כשנבחרה. הגרסה היא מה
+    // שמונע מאירוע שכבר תומחר לזוז כשמעדכנים מחיר במחירון.
+    price_rule_id: isOps ? null : (body.price_rule_id || null),
+    price_rule_version: isOps ? null : normalizeCount(body.price_rule_version),
     // מה שהוקפא ברגע יצירת קישור התשלום למזמין. נשמר על האירוע כדי שהרשמה
     // מאוחרת לא תשנה את הסכום שכבר נשלח לו.
     host_charge_participants: isOps ? null : normalizeCount(body.host_charge_participants),
@@ -5311,20 +5589,59 @@ function buildHostPaymentUrl(req, token) {
  */
 function freezeHostCharge(activity) {
   if (!activity || activity.registration_mode !== 'host_pays') return activity;
-  const registeredCount = activeRegistrations(db, activity.id).length;
-  const breakdown = hostChargeBreakdown(activity, { registeredCount });
+  const breakdown = activityChargeBreakdown(activity);
+  // סכום שלא ניתן לחשב לא מוקפא. אירוע מדרגות בלי נרשמים, או קבוצה מעל המדרגה
+  // האחרונה, מחזירים סירוב — ועדיף שדף המזמין יגיד „המחיר טרם נקבע” מאשר
+  // שייסגר על מספר שאיש לא קבע.
+  if (breakdown.unpriced || !(breakdown.gross > 0)) return activity;
   return db.update('activities', activity.id, {
-    host_charge_participants: breakdown.billableCount ?? null,
+    // נשמר מספר הנרשמים בפועל ולא המספר המחויב. השדה הזה נקרא במסך האירוע
+    // כתיקון ידני של הצוות, ולכן 12 נרשמים במינימום 15 שנשמרים כ-15 מייצרים
+    // שם את ההודעה „נרשמו 12 — החיוב על 15”, בנוסח של תיקון שאיש לא עשה.
+    // הרצפה נכנסת שוב בזמן החישוב, ולכן הסכום זהה.
+    host_charge_participants: breakdown.registeredCount || null,
     host_charge_amount: breakdown.gross,
   }) || activity;
+}
+
+/**
+ * פירוט החיוב של אירוע — דרך המחירון כשהוא מקושר, ואחרת מהמספרים שעליו.
+ *
+ * זה המקום היחיד שמחשב כסף של אירוע, כדי שדף המזמין, מסך האירוע וסיכום התשלום
+ * לא יוכלו להראות שלושה מספרים שונים.
+ */
+function activityChargeBreakdown(activity, { participants } = {}) {
+  const registeredCount = participants != null
+    ? participants
+    : activeRegistrations(db, activity.id).length;
+  const resolved = resolveActivityRule(db, activity);
+  if (resolved && !resolved.numbers) {
+    // הכלל נמחק מהמסד, או שהגרסה שהאירוע נקבע לפיה כבר לא קיימת. אסור ליפול
+    // חזרה לחישוב לפי ראש — 350×12 = 4,200₪ במקום 5,700₪ נראה סביר לגמרי,
+    // ולכן אף אחד לא היה תופס את זה.
+    return {
+      basis: 'missing_rule',
+      unpriced: true,
+      unpricedReason: 'missing_rule',
+      registeredCount,
+      billableCount: null,
+      entered: 0,
+      net: 0,
+      gross: 0,
+      vat: 0,
+    };
+  }
+  return hostChargeBreakdown(activity, {
+    registeredCount,
+    numbers: resolved?.numbers || null,
+  });
 }
 
 /** הסכום שהמזמין משלם: מה שהוקפא, ואם אין — חישוב חי, כמו לפני ההקפאה. */
 function hostChargeFor(activity) {
   const frozen = normalizeMoney(activity.host_charge_amount);
   if (frozen != null) return frozen;
-  const registeredCount = activeRegistrations(db, activity.id).length;
-  return hostChargeBreakdown(activity, { registeredCount }).gross;
+  return activityChargeBreakdown(activity).gross;
 }
 
 function matchHostPaymentActivity(rows, token) {
@@ -5447,6 +5764,11 @@ const ACTIVITY_FINANCE_FIELDS = new Set([
   // לגזור אותו מהמינימום והתקרה.
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'host_charge_participants', 'host_charge_amount',
+  // הקישור למחירון קובע כסף — בשונה מ-`price_template_id` שהיה דקורטיבי.
+  // ⚠️ כל שדה שנוסף כאן חייב להתווסף באותו קומיט גם ל-`permittedPayload`
+  // ב-ActivitiesCalendar.jsx, אחרת עובד בלי הרשאת כספים שולח null ומקבל 403
+  // על כל שמירה — גם כשהוא שינה רק את המיקום.
+  'price_rule_id', 'price_rule_version',
 ]);
 const ACTIVITY_HR_FIELDS = new Set(['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']);
 
@@ -5958,7 +6280,7 @@ app.put('/api/activities/:id/registrations/:registrationId', async (req, res) =>
           parentId: registration.parent_id,
           isAdult: nextType === 'adult',
           groupId: null,
-          status: 'health_signed',
+          status: REGISTRATION_STATUS.DETAILS_COMPLETED,
           source: 'activity_registration',
           created: new Date().toISOString().slice(0, 10),
           healthSignedAt: registration.created_at || new Date().toISOString(),
@@ -7629,6 +7951,7 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       charge_amount: hostChargeFor(activity),
       charge_basis: normalizeChargeBasis(activity.charge_basis),
       charge_participants: normalizeCount(activity.host_charge_participants),
+      charge_ready: hostChargeFor(activity) > 0,
       payment_status: activity.payment_status || 'unpaid',
       cover_image: theme.cover_image || '',
       cover_position: theme.cover_position || '50% 50%',
@@ -7815,6 +8138,14 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     // הסכום שהוקפא כשהקישור נוצר. אירוע ותיק שאין לו סכום שמור נופל לחישוב חי,
     // כך שכל קישור שכבר בידי מזמין ממשיך לעבוד בדיוק כמו קודם.
     const amount = hostChargeFor(activity);
+    if (!(amount > 0)) {
+      // מדרגה שלא נמצאה, כלל שנמחק, או אירוע בלי מחיר. עדיף שהמזמין יראה שהמחיר
+      // טרם נקבע מאשר שיישלח לסליקה על סכום שאיש לא קבע.
+      return res.status(409).json({
+        error: 'המחיר לאירוע טרם נקבע. נציג יחזור אליכם עם הסכום המדויק.',
+        code: 'activity_price_undetermined',
+      });
+    }
     const description = `תשלום אירוע: ${activity.name}`;
     if (
       !payment ||
@@ -8294,7 +8625,7 @@ app.post('/api/public/activities/:slug/save-documents', publicFormRateLimit, asy
       }),
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,
-        new_status: 'health_signed',
+        new_status: REGISTRATION_STATUS.DETAILS_COMPLETED,
       }),
     });
     await fileClearanceDocuments(clearance.uploads, {
@@ -8389,7 +8720,7 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
       }),
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,
-        new_status: 'health_signed',
+        new_status: REGISTRATION_STATUS.DETAILS_COMPLETED,
       }),
     });
     const parent = result.crm?.parent || db.getOne('parents', result.order.parent_id);
@@ -8633,7 +8964,7 @@ app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res
       }),
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,
-        new_status: 'health_signed',
+        new_status: REGISTRATION_STATUS.DETAILS_COMPLETED,
       }),
     });
 
@@ -8824,7 +9155,7 @@ app.post('/api/public/pos-checkout/:token/complete', publicFormRateLimit, async 
         source: parent.source || 'pos',
         onStudentStatusChanged: (updated) => automationsService.triggerEvent('status_changed', {
           ...updated,
-          new_status: 'health_signed',
+          new_status: REGISTRATION_STATUS.DETAILS_COMPLETED,
         }),
       });
       await fileClearanceDocuments(clearance.uploads, {
@@ -11050,6 +11381,39 @@ app.post('/api/icount/webhook', async (req, res) => {
         updated_at: new Date().toISOString(),
       });
       if (updated) await persistCore('payments', updated);
+
+      if (payment.intro_booking_id && !alreadyPaid) {
+        const confirmed = await confirmIntroPayment({
+          db,
+          persist: persistCore,
+          bookingId: payment.intro_booking_id,
+          paymentId: payment.id,
+          now: new Date(updated?.paid_at || Date.now()),
+        });
+        if (!confirmed.ok) {
+          const booking = db.getOne(INTRO_COLLECTION, payment.intro_booking_id);
+          if (booking) {
+            const needsReview = db.update(INTRO_COLLECTION, booking.id, {
+              status: 'payment_needs_review',
+              payment_review_reason: confirmed.reason || 'hold_not_active',
+              paid_at: updated?.paid_at || new Date().toISOString(),
+            });
+            if (needsReview) await persistCore(INTRO_COLLECTION, needsReview);
+          }
+          await createTask({
+            db,
+            persist: persistCore,
+            actor: 'icount_webhook',
+            input: {
+              title: `תשלום מאוחר לאימון היכרות — ${booking?.student_name || payment.student_id || ''}`,
+              parent_id: payment.parent_id || null,
+              student_id: payment.student_id || null,
+              priority: 'high',
+              notes: `התשלום התקבל אך שמירת המקום אינה פעילה (${confirmed.reason || 'unknown'}). אין להבטיח מקום לפני בדיקת צוות.`,
+            },
+          });
+        }
+      }
 
       // Fulfill POS sale passes / inventory when payment-link completes
       if (payment.pos_sale_id) {
@@ -14847,6 +15211,93 @@ app.post('/api/pos/sales/:id/cancel', async (req, res) => {
   }
 });
 
+// ─── מחירון פעילויות ─────────────────────────────────────────────────────────
+// כללי תמחור שאפשר לשייך לתבניות ולאירועים. קריאה פתוחה למי שרואה כספים — גם
+// בורר המחירון בטופס האירוע וגם תקציר התבנית צריכים אותה — וכתיבה לבעלים בלבד.
+// אין מחיקה: כלל שנמחק היה מותיר אירועים שאין להם דרך לחשב את עצמם.
+
+app.get('/api/activity-price-rules', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'finance')) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות במחירון' });
+  }
+  const includeInactive = req.query.all === '1';
+  const rules = listPriceRules(db, { includeInactive });
+  res.json(rules.map((rule) => ({
+    ...rule,
+    summary: describeRule(rule),
+    usage: priceRuleUsage(db, rule.id),
+  })));
+});
+
+app.post('/api/activity-price-rules', requireOwner, async (req, res) => {
+  const normalized = normalizePriceRule(req.body || {});
+  const invalid = priceRuleProblem(normalized);
+  if (invalid) return res.status(400).json({ error: invalid });
+  ensureSeedPriceRules(db);
+  const created = db.insert('activity_price_rules', {
+    // מזהה מפורש: db.insert היה טובע `ac…` משתי האותיות הראשונות של שם הטבלה,
+    // ומתנגש חזותית עם מזהי אירועים בכל לוג ובכל בדיקה.
+    id: `pr_${Date.now()}`,
+    ...normalized,
+    version: 1,
+    versions: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  const durable = await persistCore('activity_price_rules', created);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'שמירת שורת המחירון נכשלה' });
+  }
+  res.status(201).json({ ...created, summary: describeRule(created) });
+});
+
+app.put('/api/activity-price-rules/:id', requireOwner, async (req, res) => {
+  const current = db.getOne('activity_price_rules', req.params.id);
+  if (!current) return res.status(404).json({ error: 'שורת המחירון לא נמצאה' });
+  const normalized = normalizePriceRule({ ...current, ...(req.body || {}) });
+  const invalid = priceRuleProblem(normalized);
+  if (invalid) return res.status(400).json({ error: invalid });
+
+  // גרסה עולה רק כשהמספרים זזו. תיקון ניסוח בשם או בהערה שהיה מעלה גרסה היה
+  // מדליק „המחירון עודכן” על כל אירוע קיים, ומרוקן את ההתראה ממשמעות.
+  const moved = ruleNumbersChanged(current, normalized);
+  const version = moved ? (Number(current.version) || 1) + 1 : (Number(current.version) || 1);
+  const versions = moved
+    ? [
+      ...(current.versions || []),
+      { version: Number(current.version) || 1, saved_at: current.updated_at || null, ...ruleNumbers(current) },
+    ].slice(-MAX_RULE_HISTORY)
+    : (current.versions || []);
+
+  const updated = db.update('activity_price_rules', current.id, {
+    ...normalized,
+    version,
+    versions,
+    updated_at: new Date().toISOString(),
+  });
+  const durable = await persistCore('activity_price_rules', updated);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'שמירת שורת המחירון נכשלה' });
+  }
+  res.json({
+    ...updated,
+    summary: describeRule(updated),
+    usage: priceRuleUsage(db, updated.id),
+  });
+});
+
+/** מה שמונע שורת מחירון שאי אפשר לחשב לפיה מחיר. */
+function priceRuleProblem(rule) {
+  if (!rule.name) return 'יש לתת שם לשורת המחירון';
+  if (rule.method === 'flat' && !rule.event_price) return 'יש להזין מחיר לאירוע';
+  if (rule.method === 'per_head' && !rule.participant_price) return 'יש להזין מחיר למשתתף';
+  if (rule.method === 'brackets') {
+    if (!rule.brackets.length) return 'יש להזין לפחות מדרגה אחת';
+    if (!rule.participant_price) return 'יש להזין מחיר למשתתף יחיד בהרשמה פתוחה';
+  }
+  return '';
+}
+
 // ─── Coupons ────────────────────────────────────────────────────────────────
 // A coupon is the benefit a campaign (or a member of staff) handed to one
 // customer. Staff may read and issue them; only the owner deletes campaigns.
@@ -17294,7 +17745,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
   if (student) {
     const prevStatus = student.status;
     student = db.update('students', student.id, {
-      status: prevStatus === 'registered' ? prevStatus : 'health_signed',
+      status: statusAfterHealthSignature(prevStatus),
       parentId: student.parentId || parent.id,
       birthDate: birthDate || student.birthDate || '',
       name: cleanClimberName || student.name,
@@ -17305,7 +17756,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     // לדעת את ההבדל לפני שהוא מבטיח משהו.
     automationsService.triggerEvent('status_changed', {
       ...student,
-      new_status: 'health_signed',
+      new_status: student.status,
       participation_scope: normalizeParticipationScope(template?.slug || templateSlug || 'wall'),
     });
   } else {
@@ -17316,7 +17767,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
       name: cleanClimberName,
       parentId: parent.id,
       groupId: null,
-      status: 'health_signed',
+      status: REGISTRATION_STATUS.DETAILS_COMPLETED,
       birthDate: birthDate || '',
       notes: 'הגיע אוטומטית מטופס הצהרת בריאות + הסרת אחריות',
       levelGrade: null,
@@ -18193,7 +18644,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       source: parentBody.source || 'form',
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,
-        new_status: 'health_signed',
+        new_status: REGISTRATION_STATUS.DETAILS_COMPLETED,
       }),
     });
   } catch (err) {
@@ -18754,7 +19205,9 @@ app.delete('/api/students/:id/health-declaration', async (req, res) => {
     updated = db.update('students', studentId, {
       healthSignedAt: null,
       waiverSignedAt: null,
-      status: student.status === 'health_signed' ? 'lead_new' : student.status,
+      status: ['health_signed', REGISTRATION_STATUS.DETAILS_COMPLETED].includes(student.status)
+        ? REGISTRATION_STATUS.LEAD_NEW
+        : student.status,
     }) || student;
     await persistCore('students', updated);
   }
@@ -19393,6 +19846,90 @@ async function runParticipationRemindersSafely() {
   }
 }
 
+async function deliverRegistrationLifecycleMessage(payload = {}) {
+  const parent = payload.parent || null;
+  const phone = normalizePhone(parent?.phone || '');
+  if (!phone) throw new Error('registration_lifecycle_parent_phone_missing');
+  const studentName = payload.student?.name || payload.hold?.student_name || 'המתאמן/ת';
+  if (canSendFreeform(parent, 'whatsapp')) {
+    const sent = await whatsappService.sendTextMessage(phone, withBotMark(payload.text || ''), false, {
+      source: 'registration_lifecycle',
+      parentId: parent.id || null,
+      studentId: payload.student?.id || payload.hold?.student_id || null,
+      clip: false,
+    });
+    if (!sent?.success) throw new Error(sent?.error || 'registration_lifecycle_text_failed');
+    return sent;
+  }
+  const template = approvedLifecycleTemplate(db, payload.kind);
+  if (!template) throw new Error(`registration_lifecycle_template_not_approved:${payload.kind}`);
+  const sent = await whatsappService.sendTemplateMessage(
+    phone,
+    template.meta_name || template.name,
+    [studentName],
+    {
+      source: 'registration_lifecycle',
+      parentId: parent.id || null,
+      studentId: payload.student?.id || payload.hold?.student_id || null,
+    }
+  );
+  if (!sent?.success) throw new Error(sent?.error || 'registration_lifecycle_template_failed');
+  return sent;
+}
+
+async function refreshRegistrationLifecycleCache() {
+  if (!supa.isEnabled()) return;
+  const collections = [
+    'students',
+    'parents',
+    'groups',
+    'enrollments',
+    'attendance',
+    HOLD_COLLECTION,
+    WAITLIST_COLLECTION,
+    INTRO_COLLECTION,
+    'registration_lifecycle_events',
+  ];
+  const loaded = await Promise.all(collections.map((collection) => supa.getAll(collection)));
+  collections.forEach((collection, index) => {
+    if (Array.isArray(loaded[index])) db.set(collection, loaded[index]);
+  });
+}
+
+async function runRegistrationLifecycleSafely(now = new Date()) {
+  try {
+    await refreshRegistrationLifecycleCache();
+    const summary = await runRegistrationLifecycle({
+      db,
+      persist: persistCore,
+      now,
+      sendCustomer: deliverRegistrationLifecycleMessage,
+      createTask: (input) => createTask({
+        db,
+        persist: persistCore,
+        input,
+        actor: 'registration_lifecycle',
+      }),
+      isEligible: (student, group) => Boolean(student?.id)
+        && canPlaceInRestrictedGroup(db, student, group).allowed,
+    });
+    if (Object.values(summary).some((value) => Number(value) > 0)) {
+      console.log('Registration lifecycle:', JSON.stringify(summary));
+    }
+    return summary;
+  } catch (error) {
+    console.error('Registration lifecycle failed:', error.message);
+    return { error: error.message };
+  }
+}
+
+app.post('/api/registration-lifecycle/run', requireOwner, async (req, res) => {
+  const now = req.body?.now ? new Date(req.body.now) : new Date();
+  if (Number.isNaN(now.getTime())) return res.status(400).json({ error: 'Invalid time' });
+  const result = await runRegistrationLifecycleSafely(now);
+  return res.status(result.error ? 500 : 200).json(result);
+});
+
 // Start Server (after loading CRM-core data from Supabase)
 initDb({ requireDurable: requiresDurableStore() }).then(() => {
   // Boot just read every core table — the first screen to open should serve
@@ -19437,6 +19974,12 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
     ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
   } catch (err) {
     console.warn('participation form template seed skipped:', err.message);
+  }
+  try {
+    const created = ensureRegistrationLifecycleTemplates({ db, persist: persistCore });
+    if (created.length) console.log(`Registration lifecycle templates seeded: ${created.length}`);
+  } catch (err) {
+    console.warn('registration lifecycle template seed skipped:', err.message);
   }
   Promise.resolve(migrateToTwoBroadcastLists({ database: db, persist: persistCore }))
     .then((result) => {
@@ -19550,6 +20093,12 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Durable seat holds, waitlist offers and intro follow-ups. Every action has
+  // its own event key, so restarts and multiple server instances cannot send it
+  // twice.
+  setTimeout(() => { runRegistrationLifecycleSafely(); }, 75_000);
+  setInterval(() => { runRegistrationLifecycleSafely(); }, 15 * 60 * 1000);
 
   // Missing spouse/adult documents: once three days before and once the day
   // before. Durable send markers make the hourly scan restart-safe.

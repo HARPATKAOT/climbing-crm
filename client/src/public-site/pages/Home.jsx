@@ -195,7 +195,7 @@ export default function Home() {
               <a className="ks-btn ks-btn--light" href={whatsappUrl('שלום, אשמח לעזרה בבחירת פעילות מתאימה בקיר בועז')} target="_blank" rel="noreferrer">
                 פתיחת שיחה בוואטסאפ
               </a>
-              <Link className="ks-btn ks-btn--ghost" style={{ color: '#fff', borderColor: 'rgba(255,255,255,.35)' }} to="/contact">כל פרטי ההגעה</Link>
+              <Link className="ks-btn ks-btn--outline-light" to="/contact">כל פרטי ההגעה</Link>
             </div>
           </div>
         </div>

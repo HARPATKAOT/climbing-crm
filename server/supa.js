@@ -189,6 +189,9 @@ export const OPERATIONAL_TABLES = [
   'campaign_runs',
   'customer_coupons',
   'discount_rules',
+  // מחירון הפעילויות. מסמך לכל כלל, כי מדרגות הן רשימה באורך משתנה —
+  // בטבלה רגילה זו טבלה שנייה ומיגרציה שנייה.
+  'activity_price_rules',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
   // Everything the bot did, in one journal.
@@ -201,6 +204,13 @@ export const OPERATIONAL_TABLES = [
   'bot_reply_claims',
   'ai_service_state',
   'participation_packs',
+  // Registration lifecycle. These remain JSON records for local/read-model
+  // flexibility; the claim RPC added by the migration serializes capacity
+  // changes in PostgreSQL before a seat can be promised.
+  'group_placement_holds',
+  'group_waitlist_entries',
+  'intro_bookings',
+  'registration_lifecycle_events',
   // Financial reporting records. Kept in the durable JSON store so rollout is
   // immediate; the normalized SQL migration adds the long-term indexed model.
   'finance_documents',
@@ -487,6 +497,9 @@ mappers.activities = columnMapper([
   // ומה הוקפא ברגע ששלחנו לו את הקישור.
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'price_template_id', 'host_charge_participants', 'host_charge_amount',
+  // שורת המחירון שהאירוע מתומחר לפיה, והגרסה שלה. הגרסה היא מה שמונע מאירוע
+  // שכבר תומחר לזוז כשמעדכנים מחיר במחירון.
+  'price_rule_id', 'price_rule_version',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 mappers.attendance = columnMapper([
@@ -556,7 +569,8 @@ mappers.activity_templates = columnMapper([
   'cancellation_policy_id', 'cancellation_policy_disabled',
   'theme', 'sort_order', 'is_active',
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
-  // התבנית היא המחירון, ולכן היא נושאת את אותם שדות תמחור כמו האירוע.
+  // תבנית יכולה להצביע על שורת מחירון, או לשאת מספרים משלה — בדיוק כמו אירוע.
+  'price_rule_id',
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
@@ -757,6 +771,53 @@ export const supa = {
 
   /** True when the server holds a service role key rather than a public key. */
   hasServiceRoleKey: () => isServiceRoleKey(SUPABASE_SERVICE_KEY),
+
+  /**
+   * Atomically reserve all group seats in one PostgreSQL transaction.
+   * Production deliberately fails closed when the migration/RPC is missing:
+   * a non-atomic fallback is allowed only while Supabase is disabled locally.
+   */
+  async claimGroupPlacementHold(record) {
+    if (!client) return { ok: false, reason: 'supabase_not_configured' };
+    const { data, error } = await client.rpc('claim_group_placement_hold', {
+      p_hold: record,
+    });
+    if (error) {
+      console.error('Supabase claim_group_placement_hold failed:', error.message);
+      return {
+        ok: false,
+        reason: error.code === 'PGRST202' || /function .* does not exist/i.test(error.message)
+          ? 'atomic_claim_unavailable'
+          : 'atomic_claim_failed',
+        error: error.message,
+      };
+    }
+    const result = data && typeof data === 'object' ? data : {};
+    return {
+      ok: result.ok === true,
+      reason: result.reason || (result.ok ? 'claimed' : 'atomic_claim_failed'),
+      duplicate: result.duplicate === true,
+      record: result.record || record,
+      groupId: result.group_id || null,
+    };
+  },
+
+  async claimRegistrationLifecycleEvent(record) {
+    if (!client) return { claimed: false, reason: 'supabase_not_configured' };
+    const { data, error } = await client.rpc('claim_registration_lifecycle_event', {
+      p_event: record,
+    });
+    if (error) {
+      console.error('Supabase claim_registration_lifecycle_event failed:', error.message);
+      return { claimed: false, reason: 'atomic_event_claim_failed', error: error.message };
+    }
+    const result = data && typeof data === 'object' ? data : {};
+    return {
+      claimed: result.claimed === true,
+      reason: result.reason || '',
+      record: result.record || record,
+    };
+  },
 
   // Load every row of a table, mapped to the app's JS shape.
   async getAll(table) {

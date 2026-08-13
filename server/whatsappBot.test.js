@@ -127,7 +127,7 @@ test('a bot reply is never also signed as a person', () => {
 });
 
 test('a standalone thank-you closes the exchange without another bot turn', () => {
-  for (const text of ['תודה', 'תודה רבה!', 'מעולה תודה 🙏', 'סבבה תודה', 'בסדר, תודה רבה', 'אוקיי תודה']) {
+  for (const text of ['תודה', 'תודה רבה!', 'מעולה תודה 🙏', 'סבבה תודה', 'בסדר, תודה רבה', 'אוקיי תודה', 'נעשה', 'אעשה', 'נטפל', 'נבדוק']) {
     assert.equal(isClosingAcknowledgement(text), true, text);
   }
   for (const text of ['תודה, באיזה יום האימון?', 'כן תודה', 'תודה אבל לא קיבלתי קישור']) {

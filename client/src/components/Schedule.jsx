@@ -2059,6 +2059,9 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [eqBusyId, setEqBusyId] = useState('');
   const [eqEditId, setEqEditId] = useState('');
   const [eqError, setEqError] = useState('');
+  const [waitlistRows, setWaitlistRows] = useState([]);
+  const [waitlistBusy, setWaitlistBusy] = useState(false);
+  const [waitlistError, setWaitlistError] = useState('');
   const c = AGE_COLORS[group.ageCategory] || DEF_COLOR;
 
   const seatedMembers = students.filter(s =>
@@ -2073,16 +2076,25 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const kidMembers = members.filter(s => !s.isAdult);
   const assignable = students.filter(s => !studentInGroup(s, group.id) && s.status !== 'archived');
 
-  // "ממתין להרשמה" is a soft hold taken before the מתנ״ס confirms, and the
-  // whole point of it is that it does not take a seat. The server has always
-  // counted it that way; this screen did not, so a child who had not
-  // registered showed up as filling a place, with nothing to say otherwise.
-  const holdingMembers = members.filter(s => s.status === 'pending_signup');
-  const seatedCount = members.length - holdingMembers.length;
+  const holdingMembers = members.filter((student) => [
+    'awaiting_parent_confirmation',
+    'awaiting_centre_confirmation',
+    'intro_scheduled',
+  ].includes(student.status));
+  const capacityStatuses = new Set([
+    'registered', 'active', 'awaiting_parent_confirmation',
+    'awaiting_centre_confirmation', 'intro_scheduled', 'intro_paid',
+  ]);
+  const localSeatCount = members.filter((student) => (
+    capacityStatuses.has(student.status)
+    || (student.status === 'pending_signup' && student.placement_hold_firm === true)
+  )).length;
+  const seatedCount = Math.max(localSeatCount, Number(group.enrolled) || 0);
+  const hasDefinedCapacity = Number.isFinite(Number(group.maxSlots)) && Number(group.maxSlots) > 0;
 
   const occ    = occupancyOf(seatedCount, group.maxSlots);
-  const isFull = seatedCount >= group.maxSlots;
-  const freeSlots = Math.max(0, group.maxSlots - seatedCount);
+  const isFull = !hasDefinedCapacity || seatedCount >= Number(group.maxSlots);
+  const freeSlots = hasDefinedCapacity ? Math.max(0, Number(group.maxSlots) - seatedCount) : null;
 
   const trainer = employees.find(e => e.id === group.trainer);
   const assistantNames = assistantNamesOf(group, employees);
@@ -2096,6 +2108,39 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     const items = eqByStudent[m.id] || [];
     return items.some((i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given');
   }).length;
+
+  const loadWaitlist = async () => {
+    try {
+      const response = await fetch(`/api/groups/${encodeURIComponent(group.id)}/waitlist`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'טעינת רשימת ההמתנה נכשלה');
+      setWaitlistRows(Array.isArray(body.entries) ? body.entries : []);
+      setWaitlistError('');
+    } catch (error) {
+      setWaitlistRows([]);
+      setWaitlistError(error.message || 'טעינת רשימת ההמתנה נכשלה');
+    }
+  };
+
+  useEffect(() => {
+    loadWaitlist();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.id]);
+
+  const offerNextWaitlist = async () => {
+    setWaitlistBusy(true);
+    setWaitlistError('');
+    try {
+      const response = await fetch(`/api/groups/${encodeURIComponent(group.id)}/waitlist/offer-next`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.reason || 'לא ניתן להציע את המקום');
+      await loadWaitlist();
+    } catch (error) {
+      setWaitlistError(error.message || 'לא ניתן להציע את המקום');
+    } finally {
+      setWaitlistBusy(false);
+    }
+  };
 
   const loadGroupEquipment = async ({ silent = false } = {}) => {
     if (!silent) setEqLoading(true);
@@ -2340,14 +2385,17 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           {/* bdi מבודד כל מספר לעצמו. בלעדיו הדפדפן מצרף „1/12” ו„11”
               לרצף ניטרלי אחד וההצגה יוצאת „11/1/12”. */}
           <span style={{ fontSize: 12, fontWeight: 700, color: occ.text, minWidth: 90 }}>
-            <bdi>{seatedCount}/{group.maxSlots}</bdi>
-            {' · '}
-            <bdi>{freeSlots} פנויים</bdi>
+            {hasDefinedCapacity ? (
+              <>
+                <bdi>{seatedCount}/{group.maxSlots}</bdi>
+                {' · '}
+                <bdi>{freeSlots} פנויים</bdi>
+              </>
+            ) : 'קיבולת לא מוגדרת'}
           </span>
         </div>
 
-        {/* Named, not just excluded from the count: somebody holding a place
-            without having registered is exactly what the team needs to chase. */}
+        {/* Hard holds are part of capacity and stay visible until confirmed or released. */}
         {holdingMembers.length > 0 && (
           <div style={{
             marginTop: 8,
@@ -2360,10 +2408,35 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           }}>
             <Clock size={13} style={{ flexShrink: 0 }} />
             <span>
-              ועוד {holdingMembers.length} ממתינים להרשמה (לא תופסים מקום):
+              {holdingMembers.length} מקומות שמורים וממתינים לאישור:
               {' '}
               {holdingMembers.map((s) => s.name).join(' · ')}
             </span>
+          </div>
+        )}
+
+        {(waitlistRows.length > 0 || waitlistError) && (
+          <div className="card card-p" style={{ marginTop: 9, padding: 9 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 800 }}>
+                רשימת המתנה · {waitlistRows.filter((row) => row.status === 'waiting').length}
+              </span>
+              {hasDefinedCapacity && freeSlots > 0 && waitlistRows.some((row) => row.status === 'waiting') && (
+                <button type="button" className="btn btn-primary btn-xs" disabled={waitlistBusy} onClick={offerNextWaitlist}>
+                  {waitlistBusy ? 'מציע…' : 'הצע לבא בתור'}
+                </button>
+              )}
+            </div>
+            <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+              {waitlistRows.map((row) => (
+                <div key={row.id} style={{ fontSize: 11.5, color: 'var(--text-2)', marginTop: 5 }}>
+                  {row.position}. {row.student_name || row.student_id}
+                  {row.status === 'offered' ? ' · הצעה פעילה' : ''}
+                  {row.status === 'paused_after_acceptance' ? ' · ממתין להחלטת ההורה' : ''}
+                </div>
+              ))}
+            </div>
+            {waitlistError && <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 6 }}>{waitlistError}</div>}
           </div>
         )}
 
@@ -3023,8 +3096,8 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                 ['משך אימון', `${group.duration} דק׳`],
                 ['מדריך אחראי', trainer ? trainer.name : '—'],
                 ['חתך גילאים', group.ageCategory],
-                ['מקסימום תפוסה', `${group.maxSlots} תלמידים`],
-                ['מקומות פנויים', `${freeSlots}`],
+                ['מקסימום תפוסה', hasDefinedCapacity ? `${group.maxSlots} תלמידים` : 'לא מוגדר'],
+                ['מקומות פנויים', hasDefinedCapacity ? `${freeSlots}` : 'לא ניתן להבטיח מקום'],
               ].map(([k, v]) => (
                 <div key={k} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',

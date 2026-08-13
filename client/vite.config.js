@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // Lets an isolated worktree reuse the host project's public browser config
+  // without copying credentials into the worktree. Production keeps '.'.
+  envDir: process.env.VITE_ENV_DIR || '.',
   plugins: [react()],
   server: {
     port: 3000,

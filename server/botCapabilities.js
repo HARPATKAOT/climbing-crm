@@ -66,12 +66,17 @@ export const BOT_CAPABILITIES = [
   {
     key: 'placement',
     label: 'שיבוץ לקבוצה',
-    hint: 'שיבוץ רך «ממתין להרשמה», רשימת המתנה, והוצאה מקבוצה',
-    source: 'כותב לכרטיס המתאמן; מתאמן רשום לא זז',
+    hint: 'שמירת מקום קשיחה, אימון היכרות, רשימת המתנה והוצאה מקבוצה',
+    source: 'כותב לשמירת המקום ולתור; מתאמן רשום לא זז',
     tools: [
       'getPlacementEligibility',
       'requestPlacementApproval',
       'startSignup',
+      'scheduleIntroSession',
+      'acceptWaitlistOffer',
+      'resolveOtherWaitlists',
+      'continueAfterIntro',
+      'retryIntroAfterNoShow',
       'joinWaitlist',
       'cancelSignup',
     ],
@@ -121,18 +126,6 @@ export const BOT_CAPABILITIES = [
       placeholder: '0501234567, 0521234567',
       hint: 'מופרדים בפסיק. ריק = התהליך לא יופעל על אף הודעה.',
     },
-  },
-  {
-    key: 'centre_marks_registered',
-    label: 'אישור מהמתנ״ס מסמן «רשום» אוטומטית',
-    hint: 'כבוי: הבוט רק מודיע לצוות שצריך לסמן, והסטטוס לא זז. דלוק: הוא '
-      + 'מסמן בעצמו לפי דיווח המתנ״ס',
-    source: 'משנה את הסטטוס בכרטיס המתאמן',
-    // Deliberately off. Changing a trainee's registration on somebody else's
-    // word is the one thing worth watching before letting it happen by itself.
-    defaultOff: true,
-    tools: [],
-    requires: 'centre_report',
   },
 ];
 

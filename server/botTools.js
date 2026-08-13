@@ -31,10 +31,23 @@ import { isOpenIdea, openActivityIdeas } from './activityIdeas.js';
 import {
   frequencyForRequest,
   groupsForFrequency,
-  holdExpiryFrom,
-  holdNoticeForCustomer,
 } from './placementHold.js';
-import { enrollmentId } from './studentGroups.js';
+import {
+  HOLD_COLLECTION,
+  INTRO_COLLECTION,
+  WAITLIST_COLLECTION,
+  acceptWaitlistOffer as acceptDurableWaitlistOffer,
+  activeHoldForStudent,
+  continueAfterIntro as continueDurableIntro,
+  createIntroBooking,
+  createPlacementHold,
+  joinGroupWaitlist,
+  releasePlacementHold,
+  resolveOtherWaitlists,
+  rescheduleIntroAfterNoShow,
+  REGISTRATION_STATUS,
+} from './registrationLifecycle.js';
+import { createIntroPaymentRequest } from './introPayments.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -496,8 +509,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     name: 'startSignup',
     description:
       `שומר שיבוץ של מתאמן שכבר חתם על ${FORM_SHORT} לקבוצה עד השלמת ההרשמה `
-      + 'בקישור המתנ״ס. השיבוץ אינו תופס מקום בקבוצה. סטטוס ההמתנה הוא פנימי '
-      + 'ואין לומר אותו ללקוח. חובה שם ילד וקבוצה מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
+      + 'בקישור המתנ״ס. הפעולה יוצרת שמירת מקום אמיתית לשלושה ימים ורק הצלחה שלה מתירה לומר שהמקום נשמר. '
+      + 'אם הקיבולת חסרה או שהקבוצה מלאה — אין להבטיח מקום. חובה שם ילד וקבוצה מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
     parameters: {
       type: 'object',
       properties: {
@@ -508,6 +521,72 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'scheduleIntroSession',
+    description:
+      `יוצר אימון היכרות בתשלום למתאמן שכבר השלים ${FORM_SHORT}, בקבוצה ובתאריך הקרוב האמיתיים. `
+      + 'הכלי בודק קיבולת, שומר מקום רק עד סוף יום התשלום, לוקח מחיר ממוצר פעיל יחיד בשם אימון היכרות '
+      + 'ומחזיר קישור משויך לילד, לקבוצה ולתאריך. אם חסר מחיר או מקום — אין להבטיח אימון.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+        groupId: { type: 'string', description: 'מזהה הקבוצה כפי שחזר מכלי הקבוצות' },
+        grade: { type: 'string', description: 'אות כיתה' },
+        band: { type: 'string', description: 'חטיבה / תיכון / בוגרים' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        time: { type: 'string', description: 'שעת הקבוצה' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'acceptWaitlistOffer',
+    description:
+      'מקבל הצעת מקום פעילה מרשימת המתנה ומתחיל שמירת מקום של שלושה ימים. '
+      + 'יש להשתמש רק אחרי שההורה אישר במפורש שהוא רוצה להתקדם.',
+    parameters: {
+      type: 'object',
+      properties: { childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' } },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'resolveOtherWaitlists',
+    description:
+      'שומר או מסיר את הילד מרשימות ההמתנה האחרות לאחר שכבר התקבל לקבוצה אחת. '
+      + 'יש לקרוא לכלי רק אחרי שההורה ענה במפורש אם להשאיר ברשימות האחרות.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+        keep: { type: 'boolean', description: 'true להשאיר ברשימות האחרות; false להסיר מהן' },
+      },
+      required: ['childName', 'keep'],
+    },
+  },
+  {
+    name: 'continueAfterIntro',
+    description:
+      'מעביר אימון היכרות שהסתיים למסלול הרשמה ושומר את המקום לשלושה ימים. '
+      + 'יש להשתמש רק כשההורה כתב במפורש שרוצים להמשיך.',
+    parameters: {
+      type: 'object',
+      properties: { childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' } },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'retryIntroAfterNoShow',
+    description:
+      'יוצר קישור תשלום חדש למפגש הבא אחרי אי־הגעה מאומתת לאימון היכרות. '
+      + 'מותר רק בתוך חלון 24 השעות ורק כשהנוכחות סומנה כאי־הגעה.',
+    parameters: {
+      type: 'object',
+      properties: { childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' } },
       required: ['childName'],
     },
   },
@@ -542,8 +621,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'joinWaitlist',
     description:
-      'משבץ מתאמן שכבר חתם הצהרה לרשימת ההמתנה של קבוצה מלאה. אותם כללים כמו '
-      + 'בשיבוץ רגיל: שם ילד וקבוצה מדויקת.',
+      'מוסיף מתאמן שכבר חתם הצהרה לתור ההמתנה המסודר של קבוצה מלאה. התור נפרד לכל קבוצה ונשמר לפי זמן. '
+      + 'חובה שם ילד וקבוצה מדויקת.',
     parameters: {
       type: 'object',
       properties: {
@@ -893,8 +972,23 @@ export function isRegisteredTrainee(student) {
 /** A pending placement only exists when it points at a real group. */
 export function botVisibleStudentStatus(student, group = null) {
   const status = String(student?.status || '');
-  if (status === 'pending_signup' && !group) return 'health_signed';
+  if (status === 'pending_signup' && !group) return REGISTRATION_STATUS.DETAILS_COMPLETED;
   return status;
+}
+
+async function refreshPlacementData() {
+  if (!supa.isEnabled()) return;
+  const collections = [
+    'students',
+    'enrollments',
+    HOLD_COLLECTION,
+    WAITLIST_COLLECTION,
+    INTRO_COLLECTION,
+  ];
+  const loaded = await Promise.all(collections.map((collection) => supa.getAll(collection)));
+  collections.forEach((collection, index) => {
+    if (Array.isArray(loaded[index])) db.set(collection, loaded[index]);
+  });
 }
 
 /**
@@ -986,7 +1080,7 @@ function pickSingleGroup({ groupId = '', grade, band, day, time, frequency } = {
  * bot — so any placement needs an existing child who already has one. Without a
  * declaration the answer is the form, not a placement.
  */
-function requireDeclaredChild(parent, childName, studentId = '') {
+function requireKnownChild(parent, childName, studentId = '') {
   const kids = parent ? studentsForParent(parent) : [];
   if (!kids.length) {
     return {
@@ -1009,6 +1103,13 @@ function requireDeclaredChild(parent, childName, studentId = '') {
     };
   }
   const student = matches[0];
+  return { student };
+}
+
+function requireDeclaredChild(parent, childName, studentId = '') {
+  const known = requireKnownChild(parent, childName, studentId);
+  if (known.error) return known;
+  const { student } = known;
   // A placement overwrites the child's status and group. Before registration
   // that is the point; on a registered trainee it would silently corrupt a live
   // registration — moving groups is the team's call. Checked before the
@@ -1211,6 +1312,171 @@ export function buildCustomerTools({
       };
     },
 
+    scheduleIntroSession: async ({ childName, groupId, grade, band, day, time } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const picked = pickSingleGroup({ groupId, grade, band, day, time });
+      if (picked.error) return picked;
+      const documents = participationEligibility(db, { studentId: child.student.id });
+      if (!documents.eligible) {
+        return {
+          error: `לפני אימון היכרות צריך להשלים ${FORM_SHORT}.`,
+          צריך_טופס: true,
+        };
+      }
+      const restricted = canPlaceInRestrictedGroup(db, child.student, picked.group);
+      if (!restricted.allowed) {
+        return { error: restricted.reason, שיבוץ: false };
+      }
+      const booking = await createIntroBooking({
+        db,
+        persist: persistCore,
+        student: child.student,
+        parent,
+        group: picked.group,
+        createPaymentLink: createIntroPaymentRequest,
+      });
+      if (!booking.ok) {
+        const messages = {
+          capacity_unknown: 'לקבוצה לא הוגדרה קיבולת, ולכן אי אפשר לקבוע אימון היכרות אוטומטית.',
+          full: 'אין כרגע מקום אמיתי בקבוצה לאימון היכרות.',
+          intro_product_missing: 'לא נמצא מוצר פעיל אחד בשם אימון היכרות בקופה.',
+          intro_product_ambiguous: 'נמצאו כמה מוצרי אימון היכרות פעילים בקופה; הצוות צריך לבחור את הנכון.',
+          no_upcoming_session: 'לא נמצא מפגש פעיל קרוב החל מ־1 בספטמבר.',
+          atomic_claim_unavailable: 'מנגנון שמירת המקום אינו זמין כרגע.',
+        };
+        return {
+          error: messages[booking.reason] || booking.error || 'לא הצלחנו לקבוע אימון היכרות — יש להעביר לצוות.',
+          סיבה: booking.reason || 'intro_booking_failed',
+        };
+      }
+      journal(
+        'intro_booking',
+        `נפתח אימון היכרות ל${child.student.name || 'מתאמן/ת'} ב${describeGroup(picked.group)} בתאריך ${booking.booking.session_date}`,
+        {
+          booking_id: booking.booking.id,
+          group_id: picked.group.id,
+          session_date: booking.booking.session_date,
+          payment_id: booking.booking.payment_id,
+        },
+        child.student
+      );
+      return {
+        אימון_היכרות: child.student.name || '',
+        קבוצה: describeGroup(picked.group),
+        תאריך: booking.booking.session_date,
+        מחיר: booking.booking.price,
+        קישור_תשלום: booking.paymentUrl,
+        קישור_בתוקף_עד: booking.booking.payment_expires_at,
+        הערה: 'רק תשלום מאומת יקבע את האימון וישמור את המקום. אי־הגעה אינה מזכה בהחזר.',
+      };
+    },
+
+    acceptWaitlistOffer: async ({ childName } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const accepted = await acceptDurableWaitlistOffer({
+        db,
+        persist: persistCore,
+        student: child.student,
+      });
+      if (!accepted.ok) {
+        return {
+          error: accepted.reason === 'no_active_offer'
+            ? 'אין כרגע הצעת מקום פעילה לילד הזה.'
+            : 'לא הצלחנו לקבל את הצעת המקום — יש להעביר לצוות.',
+          סיבה: accepted.reason,
+        };
+      }
+      journal('waitlist_offer_accepted', `${child.student.name} קיבל/ה הצעת מקום`, {
+        hold_id: accepted.hold.id,
+        expires_at: accepted.hold.expires_at,
+      }, child.student);
+      return {
+        שיבוץ: child.student.name,
+        שמור_עד: accepted.hold.expires_at,
+        הערה: 'המקום נשמר לשלושה ימים. יש להשלים הרשמה במתנ״ס ולאשר לנו שנרשמתם.',
+      };
+    },
+
+    resolveOtherWaitlists: async ({ childName, keep } = {}) => {
+      await refreshPlacementData();
+      const child = requireKnownChild(parent, childName);
+      if (child.error) return child;
+      const resolved = await resolveOtherWaitlists({
+        db,
+        persist: persistCore,
+        student: child.student,
+        keep,
+      });
+      if (!resolved.ok) {
+        return {
+          error: resolved.reason === 'no_paused_waitlists'
+            ? 'אין כרגע רשימות המתנה אחרות שממתינות להחלטה.'
+            : 'לא הצלחנו לעדכן את רשימות ההמתנה — יש להעביר לצוות.',
+          סיבה: resolved.reason,
+        };
+      }
+      return {
+        מתאמן: child.student.name,
+        החלטה: keep ? 'נשאר ברשימות ההמתנה האחרות' : 'הוסר מרשימות ההמתנה האחרות',
+        רשימות: resolved.entries.map((entry) => entry.group_name || entry.group_id),
+      };
+    },
+
+    continueAfterIntro: async ({ childName } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const continued = await continueDurableIntro({
+        db,
+        persist: persistCore,
+        student: child.student,
+      });
+      if (!continued.ok) {
+        return { error: 'אין כרגע אימון היכרות שממתין להחלטת המשך.', סיבה: continued.reason };
+      }
+      journal('intro_continued', `${child.student.name} ממשיך/ה מאימון היכרות להרשמה`, {
+        hold_id: continued.hold.id,
+        expires_at: continued.hold.expires_at,
+      }, child.student);
+      return {
+        ממשיכים_להרשמה: child.student.name,
+        שמור_עד: continued.hold.expires_at,
+        הערה: 'המקום נשמר לשלושה ימים. יש להשלים הרשמה במתנ״ס ולאשר לנו שנרשמתם.',
+      };
+    },
+
+    retryIntroAfterNoShow: async ({ childName } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const retried = await rescheduleIntroAfterNoShow({
+        db,
+        persist: persistCore,
+        student: child.student,
+        createPaymentLink: createIntroPaymentRequest,
+      });
+      if (!retried.ok) {
+        const message = retried.reason === 'no_verified_no_show'
+          ? 'אי־ההגעה עדיין לא אומתה בנוכחות, ולכן אי אפשר לקבוע מפגש נוסף אוטומטית.'
+          : (retried.reason === 'no_intro_decision_hold'
+            ? 'חלון 24 השעות לקביעת מפגש נוסף אינו פעיל.'
+            : 'לא הצלחנו לפתוח אימון היכרות נוסף — יש להעביר לצוות.');
+        return { error: message, סיבה: retried.reason };
+      }
+      return {
+        אימון_היכרות_נוסף: child.student.name,
+        תאריך: retried.booking.session_date,
+        מחיר: retried.booking.price,
+        קישור_תשלום: retried.paymentUrl,
+        קישור_בתוקף_עד: retried.booking.payment_expires_at,
+        הערה: 'רק תשלום מאומת קובע את המפגש. אי־הגעה אינה מזכה בהחזר.',
+      };
+    },
+
     /**
      * Which days are open, and — said outright — whether today is one of them.
      *
@@ -1409,6 +1675,7 @@ export function buildCustomerTools({
      * so it becomes a line on the list Carmit is asked about on Sunday.
      */
     reportCentreRegistration: async ({ childName } = {}) => {
+      await refreshPlacementData();
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const kids = studentsForParent(parent);
       if (!kids.length) return { error: 'אין מתאמן בכרטיס — יש להעביר לצוות' };
@@ -1922,6 +2189,7 @@ export function buildCustomerTools({
     },
 
     startSignup: async ({ childName, studentId, groupId, grade, band, day, time, frequency } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
       const child = requireDeclaredChild(parent, childName, studentId);
       if (child.error) return child;
       const picked = pickSingleGroup({ groupId, grade, band, day, time, frequency });
@@ -1945,10 +2213,10 @@ export function buildCustomerTools({
 
       // Two model turns may overlap when the customer adds another short
       // approval while the first turn is still using tools. Repeating the
-      // exact same soft placement must not create another journal row, staff
+      // exact same hard hold must not create another journal row, staff
       // notice or follow-up — it is one business action.
-      if (String(student.status || '') === 'pending_signup'
-          && String(student.groupId || '') === String(group.id || '')) {
+      const existingHold = activeHoldForStudent(db, student.id);
+      if (existingHold?.group_ids?.map(String).includes(String(group.id))) {
         const registrationPack = await tools.getRegistrationPack({
           childName: student.name || childName,
           studentId: student.id,
@@ -1962,12 +2230,12 @@ export function buildCustomerTools({
         return {
           שובץ: student.name || '',
           קבוצה: describeGroup(group),
-          סטטוס_פנימי: 'ממתין להרשמה',
+          סטטוס_פנימי: student.status,
           כבר_נשמר: true,
+          שמירת_מקום_עד: existingHold.expires_at,
           חבילת_הרשמה: registrationPack,
-          הערה: 'השיבוץ הזה כבר נשמר. אין לשבץ שוב ואין לשאול שוב לאישור. '
-            + 'קישורי ההרשמה והתשלום מוחזרים בחבילת ההרשמה ויש לשלוח אותם עכשיו. '
-            + 'אין להציג ללקוח את הסטטוס הפנימי.',
+          הערה: 'המקום כבר שמור. אין לשבץ שוב ואין לשאול שוב לאישור. '
+            + 'יש לשלוח את קישורי ההרשמה והציוד פעם אחת בלבד.',
         };
       }
 
@@ -2005,45 +2273,44 @@ export function buildCustomerTools({
       // group rows, not one. Saving only the first left the second day's coach
       // without the trainee and without a register to mark.
       const placedGroups = groupsForFrequency(db.get('groups') || [], group, frequency);
-      const row = db.update('students', student.id, {
-        status: 'pending_signup',
-        groupId: group.id,
-        groupIds: placedGroups.map((g) => String(g.id)),
-        // The seat is taken from now, and only for a few days — see
-        // placementHold.js. Reporting the registration makes it firm.
-        placement_hold_until: holdExpiryFrom(),
-        placement_hold_firm: false,
+      const placement = await createPlacementHold({
+        db,
+        persist: persistCore,
+        student,
+        parent,
+        groups: placedGroups,
+        source: 'bot',
       });
-      if (!row) return { error: 'השיבוץ נכשל — יש להעביר לצוות' };
-      await persistCore('students', row);
-      for (const placed of placedGroups) {
-        const enrollment = {
-          id: enrollmentId(student.id, placed.id),
-          student_id: student.id,
-          group_id: placed.id,
-          status: 'pending',
-          start_date: israelDateStr(),
-          end_date: null,
+      if (!placement.ok) {
+        const messages = {
+          capacity_unknown: 'לקבוצה לא הוגדרה קיבולת, ולכן אי אפשר להבטיח מקום אוטומטית. יש להעביר לצוות.',
+          full: 'הקבוצה מלאה כרגע. אפשר להציע להצטרף לרשימת ההמתנה.',
+          atomic_claim_unavailable: 'מנגנון שמירת המקום אינו זמין כרגע. אין לומר שנשמר מקום; יש להעביר לצוות.',
         };
-        const saved = db.getOne('enrollments', enrollment.id)
-          ? db.update('enrollments', enrollment.id, enrollment)
-          : db.insert('enrollments', enrollment);
-        if (saved) await persistCore('enrollments', saved);
+        return {
+          error: messages[placement.reason] || 'שמירת המקום נכשלה — יש להעביר לצוות',
+          שיבוץ: false,
+          סיבה: placement.reason || 'placement_failed',
+        };
       }
+      const row = placement.student || db.getOne('students', student.id);
       try {
-        await onPlacement?.({ student: row, group, kind: 'pending_signup' });
+        await onPlacement?.({ student: row, group, kind: REGISTRATION_STATUS.AWAITING_PARENT });
       } catch (err) {
         console.error('placement notice failed:', err.message);
       }
 
-      // "ממתין להרשמה" ends when the מתנ״ס confirms, and that confirmation
-      // arrives by phone or not at all. Asking the parent tomorrow is what
-      // turns a soft hold into either a registration or a known problem.
-      await scheduleSignupCheck({ parent, phone, student: row, settings });
       journal(
         'placement',
-        `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — ממתין להרשמה`,
-        { group_id: group.id, group: describeGroup(group), from_status: student.status, to_status: 'pending_signup' },
+        `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — המקום שמור עד ${placement.hold.expires_at}`,
+        {
+          group_id: group.id,
+          group: describeGroup(group),
+          hold_id: placement.hold.id,
+          hold_until: placement.hold.expires_at,
+          from_status: student.status,
+          to_status: REGISTRATION_STATUS.AWAITING_PARENT,
+        },
         row
       );
 
@@ -2060,15 +2327,13 @@ export function buildCustomerTools({
       return {
         שובץ: student.name || '',
         קבוצה: placedGroups.map((g) => describeGroup(g)).join(' + '),
-        סטטוס_פנימי: 'ממתין להרשמה',
-        שמירת_מקום: holdNoticeForCustomer(),
+        סטטוס_פנימי: REGISTRATION_STATUS.AWAITING_PARENT,
+        מקום_שמור: true,
+        שמירת_מקום_עד: placement.hold.expires_at,
         חבילת_הרשמה: registrationPack,
-        הערה: 'השיבוץ נשמר והמקום נתפס. יש לשלוח את קישורי ההרשמה והציוד, ולומר '
-          + 'ללקוח בדיוק את מה שכתוב בשדה «שמירת_מקום» — שהמקום שמור לזמן קצוב '
-          + 'ושעליו לעדכן כשנרשם. הקישור אינו אישור הרשמה; ההרשמה הופכת לסופית '
-          + 'רק אחרי אימות מהמתנ״ס או אישור צוות. אין להציג ללקוח את הסטטוס '
-          + 'הפנימי. נקבעה בדיקה חוזרת פנימית למחר — אין צורך לקרוא '
-          + 'ל-scheduleFollowUp בנוסף.',
+        הערה: `המקום נשמר בפועל עד ${placement.hold.expires_at}. יש לומר בקצרה: `
+          + 'הילד משובץ לקבוצה. כדי לשמור על השיבוץ צריך להירשם במתנ״ס ולאשר לנו שנרשמתם בתוך 3 ימים. '
+          + 'יש לשלוח את קישורי ההרשמה והציוד; הקישור אינו אישור הרשמה סופי.',
       };
     },
 
@@ -2114,14 +2379,22 @@ export function buildCustomerTools({
 
       const groups = db.get('groups') || [];
       const group = groups.find((g) => String(g.id) === String(student.groupId || ''));
-      const row = db.update('students', student.id, {
-        // The declaration is signed and stays signed — that is the state the
-        // child was in before the placement, not a fresh lead.
-        status: 'health_signed',
+      const hold = activeHoldForStudent(db, student.id);
+      const cancelled = hold
+        ? await releasePlacementHold({
+          db,
+          persist: persistCore,
+          hold,
+          reason: 'customer_cancelled',
+          nextStudentStatus: REGISTRATION_STATUS.DETAILS_COMPLETED,
+        })
+        : null;
+      const row = cancelled?.student || db.update('students', student.id, {
+        status: REGISTRATION_STATUS.DETAILS_COMPLETED,
         groupId: null,
       });
       if (!row) return { error: 'ביטול השיבוץ נכשל — יש להעביר לצוות' };
-      await persistCore('students', row);
+      if (!cancelled) await persistCore('students', row);
       try {
         await onPlacement?.({ student: row, group, kind: 'cancelled' });
       } catch (err) {
@@ -2131,14 +2404,14 @@ export function buildCustomerTools({
       journal(
         'placement_cancelled',
         `${student.name || 'מתאמן'} הוסר מ${group ? describeGroup(group) : 'הקבוצה'}`,
-        { group: group ? describeGroup(group) : '', from_status: student.status, to_status: 'health_signed' },
+        { group: group ? describeGroup(group) : '', from_status: student.status, to_status: REGISTRATION_STATUS.DETAILS_COMPLETED },
         row
       );
 
       return {
         בוטל: student.name || '',
         קבוצה_קודמת: group ? describeGroup(group) : '',
-        סטטוס: 'חתם הצהרה — ללא קבוצה',
+        סטטוס: 'הפרטים הושלמו — ללא קבוצה',
         הערה: 'השיבוץ הוסר. אפשר לשבץ לקבוצה אחרת בכל שלב.',
       };
     },
@@ -2158,6 +2431,7 @@ export function buildCustomerTools({
     },
 
     joinWaitlist: async ({ childName, grade, band, day, time, frequency } = {}) => {
+      await Promise.all([refreshParticipationDocuments(), refreshPlacementData()]);
       const child = requireDeclaredChild(parent, childName);
       if (child.error) return child;
       const picked = pickSingleGroup({ grade, band, day, time, frequency });
@@ -2185,12 +2459,16 @@ export function buildCustomerTools({
         }
         return { error: restricted.reason, שיבוץ: false };
       }
-      const row = db.update('students', student.id, {
-        status: 'waitlist',
-        groupId: group.id,
+      const waiting = await joinGroupWaitlist({
+        db,
+        persist: persistCore,
+        student,
+        parent,
+        group,
+        source: 'bot',
       });
-      if (!row) return { error: 'השיבוץ להמתנה נכשל — יש להעביר לצוות' };
-      await persistCore('students', row);
+      if (!waiting.ok) return { error: 'השיבוץ להמתנה נכשל — יש להעביר לצוות' };
+      const row = waiting.student || db.getOne('students', student.id);
       try {
         await onPlacement?.({ student: row, group, kind: 'waitlist' });
       } catch (err) {
@@ -2200,7 +2478,14 @@ export function buildCustomerTools({
       journal(
         'waitlist',
         `${student.name || 'מתאמן'} נכנס לרשימת ההמתנה של ${describeGroup(group)}`,
-        { group_id: group.id, group: describeGroup(group), from_status: student.status, to_status: 'waitlist' },
+        {
+          group_id: group.id,
+          group: describeGroup(group),
+          waitlist_entry_id: waiting.entry?.id,
+          position: waiting.entry?.position,
+          from_status: student.status,
+          to_status: REGISTRATION_STATUS.WAITLIST,
+        },
         row
       );
 
@@ -2208,7 +2493,8 @@ export function buildCustomerTools({
         שובץ: student.name || '',
         קבוצה: describeGroup(group),
         סטטוס: 'רשימת המתנה',
-        הערה: 'נעדכן את הלקוח כשיתפנה מקום.',
+        מיקום_בתור: waiting.entry?.position || null,
+        הערה: 'נעדכן את הלקוח כשיתפנה מקום. התור נשמר לפי זמן ההצטרפות לקבוצה הזו.',
       };
     },
 

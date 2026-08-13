@@ -54,5 +54,3 @@ test('merge replaces only the CRM rolling window', () => {
   assert.deepEqual(merged.map((period) => period.startDate.day), [12, 13, 14, 20]);
   assert.equal(merged.find((period) => period.startDate.day === 13).closed, true);
 });
-
-

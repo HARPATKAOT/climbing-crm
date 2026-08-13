@@ -17,6 +17,14 @@ export function replyKeyForBurst(phone, items = []) {
   return `br-${digest}`;
 }
 
+/** One model/tool turn at a time for a customer, even when reply keys differ. */
+export function conversationReplyLockKey(phone) {
+  const normalized = clean(phone);
+  if (!normalized) return '';
+  const digest = crypto.createHash('sha256').update(`conversation|${normalized}`).digest('hex').slice(0, 32);
+  return `br-lock-${digest}`;
+}
+
 /**
  * How long a claim may sit half-finished before it is treated as abandoned.
  *
@@ -35,7 +43,7 @@ export function claimIsStale(row, now = Date.now()) {
   return !Number.isFinite(at) || now - at > CLAIM_STALE_MS;
 }
 
-export async function claimBotReply(db, replyKey, { phone = '', now = new Date() } = {}) {
+export async function claimBotReply(db, replyKey, { phone = '', now = new Date(), kind = 'reply' } = {}) {
   const id = clean(replyKey);
   if (!id) return { claimed: true, id: '', durable: false };
   const existing = (db.get(BOT_REPLY_CLAIMS) || []).find((row) => String(row.id) === id);
@@ -49,6 +57,7 @@ export async function claimBotReply(db, replyKey, { phone = '', now = new Date()
   const record = {
     id,
     phone: clean(phone),
+    kind,
     status: 'sending',
     claimed_at: new Date(now).toISOString(),
   };
@@ -96,6 +105,7 @@ export function abandonedClaims(db, { now = new Date(), withinMs = 24 * 60 * 60 
   const nowMs = new Date(now).getTime();
   return (db.get(BOT_REPLY_CLAIMS) || []).filter((row) => {
     if (row?.status !== 'sending') return false;
+    if (row?.kind === 'conversation_lock') return false;
     if (row.staff_notified_at) return false;
     const at = Date.parse(row.claimed_at || '');
     if (!Number.isFinite(at)) return false;

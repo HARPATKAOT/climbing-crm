@@ -11,7 +11,15 @@ import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.
 import { enrichGroupsWithBotMeta } from './groupMetadata.js';
 import { currentSeason, eligibilityForStudent, latestLevelTest } from './placementEligibility.js';
 
-export const LEAD_STATUSES = new Set(['lead_new', 'health_signed', 'waitlist']);
+export const LEAD_STATUSES = new Set([
+  'lead_new',
+  'health_signed',
+  'details_completed',
+  'pending_signup',
+  'awaiting_parent_confirmation',
+  'awaiting_centre_confirmation',
+  'waitlist',
+]);
 export const CUSTOMER_STATUSES = new Set([
   'registered',
   'intro_scheduled',
@@ -90,7 +98,7 @@ export function isClosingAcknowledgement(text) {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return /^(?:תודה(?:\s+(?:רבה|לכם|לך|ענקית))?|מעולה(?:\s+תודה)?|סבבה(?:\s+תודה)?|בסדר(?:\s+תודה(?:\s+רבה)?)?|אוקי(?:\s+תודה)?|אוקיי(?:\s+תודה)?)$/u.test(normalized);
+  return /^(?:תודה(?:\s+(?:רבה|לכם|לך|ענקית))?|מעולה(?:\s+תודה)?|סבבה(?:\s+תודה)?|בסדר(?:\s+תודה(?:\s+רבה)?)?|אוקי(?:\s+תודה)?|אוקיי(?:\s+תודה)?|נעשה|אעשה|נטפל|נבדוק)$/u.test(normalized);
 }
 
 /**
@@ -803,7 +811,7 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
       const latest = latestLevelTest(db, s.id);
       const eligibility = eligibilityForStudent(db, s.id, { season: currentSeason() });
       const visibleStatus = s.status === 'pending_signup' && !group
-        ? 'health_signed'
+        ? 'details_completed'
         : (s.status || '—');
       lines.push(
         `מתאמן: ${s.name || '—'} | סטטוס: ${visibleStatus} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'} | מגדר: ${s.gender || 'לא ידוע'} | רמת מבחן אחרונה: ${latest.level || 'לא ידועה'}`

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { db } from './db.js';
 import {
   botSpokeRecently,
+  hasRecentClassSignupIntent,
   placementQuestionAfterForm,
   resumeConversationAfterForm,
 } from './botFormResume.js';
@@ -95,6 +96,27 @@ test('טופס שמולא בלי שיחה עם הבוט אינו פותח שיח
 
     assert.equal(result.sent, false);
     assert.equal(result.reason, 'no_recent_conversation');
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
+test('טופס לכניסה לקיר אינו פותח שאלת שיבוץ לחוג', async () => {
+  const arrivalThread = [
+    { phone: PHONE, direction: 'inbound', message: 'שקד בדרך לטפס', created_at: minutesAgo(20) },
+    { phone: PHONE, direction: 'outbound', is_ai: true, message: 'חסר טופס השתתפות, הנה הקישור', created_at: minutesAgo(15) },
+  ];
+  await withWorld({ parents: [PARENT], messages: arrivalThread }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE,
+      studentNames: ['שקד לוין'],
+      whatsappService: service,
+      now: NOW,
+      isSimulator: true,
+    });
+    assert.equal(hasRecentClassSignupIntent(arrivalThread, NOW), false);
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'no_class_signup_intent');
     assert.equal(service.calls.sent.length, 0);
   });
 });

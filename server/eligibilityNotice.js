@@ -15,19 +15,26 @@
 
 export const ELIGIBILITY_NOTICE_COLLECTION = 'program_eligibility';
 
-/** הנוסח כפי שנקבע — קצר, ונגמר בשאלה שאפשר לענות עליה במילה אחת. */
-export function eligibilityNoticeMessage() {
+function approvalWord(gender = '') {
+  const normalized = String(gender || '').toLowerCase();
+  if (/נקבה|female|בת/u.test(normalized)) return 'מאושרת';
+  if (/זכר|male|בן/u.test(normalized)) return 'מאושר';
+  return 'מאושר/ת';
+}
+
+/** קצר, אישי, ומציין את הקבוצה שבאמת אושרה. */
+export function eligibilityNoticeMessage({ studentName = 'המתאמן', groupName = 'קבוצת מתקדמים', gender = '' } = {}) {
   return [
-    'מנהל אישר לכם זכאות להרשמה לקבוצת מתקדמים',
+    `${studentName} ${approvalWord(gender)} להרשמה ל${groupName}.`,
     'האם תרצו להמשיך בהרשמה?',
   ].join('\n');
 }
 
 /** מה הצוות צריך לדעת כשהחלון סגור ואי אפשר לכתוב ללקוח. */
-export function eligibilityStaffNotice({ studentName = '', parentName = '', phone = '' } = {}) {
+export function eligibilityStaffNotice({ studentName = '', groupName = '', parentName = '', phone = '' } = {}) {
   return [
-    '🎯 אושרה זכאות למתקדמים — צריך להודיע ללקוח',
-    `${studentName || 'מתאמן'} · ${parentName || '—'} · ${phone || ''}`,
+    '🎯 אושרה זכאות — צריך להודיע ללקוח',
+    `${studentName || 'מתאמן'} · ${groupName || 'מתקדמים/נבחרת'} · ${parentName || '—'} · ${phone || ''}`,
     '← חלון 24 השעות סגור, הבוט לא יכול לפתוח שיחה',
   ].join('\n');
 }
@@ -55,6 +62,8 @@ export async function announceProgramEligibility({
   if (!parent || !phone) return { ok: false, reason: 'no_phone' };
 
   const stamp = new Date(now).toISOString();
+  const group = db?.getOne?.('groups', row.group_id) || null;
+  const groupName = String(group?.name || '').trim() || 'קבוצת מתקדמים או נבחרת';
   const mark = async (patch) => {
     const updated = db?.update?.(ELIGIBILITY_NOTICE_COLLECTION, row.id, { ...patch, updated_at: stamp });
     if (updated && typeof persist === 'function') await persist(ELIGIBILITY_NOTICE_COLLECTION, updated);
@@ -64,6 +73,7 @@ export async function announceProgramEligibility({
   if (!windowOpen) {
     await notifyStaff?.(eligibilityStaffNotice({
       studentName: student?.name || '',
+      groupName,
       parentName: parent?.name || '',
       phone,
     }));
@@ -71,7 +81,11 @@ export async function announceProgramEligibility({
     return { ok: true, sent: false, handedToStaff: true };
   }
 
-  const result = await sendReply?.(phone, eligibilityNoticeMessage());
+  const result = await sendReply?.(phone, eligibilityNoticeMessage({
+    studentName: student?.name || 'המתאמן',
+    groupName,
+    gender: student?.gender || '',
+  }));
   if (!result?.success) return { ok: false, reason: 'send_failed', error: result?.error || '' };
   await mark({ notified_at: stamp });
   return { ok: true, sent: true };

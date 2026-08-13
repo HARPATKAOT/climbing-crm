@@ -142,6 +142,8 @@ export default function ActivityRegistrationPanel({
   canViewFinance = true,
   hideRegistrationToggle = false,
   templateMode = false,
+  // The price-book row used by this event; null means the event owns its numbers.
+  priceRuleNumbers = null,
   confirmNavigation = null,
 }) {
   const navigate = useNavigate();
@@ -967,20 +969,25 @@ export default function ActivityRegistrationPanel({
   // המשתתפים לחיוב, אחרי רצפת המינימום ולפני התקרה.
   const perParticipantCharge = normalizeChargeBasis(form.charge_basis) === 'per_participant';
   const registeredCount = regs.length;
-  const chargeBreakdown = hostChargeBreakdown(form, { registeredCount });
+  const chargeBreakdown = hostChargeBreakdown(form, {
+    registeredCount,
+    numbers: priceRuleNumbers,
+  });
   // שתי סיבות שונות לכך שהחיוב אינו לפי מספר הנרשמים, ואסור לבלבל ביניהן:
   // או שהצוות תיקן ידנית את המספר, או שהמינימום הרים אותו. תיקון ידני ל-26
   // כשנרשמו 12 אינו „חיוב לפי המינימום”, ואמירה כזאת שולחת לחפש באג שאין.
   const overrideCount = normalizeCount(form.host_charge_participants);
   const flooredByMinimum = perParticipantCharge
     && chargeBreakdown.registeredCount < (chargeBreakdown.billableCount || 0);
-  const chargeNote = !perParticipantCharge
-    ? ''
-    : overrideCount != null && overrideCount !== registeredCount
-      ? `נרשמו ${registeredCount} — החיוב הוא על ${chargeBreakdown.billableCount}.`
-      : flooredByMinimum
-        ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
-        : '';
+  const chargeNote = chargeBreakdown.unpriced
+    ? describeEventCharge(chargeBreakdown)
+    : !perParticipantCharge
+      ? ''
+      : overrideCount != null && overrideCount !== registeredCount
+        ? `נרשמו ${registeredCount} — החיוב הוא על ${chargeBreakdown.billableCount}.`
+        : flooredByMinimum
+          ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
+          : '';
   const displayedCharge = displayedHostCharge(chargeBreakdown, hostPayment, hostPayStatus);
   const hostEnteredAmountLabel = formatIls(displayedCharge.entered);
   const hostChargeAmountLabel = formatIls(displayedCharge.gross);

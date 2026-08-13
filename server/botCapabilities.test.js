@@ -40,19 +40,10 @@ test('a capability is on until it is explicitly turned off', () => {
     if (optIn.has(key)) continue;
     assert.equal(isCapabilityEnabled({}, key), true, key);
   }
-  // Except one that was born off on purpose: it changes a trainee's
-  // registration on the community centre's word, and it stays off until
-  // somebody has watched it work.
-  assert.equal(isCapabilityEnabled({}, 'centre_marks_registered'), false);
-  assert.equal(isCapabilityEnabled({ botCap_centre_marks_registered: true }, 'centre_marks_registered'), true);
-  // And it cannot outlive the exchange it belongs to.
-  assert.equal(
-    isCapabilityEnabled(
-      { botCap_centre_marks_registered: true, botCap_centre_report: false },
-      'centre_marks_registered'
-    ),
-    false
-  );
+  // Carmit's fixed exchange is handled atomically by the centre-report
+  // capability itself; there is no second hidden switch for the mutation.
+  assert.equal(isCapabilityEnabled({}, 'centre_report'), true);
+  assert.equal(isCapabilityEnabled({ botCap_centre_report: false }, 'centre_report'), false);
   assert.equal(isCapabilityEnabled({ botCap_events: false }, 'events'), false);
   assert.equal(isCapabilityEnabled({}, 'no_such_capability'), false);
 });
@@ -62,7 +53,15 @@ test('turning off a capability withdraws its tools and nothing else', () => {
   assert.equal(all.has('startSignup'), true);
 
   const noPlacement = enabledToolNames({ botCap_placement: false });
-  for (const tool of ['startSignup', 'joinWaitlist', 'cancelSignup']) {
+  for (const tool of [
+    'startSignup',
+    'scheduleIntroSession',
+    'acceptWaitlistOffer',
+    'continueAfterIntro',
+    'retryIntroAfterNoShow',
+    'joinWaitlist',
+    'cancelSignup',
+  ]) {
     assert.equal(noPlacement.has(tool), false, tool);
   }
   // Neighbouring capabilities are untouched.

@@ -105,7 +105,7 @@ export default function TripDetail() {
             <p>אם כבר יש פעילות ביומן אפשר להירשם אליה מיד. לקבוצה פרטית נתאים מועד, קצב ורמת אתגר.</p>
             <div className="ks-actions">
               <a className="ks-btn ks-btn--light" href={whatsappUrl(message)} target="_blank" rel="noreferrer">שיחה על {trip.name}</a>
-              <Link className="ks-btn ks-btn--ghost" style={{ color: '#fff', borderColor: 'rgba(255,255,255,.35)' }} to="/calendar">
+              <Link className="ks-btn ks-btn--outline-light" to="/calendar">
                 צפייה ביומן <ArrowLeft size={18} />
               </Link>
             </div>

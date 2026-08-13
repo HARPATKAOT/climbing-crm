@@ -127,8 +127,6 @@ function eligibleGroupIdsFromRows(rows = [], groups = []) {
       explicit.forEach((id) => ids.add(id));
       continue;
     }
-    // Backwards-compatible display for eligibility saved before concrete
-    // groups existed. The next save converts it to explicit group ids.
     groups.forEach((group) => {
       const program = restrictedProgramForGroup(group);
       if (program && (row.program === 'advanced_squads' || row.program === program)) ids.add(String(group.id));
@@ -681,6 +679,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingFollowup, setSavingFollowup] = useState(false);
   const [programEligibility, setProgramEligibility] = useState([]);
   const [editEligibleGroupIds, setEditEligibleGroupIds] = useState([]);
+  const [lifecycleBusy, setLifecycleBusy] = useState('');
+  const [lifecycleMessage, setLifecycleMessage] = useState('');
+  const [registrationLifecycleState, setRegistrationLifecycleState] = useState(
+    student.registrationLifecycle || {}
+  );
+
+  // Keep an open card current even when the surrounding customer list still
+  // has an older snapshot after a background expiry or waitlist offer.
+  useEffect(() => {
+    let cancelled = false;
+    setRegistrationLifecycleState(student.registrationLifecycle || {});
+    fetch(`/api/students/${student.id}/registration-lifecycle`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload) setRegistrationLifecycleState(payload);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [student.id]); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Edit Form Fields (student)
   // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
@@ -958,7 +975,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     healthOnly: healthOnlySelected,
   });
   // Signed if status says so, declaration exists, or durable timestamp was saved on the student
-  const isHealthSigned = student.status === 'health_signed'
+  const isHealthSigned = ['health_signed', 'details_completed', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation'].includes(student.status)
     || !!student.healthSignedAt
     || !!student.waiverSignedAt
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
@@ -3026,6 +3043,44 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const studentStatusMeta = STATUSES[student.status];
   const statusSummary = studentStatusMeta?.label || student.status || '—';
   const statusColor = studentStatusMeta?.color || '#60A5FA';
+  const registrationLifecycle = registrationLifecycleState;
+  const placementHold = registrationLifecycle.hold || null;
+  const lifecycleWaitlists = (registrationLifecycle.waitlists || [])
+    .filter((entry) => ['waiting', 'offered', 'paused_after_acceptance'].includes(entry.status));
+  const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
+    .includes(registrationLifecycle.intro?.status)
+    ? registrationLifecycle.intro
+    : null;
+  const hasRegistrationLifecycle = Boolean(placementHold || lifecycleWaitlists.length || introBooking);
+  const lifecycleSummary = placementHold
+    ? (placementHold.phase === 'awaiting_centre' ? 'ממתין לאישור מתנ״ס' : 'מקום שמור')
+    : (lifecycleWaitlists.length ? `${lifecycleWaitlists.length} רשימות המתנה` : 'אימון היכרות');
+  const lifecycleDate = (value) => {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('he-IL');
+  };
+  const runLifecycleAction = async (key, path, body = {}) => {
+    setLifecycleBusy(key);
+    setLifecycleMessage('');
+    try {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || payload.reason || 'הפעולה נכשלה');
+      setLifecycleMessage('הפעולה נשמרה');
+      await refreshData?.();
+      const lifecycleResponse = await fetch(`/api/students/${student.id}/registration-lifecycle`);
+      if (lifecycleResponse.ok) setRegistrationLifecycleState(await lifecycleResponse.json());
+    } catch (error) {
+      setLifecycleMessage(error.message || 'הפעולה נכשלה');
+    } finally {
+      setLifecycleBusy('');
+    }
+  };
   const mailingListSummary = (() => {
     if (!parent?.id) return 'אין הורה';
     const active = broadcastListDefs.filter((list) => broadcastLists[list.key] !== false).length;
@@ -6317,6 +6372,76 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               />
             )}
 
+            {hasRegistrationLifecycle && (
+              <FolderRow
+                id="registration-lifecycle"
+                title="שמירת מקום והרשמה"
+                icon={CalendarDays}
+                accent="#FBBF24"
+                summary={lifecycleSummary}
+                open={openFolder === 'registration-lifecycle'}
+                onToggle={toggleFolder}
+                renderBody={() => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {placementHold && (
+                      <div className="card card-p" style={{ padding: 10 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13 }}>
+                          {placementHold.phase === 'awaiting_parent' && 'מקום שמור · ממתין לאישור הורה'}
+                          {placementHold.phase === 'awaiting_centre' && 'מקום שמור · ממתין לאישור מתנ״ס'}
+                          {placementHold.phase === 'waitlist_offer' && 'הצעת מקום מרשימת ההמתנה'}
+                          {placementHold.phase === 'intro_payment' && 'אימון היכרות · ממתין לתשלום'}
+                          {placementHold.phase === 'intro_scheduled' && 'אימון היכרות נקבע'}
+                          {placementHold.phase === 'intro_decision' && 'אימון היכרות · ממתין להחלטה'}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 12, color: 'var(--text-3)' }}>
+                          {placementHold.group_ids?.map((id) => groups.find((item) => String(item.id) === String(id))?.name || id).join(' · ')}
+                          {placementHold.expires_at ? ` · עד ${lifecycleDate(placementHold.expires_at)}` : ''}
+                        </div>
+                        {canManageBilling && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
+                            {placementHold.phase === 'waitlist_offer' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('accept', `/api/students/${student.id}/waitlist/accept`)}>
+                                {lifecycleBusy === 'accept' ? 'שומר…' : 'קבלת המקום'}
+                              </button>
+                            )}
+                            {placementHold.phase === 'intro_decision' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('continue', `/api/students/${student.id}/intro/continue`)}>
+                                {lifecycleBusy === 'continue' ? 'שומר…' : 'ממשיכים להרשמה'}
+                              </button>
+                            )}
+                            {placementHold.phase === 'awaiting_parent' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('parent', `/api/students/${student.id}/registration/parent-confirmation`)}>
+                                {lifecycleBusy === 'parent' ? 'שומר…' : 'ההורה אישר הרשמה'}
+                              </button>
+                            )}
+                            <button className="btn btn-ghost btn-xs" disabled={!!lifecycleBusy}
+                              onClick={() => runLifecycleAction('release', `/api/placement-holds/${placementHold.id}/release`)}>
+                              {lifecycleBusy === 'release' ? 'משחרר…' : 'שחרור המקום'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {introBooking && (
+                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
+                      </div>
+                    )}
+                    {lifecycleWaitlists.map((entry) => (
+                      <div key={entry.id} style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        רשימת המתנה · {entry.group_name || entry.group_id}
+                        {entry.position ? ` · מקום ${entry.position}` : ''}
+                      </div>
+                    ))}
+                    {lifecycleMessage && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}
+                  </div>
+                )}
+              />
+            )}
+
             {/* Status & notes folder */}
             <FolderRow
               id="status"
@@ -6755,13 +6880,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <label
                           key={groupId}
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 9,
-                            padding: '9px 11px',
+                            display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px',
                             border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
-                            borderRadius: 10,
-                            cursor: 'pointer',
+                            borderRadius: 10, cursor: 'pointer',
                             background: checked ? 'rgba(96,165,250,0.08)' : 'transparent',
                           }}
                         >
@@ -6769,9 +6890,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             type="checkbox"
                             checked={checked}
                             onChange={() => setEditEligibleGroupIds((previous) => (
-                              checked
-                                ? previous.filter((id) => id !== groupId)
-                                : [...previous, groupId]
+                              checked ? previous.filter((id) => id !== groupId) : [...previous, groupId]
                             ))}
                             style={{ accentColor: 'var(--primary)', width: 17, height: 17 }}
                           />
@@ -7340,6 +7459,51 @@ export default function Leads({
   // the signature images, which nothing on this screen draws and which are 30
   // times the weight of everything the marks actually read.
   const [declarations, setDeclarations] = useState([]);
+  const [showLifecycleMigration, setShowLifecycleMigration] = useState(false);
+  const [lifecycleMigrationReport, setLifecycleMigrationReport] = useState(null);
+  const [lifecycleMigrationBusy, setLifecycleMigrationBusy] = useState(false);
+  const [lifecycleMigrationMessage, setLifecycleMigrationMessage] = useState('');
+
+  const runLifecycleMigrationDryRun = async () => {
+    setLifecycleMigrationBusy(true);
+    setLifecycleMigrationMessage('');
+    try {
+      const response = await fetch('/api/registration-lifecycle/dry-run');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'בדיקת המעבר נכשלה');
+      setLifecycleMigrationReport(payload);
+    } catch (error) {
+      setLifecycleMigrationMessage(error.message || 'בדיקת המעבר נכשלה');
+    } finally {
+      setLifecycleMigrationBusy(false);
+    }
+  };
+
+  const applyLifecycleMigration = async () => {
+    if (!lifecycleMigrationReport?.safe_to_apply) return;
+    if (!window.confirm('להפעיל את מעבר שמירת המקומות על הרשומות הקיימות?')) return;
+    setLifecycleMigrationBusy(true);
+    setLifecycleMigrationMessage('');
+    try {
+      const response = await fetch('/api/registration-lifecycle/migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approved: true,
+          confirmation: 'APPLY_REGISTRATION_LIFECYCLE_MIGRATION',
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || payload.reason || 'המעבר לא הושלם');
+      setLifecycleMigrationMessage(`המעבר הושלם: ${payload.holds || 0} שמירות מקום, ${payload.waitlists || 0} רשומות המתנה.`);
+      await refreshData();
+      await runLifecycleMigrationDryRun();
+    } catch (error) {
+      setLifecycleMigrationMessage(error.message || 'המעבר לא הושלם');
+    } finally {
+      setLifecycleMigrationBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/health-declarations?summary=1')
@@ -7902,8 +8066,55 @@ export default function Leads({
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <Plus size={16} /> ליד חדש
           </button>
+          {canManageBilling && (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                setShowLifecycleMigration((value) => !value);
+                if (!lifecycleMigrationReport) runLifecycleMigrationDryRun();
+              }}
+            >
+              מעבר שמירת מקומות
+            </button>
+          )}
         </div>
       </div>
+
+      {showLifecycleMigration && canManageBilling && (
+        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div>
+              <strong>מעבר שמירת מקומות</strong>
+              {lifecycleMigrationReport && (
+                <div className="section-sub" style={{ marginTop: 4 }}>
+                  שמירות: {lifecycleMigrationReport.plannedHolds?.filter((row) => !row.status_only).length || 0} · המתנה: {lifecycleMigrationReport.plannedWaitlists?.length || 0} · חריגים: {(lifecycleMigrationReport.uncertain?.length || 0) + (lifecycleMigrationReport.overloaded?.length || 0) + (lifecycleMigrationReport.unverifiedIntroBookings?.length || 0)}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-sm btn-ghost" type="button" disabled={lifecycleMigrationBusy} onClick={runLifecycleMigrationDryRun}>
+                בדיקה מחדש
+              </button>
+              <button className="btn btn-sm btn-primary" type="button" disabled={lifecycleMigrationBusy || !lifecycleMigrationReport?.safe_to_apply} onClick={applyLifecycleMigration}>
+                הפעל מעבר
+              </button>
+            </div>
+          </div>
+          {lifecycleMigrationBusy && <div className="section-sub" style={{ marginTop: 8 }}>בודק...</div>}
+          {lifecycleMigrationReport && !lifecycleMigrationReport.safe_to_apply && (
+            <div className="alert alert-warn" style={{ marginTop: 10 }}>
+              המעבר חסום עד לטיפול בחריגים. לא השתנו נתונים.
+            </div>
+          )}
+          {lifecycleMigrationReport?.safe_to_apply && (
+            <div className="alert alert-success" style={{ marginTop: 10 }}>
+              הבדיקה נקייה. אפשר להפעיל את המעבר.
+            </div>
+          )}
+          {lifecycleMigrationMessage && <div className="alert" style={{ marginTop: 10 }}>{lifecycleMigrationMessage}</div>}
+        </div>
+      )}
 
       {loadError && (
         <div

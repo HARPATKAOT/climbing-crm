@@ -18,7 +18,7 @@
  * שלושתם עוברים לצוות עם הסיבה. דיווח שגוי למתנ״ס הוא חיוב שגוי למשפחה.
  */
 
-import { normalizeAttStatus, isIntroAttStatus } from './attendanceUtils.js';
+import { normalizeAttStatus, isIntroAttStatus, getSortedGroupDays } from './attendanceUtils.js';
 import { normalizedName } from './activityInterest.js';
 
 /** Attendance marks that mean the trainee actually climbed that day. */
@@ -67,6 +67,46 @@ export function formatReportDate(dateStr) {
   return m ? `${Number(m[3])}.${Number(m[2])}.${m[1]}` : String(dateStr || '');
 }
 
+function studentGroupIds(student) {
+  return [...new Set([
+    ...(Array.isArray(student?.groupIds) ? student.groupIds : []),
+    student?.groupId,
+  ].map(String).filter(Boolean))];
+}
+
+/** Fixed monthly denominator: four for weekly, eight for twice-weekly. */
+export function billingDenominator(student, groups = []) {
+  const wanted = new Set(studentGroupIds(student));
+  const selected = (groups || []).filter((group) => wanted.has(String(group.id)));
+  if (!selected.length) return null;
+  const weekdays = new Set(selected.flatMap((group) => getSortedGroupDays(group)));
+  if (weekdays.size >= 2) return 8;
+  if (weekdays.size === 1) return 4;
+  return null;
+}
+
+export function paidIntroCountForMonth(introBookings = [], studentId, month) {
+  return (introBookings || []).filter((booking) => (
+    String(booking.student_id || '') === String(studentId)
+    && String(booking.session_date || '').slice(0, 7) === String(month || '')
+    && Boolean(booking.paid_at)
+    && ['paid', 'scheduled', 'awaiting_decision', 'continued', 'expired', 'rescheduled', 'no_show'].includes(String(booking.status || ''))
+  )).length;
+}
+
+export function centreBillingFraction({ student, firstBillable, groups = [], introBookings = [] } = {}) {
+  if (!student?.id || !firstBillable) return null;
+  const denominator = billingDenominator(student, groups);
+  if (!denominator) return null;
+  const paidIntros = paidIntroCountForMonth(introBookings, student.id, String(firstBillable).slice(0, 7));
+  return {
+    numerator: Math.max(0, denominator - paidIntros),
+    denominator,
+    paidIntros,
+    label: `${Math.max(0, denominator - paidIntros)}/${denominator}`,
+  };
+}
+
 /**
  * The whole answer to one name, decided before anything is sent or changed.
  *
@@ -76,7 +116,7 @@ export function formatReportDate(dateStr) {
  *
  * @returns {{ ok: boolean, reply: string, student?: object, date?: string, reason?: string }}
  */
-export function buildCentreReport({ students = [], attendance = [], name = '' } = {}) {
+export function buildCentreReport({ students = [], attendance = [], groups = [], introBookings = [], name = '' } = {}) {
   const typed = String(name || '').trim();
   if (typed.length < 2) {
     return { ok: false, reason: 'no_name', reply: 'אפשר לכתוב את שם הילד/ה ואבדוק ממתי הוא מתאמן 🙂' };
@@ -113,16 +153,28 @@ export function buildCentreReport({ students = [], attendance = [], name = '' } 
     };
   }
 
+  const billing = centreBillingFraction({ student, firstBillable, groups, introBookings });
+  if (!billing) {
+    return {
+      ok: false,
+      reason: 'missing_frequency',
+      student,
+      date: firstBillable,
+      reply: `${student.name} — אימון ראשון ${formatReportDate(firstBillable)}. חסרה תדירות קבוצה מאומתת, ולכן העברתי לצוות את בדיקת החיוב.`,
+    };
+  }
+
   return {
     ok: true,
     student,
     date: firstBillable,
+    billing,
     reply: [
-      `${student.name} מתאמן/ת אצלנו מ-${formatReportDate(firstBillable)} 🧗`,
-      introDate
-        ? `(אימון ההיכרות ב-${formatReportDate(introDate)} שולם בנפרד ואינו נכלל בחיוב)`
-        : '(ללא אימון היכרות קודם)',
-      `סה״כ ${sessions} אימונים עד היום.`,
+      `${student.name} — אימון ראשון ${formatReportDate(firstBillable)}, לחייב את החודש לפי ${billing.label}.`,
+      billing.paidIntros
+        ? `${billing.paidIntros} אימוני היכרות ששולמו באותו חודש קוזזו, גם אם לא סומנה הגעה.`
+        : 'לא נמצא אימון היכרות ששולם באותו חודש.',
+      `נמצאו ${sessions} אימונים רגילים עד היום.`,
     ].join('\n'),
   };
 }

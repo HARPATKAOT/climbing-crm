@@ -84,7 +84,7 @@ function isConnected(settings) {
 }
 
 export function getAuthUrl(state = 'crm') {
-  if (!clientConfigured()) throw new Error('׳—׳¡׳¨׳™׳ ׳׳₪׳×׳—׳•׳× ׳’׳•׳’׳ ׳‘׳©׳¨׳×');
+  if (!clientConfigured()) throw new Error('חסרים מפתחות גוגל בשרת');
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     redirect_uri: redirectUri(),
@@ -111,12 +111,12 @@ async function exchangeCode(code) {
     body,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error_description || data.error || '׳”׳—׳׳₪׳× ׳§׳•׳“ ׳’׳•׳’׳ ׳ ׳›׳©׳׳”');
+  if (!res.ok) throw new Error(data.error_description || data.error || 'החלפת קוד גוגל נכשלה');
   return data;
 }
 
 async function refreshAccessToken(settings) {
-  if (!settings?.refreshToken) throw new Error('׳׳™׳ ׳—׳™׳‘׳•׳¨ ׳׳₪׳¨׳•׳₪׳™׳ ׳”׳¢׳¡׳§ ׳‘׳’׳•׳’׳');
+  if (!settings?.refreshToken) throw new Error('אין חיבור לפרופיל העסק בגוגל');
   const body = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
@@ -130,7 +130,7 @@ async function refreshAccessToken(settings) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = data.error_description || data.error || '׳¨׳¢׳ ׳•׳ ׳”׳—׳™׳‘׳•׳¨ ׳׳’׳•׳’׳ ׳ ׳›׳©׳';
+    const message = data.error_description || data.error || 'רענון החיבור לגוגל נכשל';
     await saveSettings({ lastError: message }).catch(() => {});
     throw new Error(message);
   }
@@ -145,7 +145,7 @@ async function refreshAccessToken(settings) {
 
 async function getAccessToken() {
   let settings = await loadSettings({ force: true });
-  if (!settings.refreshToken) throw new Error('׳׳™׳ ׳—׳™׳‘׳•׳¨ ׳׳₪׳¨׳•׳₪׳™׳ ׳”׳¢׳¡׳§ ׳‘׳’׳•׳’׳');
+  if (!settings.refreshToken) throw new Error('אין חיבור לפרופיל העסק בגוגל');
   if (
     settings.accessToken &&
     settings.accessTokenExpiresAt &&
@@ -358,9 +358,9 @@ export function mergeSpecialHourPeriods(existing, replacement, {
 }
 
 export async function completeOAuth(code) {
-  if (!clientConfigured()) throw new Error('׳—׳¡׳¨׳™׳ ׳׳₪׳×׳—׳•׳× ׳’׳•׳’׳ ׳‘׳©׳¨׳×');
+  if (!clientConfigured()) throw new Error('חסרים מפתחות גוגל בשרת');
   const tokens = await exchangeCode(code);
-  if (!tokens.refresh_token) throw new Error('׳׳ ׳”׳×׳§׳‘׳ ׳׳₪׳×׳— ׳¨׳¢׳ ׳•׳ ׳׳’׳•׳’׳. ׳ ׳¡׳• ׳׳”׳×׳—׳‘׳¨ ׳©׳•׳‘');
+  if (!tokens.refresh_token) throw new Error('לא התקבל מפתח רענון מגוגל. נסו להתחבר שוב');
   let settings = await saveSettings({
     refreshToken: tokens.refresh_token,
     accessToken: tokens.access_token,
@@ -385,7 +385,7 @@ export async function completeOAuth(code) {
     locationName: selected?.name || null,
     locationTitle: selected?.title || null,
     locationAddress: selected?.address || null,
-    lastError: locations.length ? null : '׳׳ ׳ ׳׳¦׳ ׳₪׳¨׳•׳₪׳™׳ ׳¢׳¡׳§ ׳©׳”׳—׳©׳‘׳•׳ ׳¨׳©׳׳™ ׳׳ ׳”׳',
+    lastError: locations.length ? null : 'לא נמצא פרופיל עסק שהחשבון רשאי לנהל',
   });
   return getStatus();
 }
@@ -393,7 +393,7 @@ export async function completeOAuth(code) {
 export async function selectLocation(locationName) {
   const locations = await listLocations();
   const selected = locations.find((location) => location.name === String(locationName || ''));
-  if (!selected) throw new Error('׳₪׳¨׳•׳₪׳™׳ ׳”׳¢׳¡׳§ ׳©׳ ׳‘׳—׳¨ ׳׳™׳ ׳• ׳–׳׳™׳ ׳׳—׳©׳‘׳•׳ ׳”׳–׳”');
+  if (!selected) throw new Error('פרופיל העסק שנבחר אינו זמין לחשבון הזה');
   await saveSettings({
     locations,
     locationName: selected.name,
@@ -410,7 +410,7 @@ export async function syncOpeningHours(activities, {
 } = {}) {
   const settings = await loadSettings({ force: true });
   if (!isConnected(settings)) return { skipped: true, reason: 'not_connected' };
-  if (!settings.locationName) throw new Error('׳™׳© ׳׳‘׳—׳•׳¨ ׳₪׳¨׳•׳₪׳™׳ ׳¢׳¡׳§ ׳‘׳’׳•׳’׳ ׳׳₪׳ ׳™ ׳”׳¡׳ ׳›׳¨׳•׳');
+  if (!settings.locationName) throw new Error('יש לבחור פרופיל עסק בגוגל לפני הסנכרון');
   const locationPath = `/${settings.locationName}`;
   try {
     const location = await googleFetch(locationPath, {
@@ -516,5 +516,3 @@ export const googleBusinessProfileService = {
   frontendBase,
   loadSettings,
 };
-
-

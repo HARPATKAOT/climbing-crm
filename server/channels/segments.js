@@ -4,7 +4,10 @@ import { ageFromBirthDate } from './conversations.js';
 import { canSendFreeform } from './sessionWindow.js';
 import { studentGroupIds, studentInGroup } from '../studentGroups.js';
 
-const REGISTERED_STATUSES = new Set(['registered', 'active', 'health_signed', 'intro_scheduled']);
+const REGISTERED_STATUSES = new Set([
+  'registered', 'active', 'health_signed', 'details_completed',
+  'awaiting_parent_confirmation', 'awaiting_centre_confirmation', 'intro_scheduled',
+]);
 
 /**
  * filters shape:
