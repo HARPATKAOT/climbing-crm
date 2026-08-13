@@ -10,6 +10,8 @@ import {
   explicitGroupSuitabilityHandoff,
   confirmsLastBotQuestion,
   separateMultiChildGradeQuestion,
+  directRestrictedEligibility,
+  contradictsDirectEligibility,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
@@ -254,6 +256,47 @@ test('choosing a proposed group leads to direct signup or an intro without repea
   assert.match(CUSTOMER_TOOL_RULES, /הרשמה ישירה או אימון היכרות/);
   assert.match(CUSTOMER_TOOL_RULES, /startSignup/);
   assert.match(CUSTOMER_TOOL_RULES, /scheduleIntroSession/);
+});
+
+test('a returning squad member is recognized as directly eligible for the requested squad', () => {
+  const card = {
+    ילדים: [{
+      שם: 'עומר בזר',
+      זכאות_למסלולים: [
+        { מסלול: 'adult_squad', סטטוס: 'rejected', קבוצה: '' },
+        {
+          מסלול: 'adult_squad',
+          סטטוס: 'returning',
+          קבוצה: 'נבחרת בוגרת — ב׳+ה׳ 19:10',
+        },
+      ],
+    }],
+  };
+
+  const eligibility = directRestrictedEligibility(
+    card,
+    'עומר בזר לקבוצת נבחרת בשני וחמישי'
+  );
+  assert.deepEqual(eligibility, {
+    childName: 'עומר בזר',
+    program: 'adult_squad',
+    status: 'returning',
+    groupName: 'נבחרת בוגרת — ב׳+ה׳ 19:10',
+  });
+  assert.equal(
+    contradictsDirectEligibility('הקבלה מותנית באישור צוות הקיר', eligibility),
+    true
+  );
+  assert.equal(
+    contradictsDirectEligibility('עומר מאושר להרשמה לנבחרת הבוגרת', eligibility),
+    false
+  );
+});
+
+test('generic squad rule gives stored returning or approved eligibility priority', () => {
+  assert.match(CUSTOMER_TOOL_RULES, /בדוק קודם את הזכאות האישית ב-getFamilyCard/);
+  assert.match(CUSTOMER_TOOL_RULES, /אין לומר שנדרש אישור צוות נוסף/);
+  assert.doesNotMatch(CUSTOMER_TOOL_RULES, /כששואלים על הנבחרת — אמור תמיד/);
 });
 
 test('only a successful durable hold may be described as a reserved place', () => {

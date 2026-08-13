@@ -90,7 +90,7 @@ export const CUSTOMER_TOOL_RULES = [
   'כשהלקוח אמר פעם או פעמיים בשבוע, העבר את התדירות במפורש בשדה frequency בכל קריאה ל-listClasses, getPrices, getSignupLink, startSignup ו-getRegistrationPack. אל תשנה תדירות בין הכלים.',
   'פעמיים בשבוע היא הרשמה אחת של קבוצה אחת, לא צירוף של שתי קבוצות. אל תבקש מהלקוח לבחור «שני ימים» מתוך הרשימה — בחר איתו קבוצה אחת, ואז שלח את קישור ההרשמה של פעמיים בשבוע של אותה קבוצה.',
   'אל תציע קבוצת נבחרת למי שלא שאל עליה. כשקבוצה חוזרת מכלי עם רמה — מותר לציין את הרמה בתשובה.',
-  'כששואלים על הנבחרת — אמור תמיד את שני התנאים: הכניסה אליה היא רק באישור צוות הקיר, והיא מיועדת למטפסים עם ניסיון של כמה שנים. אל תתאר אותה כעניין של מוטיבציה בלבד.',
+  'כששואלים באופן כללי על הנבחרת אפשר להסביר שקבלה של מועמד חדש דורשת אישור צוות וניסיון מתאים. כשמדובר במתאמן מזוהה או שנזכר בשמו, בדוק קודם את הזכאות האישית ב-getFamilyCard: סטטוס returning או approved במסלול המבוקש הוא אישור קיים, ולכן אין לומר שנדרש אישור צוות נוסף ויש להמשיך בתהליך ההרשמה.',
   'אם מדובר בילד שרק מתחיל לטפס — אמור במפורש שהנבחרת אינה מתאימה לו בשלב הזה, והפנה לקבוצות הרגילות. עדיף לומר את זה מראש מאשר להשאיר הורה עם ציפייה שתישבר.',
   'כשקבוצה חוזרת עם ימי_אימון, אלה כל הימים שבהם אותה קבוצה מתאמנת. חובה לציין את כולם; אין להתייחס רק לשדה יום או ליום האחרון.',
   'הודעה בהיסטוריה שמתחילה ב-[לפני X שעות] או [לפני X ימים] היא שיחה קודמת: אל תגיב עליה עכשיו. ענה רק על ההודעה הנוכחית.',
@@ -334,6 +334,73 @@ function functionCallsOf(content) {
     .filter((call) => call && call.name);
 }
 
+function normalizedName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Pull a direct advanced/squad eligibility out of the family card before the
+ * model answers. This is deliberately deterministic: a generic prompt must
+ * never override a real approval already stored on the participant.
+ */
+export function directRestrictedEligibility(card, incomingText) {
+  const text = normalizedName(incomingText);
+  const wantsAdvanced = /מתקדמ/u.test(text);
+  const wantsSquad = /נבחרת/u.test(text);
+  if (!wantsAdvanced && !wantsSquad) return null;
+
+  const children = Array.isArray(card?.ילדים) ? card.ילדים : [];
+  const named = children.filter((child) => {
+    const fullName = normalizedName(child?.שם);
+    if (!fullName) return false;
+    const firstName = fullName.split(' ')[0];
+    const words = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    return text.includes(fullName) || (firstName.length > 1 && words.includes(firstName));
+  });
+  const child = named.length === 1 ? named[0] : (children.length === 1 ? children[0] : null);
+  if (!child) return null;
+
+  const eligiblePrograms = wantsAdvanced
+    ? new Set(['advanced'])
+    : /צעיר/u.test(text)
+      ? new Set(['young_squad'])
+      : /בוגר/u.test(text)
+        ? new Set(['adult_squad'])
+        : new Set(['young_squad', 'adult_squad']);
+  const rows = (Array.isArray(child?.זכאות_למסלולים) ? child.זכאות_למסלולים : [])
+    .filter((row) => eligiblePrograms.has(String(row?.מסלול || '')))
+    .filter((row) => ['returning', 'approved'].includes(String(row?.סטטוס || '')));
+  if (!rows.length) return null;
+
+  const row = rows.find((candidate) => {
+    const groupName = normalizedName(candidate?.קבוצה);
+    return groupName && text.includes(groupName);
+  }) || rows[0];
+  return {
+    childName: normalizedName(child?.שם),
+    program: String(row?.מסלול || ''),
+    status: String(row?.סטטוס || ''),
+    groupName: normalizedName(row?.קבוצה),
+  };
+}
+
+export function contradictsDirectEligibility(replyText, eligibility) {
+  if (!eligibility) return false;
+  return /(?:מותנ(?:ה|ית)\s+באישור|נדרש\s+אישור|צריך\s+אישור|בקשה\s+לאישור|אישור\s+(?:של\s+)?הצוות)/u
+    .test(String(replyText || ''));
+}
+
+function directEligibilityInstruction(eligibility) {
+  if (!eligibility) return '';
+  const program = eligibility.program === 'advanced'
+    ? 'מתקדמים'
+    : eligibility.program === 'young_squad'
+      ? 'נבחרת צעירה'
+      : 'נבחרת בוגרת';
+  const group = eligibility.groupName ? ` לקבוצה «${eligibility.groupName}»` : '';
+  return `## זכאות אישית מאומתת\n${eligibility.childName} מאושר/ת להרשמה ל${program}${group} (סטטוס ${eligibility.status}). זו זכאות קיימת. אסור לומר שנדרש אישור צוות נוסף; המשך בסדר ההרשמה הרגיל.`;
+}
+
 function textOf(content) {
   return (content?.parts || [])
     .map((part) => String(part.text || '').trim())
@@ -487,10 +554,30 @@ export async function runCustomerToolTurn({
 
   const toolsUsed = [];
   const successfulCalls = [];
+  let directEligibility = null;
+  if (parent && allowed.has('getFamilyCard') && /(?:נבחרת|מתקדמ)/u.test(incoming)) {
+    try {
+      const card = await tools.getFamilyCard();
+      const recentCustomerText = contents
+        .filter((entry) => entry?.role === 'user' && entry?.parts?.[0]?.text)
+        .slice(-3)
+        .map((entry) => entry.parts[0].text)
+        .join('\n');
+      directEligibility = directRestrictedEligibility(card, recentCustomerText || incoming);
+      toolsUsed.push('getFamilyCard');
+    } catch (err) {
+      console.error(`failed to preflight restricted-program eligibility: ${err.message}`);
+    }
+  }
   const confirmationInstruction = confirmsLastBotQuestion(history, incoming)
     ? '## מצב התור הנוכחי\nהלקוח אישר בחיוב את השאלה האחרונה של הבוט. אין לשאול אותה שוב. יש לבצע עכשיו את הפעולה שאושרה בעזרת הכלי המתאים, ואז להמשיך רק לפרט הבא שחסר.'
     : '';
-  const instruction = [systemInstruction, CUSTOMER_TOOL_RULES, confirmationInstruction]
+  const instruction = [
+    systemInstruction,
+    CUSTOMER_TOOL_RULES,
+    confirmationInstruction,
+    directEligibilityInstruction(directEligibility),
+  ]
     .filter(Boolean)
     .join('\n\n');
   // Addresses the prompt itself carries (the health form, the site) are as good
@@ -503,10 +590,16 @@ export async function runCustomerToolTurn({
     if (entry?.role === 'model') collectUrls(entry?.parts?.[0]?.text, allowedUrls);
   }
 
+  let eligibilityCorrectionSent = false;
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
       contents,
-      systemInstruction: instruction,
+      systemInstruction: [
+        instruction,
+        eligibilityCorrectionSent
+          ? 'התשובה הקודמת נפסלה כי דרשה אישור צוות למרות זכאות קיימת. נסח מחדש בלי לדרוש אישור נוסף והמשך בשלב ההרשמה הנכון.'
+          : '',
+      ].filter(Boolean).join('\n\n'),
       declarations,
       apiKey,
     });
@@ -530,6 +623,26 @@ export async function runCustomerToolTurn({
       const text = separateMultiChildGradeQuestion(
         whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''))
       );
+
+      if (contradictsDirectEligibility(text, directEligibility)) {
+        console.error(`bot contradicted direct eligibility for ${directEligibility.childName}`);
+        if (!eligibilityCorrectionSent) {
+          eligibilityCorrectionSent = true;
+          continue;
+        }
+        const program = directEligibility.program === 'advanced'
+          ? 'לקבוצת המתקדמים'
+          : directEligibility.program === 'young_squad'
+            ? 'לנבחרת הצעירה'
+            : 'לנבחרת הבוגרת';
+        return {
+          text: `${directEligibility.childName} מאושר/ת להרשמה ${program}. אפשר להמשיך בתהליך ההרשמה ללא אישור נוסף.`,
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'direct_eligibility_guard',
+        };
+      }
 
       const invented = unknownUrlsInReply(text, allowedUrls);
       if (invented.length) {
