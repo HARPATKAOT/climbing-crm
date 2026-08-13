@@ -274,12 +274,16 @@ export async function ensureClient(parent) {
   };
 }
 
-function buildDocLineFields(items) {
+function buildDocLineFields(items, { includesVat = false } = {}) {
   const fields = {};
   (items || []).forEach((item, i) => {
-    fields[`desc[${i}]`] = item.description || item.desc || 'פריט';
-    fields[`unitprice[${i}]`] = item.unitprice ?? item.price ?? 0;
-    fields[`quantity[${i}]`] = item.quantity ?? 1;
+    fields[`items[${i}][description]`] = item.description || item.desc || 'פריט';
+    // iCount's current API defines `unitprice` as excluding VAT. `vattype` is a
+    // legacy document flag and does not change that field's meaning, so a gross
+    // POS price must use the explicit inclusive field or iCount adds VAT again.
+    fields[`items[${i}][${includesVat ? 'unitprice_incvat' : 'unitprice'}]`] =
+      item.unitprice ?? item.price ?? 0;
+    fields[`items[${i}][quantity]`] = item.quantity ?? 1;
   });
   return fields;
 }
@@ -324,7 +328,7 @@ export async function createInvRec({
     doc_date: todayYyyymmdd(),
     currency: 'ILS',
     vattype,
-    ...buildDocLineFields(items),
+    ...buildDocLineFields(items, { includesVat: Number(vattype) !== 1 }),
   };
 
   if (clientId) fields.client_id = clientId;
@@ -381,7 +385,7 @@ export async function createOffer({
     doc_date: todayYyyymmdd(),
     currency: 'NIS',
     vattype,
-    ...buildDocLineFields(items),
+    ...buildDocLineFields(items, { includesVat: Number(vattype) !== 1 }),
   };
 
   if (clientId) fields.client_id = clientId;
@@ -586,7 +590,10 @@ export async function createRefundDoc({
     doc_date: todayYyyymmdd(),
     currency: 'ILS',
     vattype: 0,
-    ...buildDocLineFields([{ description: description || 'זיכוי', unitprice: gross, quantity: 1 }]),
+    ...buildDocLineFields(
+      [{ description: description || 'זיכוי', unitprice: gross, quantity: 1 }],
+      { includesVat: true }
+    ),
   };
   if (clientId) fields.client_id = clientId;
   else if (clientName) fields.client_name = clientName;

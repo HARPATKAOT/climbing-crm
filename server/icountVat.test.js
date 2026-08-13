@@ -29,6 +29,8 @@ describe('iCount VAT-inclusive invoice', () => {
     });
 
     assert.equal(sentFields.vattype, '0');
+    assert.equal(sentFields['items[0][unitprice_incvat]'], '35');
+    assert.equal(sentFields['items[0][unitprice]'], undefined);
     assert.equal(sentFields['cash[sum]'], '35');
     assert.equal(result.paidAmount, 35);
   });

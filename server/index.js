@@ -724,6 +724,7 @@ app.get(['/api/health', '/api/health/deep'], async (req, res) => {
     status: 'UP',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    release: String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
   };
 
   if (!req.query.deep && req.path !== '/api/health/deep') {
