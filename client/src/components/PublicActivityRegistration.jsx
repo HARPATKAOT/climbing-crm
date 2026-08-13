@@ -6,6 +6,7 @@ import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import { cancellationRuleParts } from '../utils/cancellationText.js';
 import { EventShell, EventStyles } from './publicFormKit.jsx';
+import { templateKind } from '../utils/declarationKinds.js';
 
 /**
  * The event's own page: what the outing is, when, what it costs and how many
@@ -101,6 +102,8 @@ export default function PublicActivityRegistration() {
   const policy = activity.cancellation_policy;
   const full = activity.remaining != null && activity.remaining <= 0;
   const closed = full || activity.registration_open === false;
+  const participationKind = templateKind(activity.form_template || {});
+  const ParticipationIcon = participationKind.Icon;
 
   return (
     <div className="event-page">
@@ -158,6 +161,24 @@ export default function PublicActivityRegistration() {
                 </p>
               ) : null
             ))}
+          </section>
+        )}
+
+        {activity.form_template && (
+          <section style={{ marginTop: 6 }}>
+            <p className="event-detail-block event-participation-requirement">
+              <strong>
+                <ParticipationIcon size={16} style={{ color: participationKind.color }} aria-hidden="true" />
+                אישור השתתפות נדרש
+              </strong>
+              <span>
+                {participationKind.key === 'trip'
+                  ? 'ההרשמה כוללת טופס מותאם ליציאה / טיול והסרת אחריות לפעילות זו.'
+                  : participationKind.key === 'wall'
+                    ? 'ההרשמה כוללת טופס מותאם לפעילות בקיר והסרת אחריות לפעילות זו.'
+                    : `ההרשמה כוללת את הטופס „${activity.form_template.title}” והסרת אחריות לפעילות זו.`}
+              </span>
+            </p>
           </section>
         )}
 

@@ -47,6 +47,10 @@ import {
 } from '../utils/calendarDisplayFields.js';
 import AppSelect from './AppSelect.jsx';
 import { normalizeParticipationScope } from '../utils/participationDocuments.js';
+import {
+  participationTemplateForActivity,
+  participationTemplateScope,
+} from '../utils/activityParticipationForm.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -451,6 +455,9 @@ function emptyForm(dateStr = '', opts = {}) {
     registration_page_title: '',
     registration_page_body: '',
     registration_closes_at: '',
+    form_template_id: null,
+    form_template_slug: '',
+    participation_scope: '',
     registration_theme: {},
     price: '',
     max_participants: '',
@@ -1501,6 +1508,8 @@ function RegularActivityModal({
   const [templateTarget, setTemplateTarget] = useState('');
   const [templateLoading, setTemplateLoading] = useState(false);
   const templateMenuRef = useRef(null);
+  const [participationTemplates, setParticipationTemplates] = useState([]);
+  const [participationTemplatesLoading, setParticipationTemplatesLoading] = useState(false);
 
   useEffect(() => {
     if (!templateMenuOpen) return undefined;
@@ -1547,6 +1556,35 @@ function RegularActivityModal({
       .finally(() => { if (active) setTemplateLoading(false); });
     return () => { active = false; };
   }, [needTemplates, templateOptions.length]);
+
+  useEffect(() => {
+    if (isOps || isTemplateEdit) return undefined;
+    let active = true;
+    setParticipationTemplatesLoading(true);
+    fetch('/api/form-templates')
+      .then(async (response) => {
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error('טעינת טופסי ההשתתפות נכשלה');
+        if (active) setParticipationTemplates(
+          (Array.isArray(body) ? body : []).filter((item) => item.isActive !== false)
+        );
+      })
+      .catch(() => { if (active) setParticipationTemplates([]); })
+      .finally(() => { if (active) setParticipationTemplatesLoading(false); });
+    return () => { active = false; };
+  }, [isOps, isTemplateEdit]);
+
+  const selectedParticipationTemplate = participationTemplateForActivity(form, participationTemplates);
+
+  const selectParticipationTemplate = (template) => {
+    if (readOnly || !template) return;
+    setForm((prev) => ({
+      ...prev,
+      form_template_id: template.id || null,
+      form_template_slug: template.slug || '',
+      participation_scope: participationTemplateScope(template),
+    }));
+  };
 
   const saveAsTemplate = (event, action) => {
     setTemplateMenuOpen(false);
@@ -1926,10 +1964,62 @@ function RegularActivityModal({
                   </div>
                 )}
               </div>
-              {/* בורר ההצהרה הוסר: סוג הפעילות כבר קובע על מה חותמים.
-                  `declarationSlugForActivity` בשרת בוחר את ההצהרה לפי הסוג,
-                  וטיול מחתים על הצהרת הטיול בלי שאיש יבחר. שדה שהתשובה שלו
-                  תמיד „לפי סוג הפעילות” הוא שאלה מיותרת. */}
+              {!isTemplateEdit && !isOps && (
+                <div className="activity-participation-form-field">
+                  <div className="activity-settings-label activity-participation-form-label">
+                    <span><FileStack size={14} /> אישור השתתפות נדרש</span>
+                    {selectedParticipationTemplate && (
+                      <strong>{templateKind(selectedParticipationTemplate).label}</strong>
+                    )}
+                  </div>
+                  <div className="activity-participation-form-options" role="radiogroup" aria-label="אישור השתתפות נדרש">
+                    {participationTemplates.map((template) => {
+                      const kind = templateKind(template);
+                      const KindIcon = kind.Icon || GENERIC_KIND.Icon;
+                      const selected = String(selectedParticipationTemplate?.id || '') === String(template.id || '');
+                      return (
+                        <button
+                          key={template.id || template.slug}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          className={selected ? 'is-selected' : ''}
+                          disabled={readOnly}
+                          onClick={() => selectParticipationTemplate(template)}
+                          style={{ '--participation-form-color': kind.color }}
+                        >
+                          <span className="activity-participation-form-icon"><KindIcon size={18} /></span>
+                          <span className="activity-participation-form-copy">
+                            <strong>{kind.key === GENERIC_KIND.key ? template.title : `הסרת אחריות — ${kind.label}`}</strong>
+                            <small>
+                              {kind.key === 'trip'
+                                ? 'טופס מותאם לטיולים, סנפלינג, טיפוס ומערנות'
+                                : kind.key === 'wall'
+                                  ? 'טופס מותאם לטיפוס בקיר, חוגים ואירועים'
+                                  : 'טופס מותאם לפעילות הספציפית'}
+                            </small>
+                          </span>
+                          <span className="activity-participation-form-check" aria-hidden="true">
+                            {selected ? <Check size={14} /> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {participationTemplatesLoading && (
+                    <span className="activity-participation-form-status"><Loader2 size={12} className="spin" /> טוען טפסים…</span>
+                  )}
+                  {!participationTemplatesLoading && !participationTemplates.length && (
+                    <span className="activity-participation-form-status is-error">לא נמצאו טופסי השתתפות פעילים</span>
+                  )}
+                  {selectedParticipationTemplate && (
+                    <span className="activity-participation-form-status">
+                      טופס ההרשמה ייפתח עם ההצהרות, כללי הבטיחות והסרת האחריות של
+                      {' '}{templateKind(selectedParticipationTemplate).label}.
+                    </span>
+                  )}
+                </div>
+              )}
             </section>
             )}
 
