@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  CalendarClock, LogIn, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus,
+  CalendarClock, ClipboardCheck, CreditCard, HeartPulse, LogIn, Search, Send,
+  ShieldAlert, Ticket, UserPlus,
 } from 'lucide-react';
 
 /** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
@@ -10,31 +11,46 @@ function waPhone(raw) {
   return digits.length >= 11 ? digits : '';
 }
 
-function DocumentsBadge({ documents }) {
-  if (!documents) return <span className="badge badge-gray">בודק מסמכים...</span>;
-  const health = documents.health;
-  const waiver = documents.waiver;
-  // Keep the two documents visible independently. A trip form supplies the
-  // global health declaration, but never the wall participation approval.
-  if (health && waiver) {
-    const healthValid = health.state === 'valid';
-    const waiverValid = waiver.state === 'valid';
-    return (
-      <>
-        <span className={`badge ${healthValid ? 'badge-green' : health.state === 'expired' ? 'badge-amber' : 'badge-red'}`}>
-          {healthValid ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
-          {healthValid ? 'הצהרת בריאות בתוקף' : health.state === 'expired' ? 'הצהרת בריאות פגה' : health.state === 'blocked' ? 'חסימה רפואית' : 'אין הצהרת בריאות'}
-        </span>
-        <span className={`badge ${waiverValid ? 'badge-green' : waiver.state === 'expired' ? 'badge-amber' : 'badge-red'}`}>
-          {waiverValid ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
-          {waiverValid ? 'טופס השתתפות בקיר בתוקף' : waiver.state === 'expired' ? 'טופס ההשתתפות בקיר פג' : 'אין טופס השתתפות בקיר'}
-        </span>
-      </>
-    );
-  }
-  if (documents.state === 'valid') return <span className="badge badge-green"><ShieldCheck size={12} /> מסמכים בתוקף</span>;
-  if (documents.state === 'expired') return <span className="badge badge-amber"><ShieldAlert size={12} /> {documents.label}</span>;
-  return <span className="badge badge-red"><ShieldAlert size={12} /> {documents.label}</span>;
+function StatusItem({ Icon, label, settled, detail, loading }) {
+  const stateLabel = loading ? 'בודק...' : settled ? 'מוסדר' : 'לא מוסדר';
+  return (
+    <div
+      className={`entry-status-item ${loading ? 'entry-status-loading' : settled ? 'entry-status-settled' : 'entry-status-pending'}`}
+      title={`${label}: ${loading ? 'בודק' : detail}`}
+      aria-label={`${label}: ${stateLabel}`}
+    >
+      <span className="entry-status-icon"><Icon size={17} strokeWidth={2.2} /></span>
+      <span className="entry-status-copy">
+        <span className="entry-status-label">{label}</span>
+        <span className="entry-status-state">{stateLabel}</span>
+      </span>
+    </div>
+  );
+}
+
+function EntryStatusRow({ documents, punch, membership, loading }) {
+  const healthState = documents?.health?.state;
+  const waiverState = documents?.waiver?.state;
+  const healthSettled = healthState === 'valid';
+  const waiverSettled = waiverState === 'valid';
+  const paymentSettled = Boolean(punch || membership);
+  const healthDetail = healthSettled
+    ? 'הצהרת הבריאות בתוקף'
+    : healthState === 'expired' ? 'הצהרת הבריאות פגה' : healthState === 'blocked' ? 'קיימת חסימה רפואית' : 'חסרה הצהרת בריאות';
+  const waiverDetail = waiverSettled
+    ? 'אישור ההשתתפות בקיר בתוקף'
+    : waiverState === 'expired' ? 'אישור ההשתתפות בקיר פג' : 'חסר אישור השתתפות בקיר';
+  const paymentDetail = punch
+    ? 'קיימת כרטיסייה פעילה'
+    : membership ? 'קיים מנוי פעיל' : 'נדרש להסדיר תשלום';
+
+  return (
+    <div className="entry-status-row" aria-label="סטטוס כניסה">
+      <StatusItem Icon={HeartPulse} label="הצהרת בריאות" settled={healthSettled} detail={healthDetail} loading={loading || !documents} />
+      <StatusItem Icon={ClipboardCheck} label="אישור השתתפות" settled={waiverSettled} detail={waiverDetail} loading={loading || !documents} />
+      <StatusItem Icon={CreditCard} label="תשלום" settled={paymentSettled} detail={paymentDetail} loading={loading || !documents} />
+    </div>
+  );
 }
 
 /**
@@ -267,8 +283,14 @@ export default function ClimberEntryPanel({
         {loading ? 'טוען היסטוריה...' : (summary?.last_visit?.label || 'לא נרשמה כניסה קודמת')}
       </div>
 
+      <EntryStatusRow
+        documents={summary?.documents}
+        punch={punch}
+        membership={membership}
+        loading={loading}
+      />
+
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <DocumentsBadge documents={summary?.documents} />
         {summary?.safety && summary.safety.state !== 'valid' && (
           <span className="badge badge-amber">
             <ShieldAlert size={12} /> {summary.safety.state === 'missing' ? 'אין מבחן אבטחה' : 'מבחן אבטחה פג'}
