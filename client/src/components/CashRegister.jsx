@@ -87,6 +87,24 @@ const israelDay = (value = new Date()) => {
   }).format(date);
 };
 
+function cashClosureDateTime(shift) {
+  const timestamp = shift?.closed_at || shift?.created_at;
+  if (!timestamp) return shift?.date || '—';
+
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return shift?.date || '—';
+
+  return date.toLocaleString('he-IL', {
+    timeZone: 'Asia/Jerusalem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export default function CashRegister({ isOwner = true, canResetCash = isOwner, sharedStation = false, initialTab = null }) {
   const navigate = useNavigate();
   const [expectedAmount, setExpectedAmount] = useState('');
@@ -1041,7 +1059,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
               <table className="crm-table">
                 <thead>
                   <tr>
-                    <th>תאריך</th>
+                    <th>תאריך ושעה</th>
                     <th>משמרת</th>
                     <th>עובד</th>
                     <th>צפוי</th>
@@ -1060,7 +1078,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                   )}
                   {shifts.map((s) => (
                     <tr key={s.id}>
-                      <td>{s.date}</td>
+                      <td>{cashClosureDateTime(s)}</td>
                       <td><span className="badge badge-blue">{s.shift}</span></td>
                       <td>{s.employee}</td>
                       <td>₪{Number(s.expected).toLocaleString()}</td>
