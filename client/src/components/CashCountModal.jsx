@@ -268,7 +268,7 @@ export default function CashCountModal({
         </div>
 
         <footer className="cash-shell-foot">
-          <button type="button" className="btn btn-ghost cash-shell-btn" disabled={busy} onClick={onClose}>
+          <button type="button" className="btn btn-danger cash-shell-btn" disabled={busy} onClick={onClose}>
             ביטול
           </button>
           <button
