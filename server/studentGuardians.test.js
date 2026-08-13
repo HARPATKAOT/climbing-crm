@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   childrenOfParent,
+  canMergeSingleParentFamilies,
   familyCandidates,
+  familyParentIds,
   findChildMatches,
   guardianParentIds,
   householdMergeCandidates,
@@ -444,6 +446,54 @@ test('a second parent joins the child file instead of creating a copy', async ()
   assert.equal(studentsForParent([enriched], mumId).length, 1);
 });
 
+test('an exact ID on another family is never allowed to create a duplicate child', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02', idNumber: '123456782' },
+    ],
+  });
+
+  await assert.rejects(
+    saveCrmParticipants({
+      db,
+      persist,
+      parent: { name: 'רותם לוי', lastName: 'לוי', phone: '0539998888' },
+      participants: [{ ...signedNoam, idNumber: '123456782' }],
+    }),
+    /כבר רשום\/ה בתיק משפחה אחר/
+  );
+  assert.equal(db.store.students.length, 1);
+});
+
+test('a confirmed family reuses an exact-ID child and merges the parents', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02', idNumber: '123456782' },
+    ],
+  });
+
+  const result = await saveCrmParticipants({
+    db,
+    persist,
+    parent: {
+      name: 'רותם לוי', lastName: 'לוי', phone: '0539998888', family_parent_id: 'p-avner',
+    },
+    participants: [{ ...signedNoam, idNumber: '123456782' }],
+  });
+
+  assert.equal(db.store.students.length, 1);
+  assert.equal(result.participants[0].student.id, 's-noam');
+  assert.deepEqual(guardianParentIds(db, 's-noam').sort(), ['p-avner', 'p-rotem'].sort());
+});
+
 test('health-only renewal creates a health declaration without touching the participation waiver', async () => {
   const previousWaiverDate = '2025-09-01T08:00:00.000Z';
   const db = createDb({
@@ -574,7 +624,7 @@ test('a family is offered by surname, with the names a parent can recognise', ()
   assert.equal(JSON.stringify(payload).includes('0521112222'), false);
 });
 
-test('parents who share a child are offered as one household, not three', () => {
+test('a family that already has two parents is not offered for a surname merge', () => {
   const db = createDb({
     parents: [
       { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
@@ -591,12 +641,55 @@ test('parents who share a child are offered as one household, not three', () => 
     ],
   });
   const payload = publicFamilyCandidatesPayload(familyCandidates(db, { lastName: 'לוי' }));
-  assert.equal(payload.families.length, 1);
-  // Merging happens against the card holding the whole family.
-  assert.equal(payload.families[0].parent_id, 'p-avner');
-  assert.deepEqual(payload.families[0].children.sort(), ['יובל לוי', 'נועם לוי'].sort());
-  assert.match(payload.families[0].parent_name, /אבנר לוי/);
-  assert.match(payload.families[0].parent_name, /רותם לוי/);
+  assert.deepEqual(payload.families, []);
+  assert.deepEqual(familyParentIds(db, 'p-avner').sort(), ['p-avner', 'p-michal', 'p-rotem'].sort());
+});
+
+test('an identified parent who already has a partner receives no surname suggestions', () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+      { id: 'p-dana', name: 'דנה לוי', phone: '0547776666' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' },
+      { id: 's-other', name: 'עידו לוי', parentId: 'p-dana', birthDate: '2016-05-05' },
+    ],
+    household_members: [
+      { id: 'hm-1', household_id: 'hh-1', parent_id: 'p-avner', role: 'adult' },
+      { id: 'hm-2', household_id: 'hh-1', parent_id: 'p-rotem', role: 'adult' },
+    ],
+  });
+  assert.deepEqual(familyParentIds(db, 'p-avner').sort(), ['p-avner', 'p-rotem'].sort());
+  assert.deepEqual(familyCandidates(db, { lastName: 'לוי', excludeParentId: 'p-avner' }), []);
+  assert.equal(canMergeSingleParentFamilies(db, 'p-avner', 'p-dana'), false);
+});
+
+test('public family confirmation rejects a third parent even when a stale form submits it', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' },
+    ],
+    student_guardians: [
+      { id: 'sg-1', student_id: 's-noam', parent_id: 'p-rotem' },
+    ],
+  });
+
+  await assert.rejects(
+    saveCrmParticipants({
+      db,
+      persist,
+      parent: { name: 'דנה לוי', phone: '0547776666', family_parent_id: 'p-avner' },
+      participants: [{ ...signedNoam, name: 'ילדה לוי', birthDate: '2018-08-08' }],
+    }),
+    /החיבור אפשרי רק כאשר לשני ההורים אין בן או בת זוג/
+  );
+  assert.equal(db.store.students.length, 1, 'the rejected request creates no child');
 });
 
 test('a childless card is not a family anyone could confirm', () => {

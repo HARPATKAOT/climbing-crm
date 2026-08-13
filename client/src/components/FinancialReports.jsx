@@ -4,12 +4,16 @@ import {
   CheckCircle2, CircleDollarSign, CloudCog, FileSearch, Landmark, PackageSearch,
   Plus, ReceiptText, RefreshCw, Scale, TrendingUp, WalletCards, X, CreditCard,
   Mail, FileUp, Send, ShieldCheck, Sparkles, Building2, Link2,
-  CalendarDays, CalendarRange, LayoutList, ShoppingBag, UsersRound,
+  CalendarDays, CalendarRange, LayoutList, ShoppingBag, UsersRound, Search,
+  ChevronDown, Download, Printer, ExternalLink, Copy, RotateCcw,
+  Clock3, XCircle, MoreHorizontal,
 } from 'lucide-react';
+import AppSelect from './AppSelect.jsx';
+import { icountClientUrl } from '../utils/icountLinks.js';
 
 const TABS = [
   ['overview', 'סקירה', BarChart3],
-  ['sales', 'עסקאות', ShoppingBag],
+  ['payments', 'תשלומים ועסקאות', WalletCards],
   ['revenue', 'הכנסות', TrendingUp],
   ['expenses', 'הוצאות וספקים', ReceiptText],
   ['automation', 'קליטה והתאמה', Sparkles],
@@ -24,6 +28,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const yearStart = () => `${today().slice(0, 4)}-01-01`;
 const sourceLabel = (source) => ({ notion: 'Notion · ארכיון', icount: 'iCount', manual: 'הזנה ישירה' }[source] || source || 'ידני');
 const formatDate = (value) => value ? new Intl.DateTimeFormat('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${value}T12:00:00`)) : '—';
+const formatDateTime = (value) => value ? new Intl.DateTimeFormat('he-IL', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -119,6 +124,332 @@ function SalesViews({ data, view, onViewChange }) {
   </div>;
 }
 
+const PAYMENT_STATUS = {
+  paid: { label: 'שולם', cls: 'badge badge-green' },
+  pending: { label: 'ממתין לתשלום', cls: 'badge badge-amber' },
+  open: { label: 'חיוב פתוח', cls: 'badge badge-amber' },
+  quoted: { label: 'הצעת מחיר', cls: 'badge badge-blue' },
+  partial_refund: { label: 'זוכה חלקית', cls: 'badge badge-purple' },
+  refunded: { label: 'זוכה', cls: 'badge badge-red' },
+  cancelled: { label: 'בוטל', cls: 'badge badge-gray' },
+  failed: { label: 'נכשל', cls: 'badge badge-red' },
+  unknown: { label: 'לא ידוע', cls: 'badge badge-gray' },
+};
+
+const PAYMENT_SOURCE = {
+  pos: 'קופה',
+  activity: 'אירוע / פעילות',
+  equipment: 'ציוד',
+  customer: 'תיק לקוח',
+  icount: 'iCount',
+};
+
+const paymentStatus = (value) => PAYMENT_STATUS[value] || { label: value || 'לא ידוע', cls: 'badge badge-gray' };
+
+async function downloadPaymentDocument(row, kind = 'charge') {
+  const url = row.payment_id
+    ? `/api/payments/${encodeURIComponent(row.payment_id)}/invoice?kind=${encodeURIComponent(kind)}`
+    : (kind === 'refund' ? row.refund_document_url : row.document_url);
+  if (!url) throw new Error('לא נמצא קישור למסמך');
+  // מסמכי iCount היסטוריים אינם תמיד מאפשרים הורדה ב-fetch חוצה דומיינים.
+  // פתיחה ישירה משאירה את המסמך נגיש להורדה/הדפסה גם בלי רשומת תשלום מקומית.
+  if (!row.payment_id) {
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return;
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'הורדת המסמך נכשלה');
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = kind === 'refund' ? 'refund.pdf' : 'invoice.pdf';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+function printPaymentDocument(row, kind = 'charge') {
+  const direct = kind === 'refund' ? row.refund_document_url : row.document_url;
+  const url = direct || (row.payment_id
+    ? `/api/payments/${encodeURIComponent(row.payment_id)}/invoice?kind=${encodeURIComponent(kind)}`
+    : '');
+  if (!url) throw new Error('לא נמצא מסמך להדפסה');
+  const frame = document.createElement('iframe');
+  frame.style.position = 'fixed';
+  frame.style.inset = '0';
+  frame.style.width = '1px';
+  frame.style.height = '1px';
+  frame.style.opacity = '0';
+  frame.src = url;
+  frame.onload = () => {
+    try { frame.contentWindow?.focus(); frame.contentWindow?.print(); }
+    catch { window.open(url, '_blank', 'noopener,noreferrer'); }
+    window.setTimeout(() => frame.remove(), 60_000);
+  };
+  document.body.appendChild(frame);
+}
+
+function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to, onReload }) {
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+  const filters = data?.filters || {};
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [method, setMethod] = useState('all');
+  const [source, setSource] = useState('all');
+  const [product, setProduct] = useState('all');
+  const [activity, setActivity] = useState('all');
+  const [sort, setSort] = useState('newest');
+  const [expanded, setExpanded] = useState('');
+  const [busyKey, setBusyKey] = useState('');
+  const [message, setMessage] = useState({ type: '', text: '' });
+
+  const visibleRows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const list = rows.filter((row) => {
+      if (status !== 'all' && row.status !== status) return false;
+      if (method !== 'all' && row.payment_method_label !== method) return false;
+      if (source !== 'all' && row.source !== source) return false;
+      if (product !== 'all' && !row.product_names?.includes(product)) return false;
+      if (activity !== 'all' && !row.activities?.includes(activity)) return false;
+      if (!needle) return true;
+      return [
+        row.customer_name, row.customer_phone, row.customer_email, row.description,
+        row.document_number, row.refund_document_number, row.sold_by,
+        ...(row.product_names || []), ...(row.activities || []),
+      ].filter(Boolean).join(' ').toLowerCase().includes(needle);
+    });
+    return list.sort((a, b) => {
+      if (sort === 'oldest') return String(a.created_at || a.date).localeCompare(String(b.created_at || b.date));
+      if (sort === 'amount-high') return Number(b.amount || 0) - Number(a.amount || 0);
+      if (sort === 'amount-low') return Number(a.amount || 0) - Number(b.amount || 0);
+      if (sort === 'customer') return String(a.customer_name || '').localeCompare(String(b.customer_name || ''), 'he');
+      if (sort === 'open-high') return Number(b.open_amount || 0) - Number(a.open_amount || 0);
+      return String(b.created_at || b.date).localeCompare(String(a.created_at || a.date));
+    });
+  }, [rows, query, status, method, source, product, activity, sort]);
+
+  const clear = () => {
+    setQuery(''); setStatus('all'); setMethod('all'); setSource('all');
+    setProduct('all'); setActivity('all'); setSort('newest'); setExpanded('');
+  };
+  const hasFilters = query || status !== 'all' || method !== 'all' || source !== 'all' || product !== 'all' || activity !== 'all' || sort !== 'newest';
+
+  const act = async (key, action, success) => {
+    setBusyKey(key); setMessage({ type: '', text: '' });
+    try {
+      const result = await action();
+      if (result === false) return;
+      setMessage({ type: 'success', text: success });
+      await onReload?.();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message || 'הפעולה נכשלה' });
+    } finally { setBusyKey(''); }
+  };
+
+  const sendInvoice = async (row, kind = 'charge') => {
+    if (!row.payment_id) throw new Error('שליחה זמינה לתשלומים שמקושרים לתיק לקוח');
+    const response = await fetch(`/api/payments/${encodeURIComponent(row.payment_id)}/send-invoice`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || 'שליחת המסמך נכשלה');
+  };
+
+  const refund = async (row, partial = false) => {
+    if (!row.payment_id) throw new Error('למסמך היסטורי יש לבצע זיכוי מתוך iCount');
+    const postRefund = async (endpoint, payload = {}) => {
+      const response = await fetch(`/api/payments/${encodeURIComponent(row.payment_id)}/${endpoint}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'הזיכוי נכשל');
+      return body;
+    };
+    const refundPreview = async (endpoint) => {
+      const response = await fetch(`/api/payments/${encodeURIComponent(row.payment_id)}/${endpoint}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'חישוב הזיכוי נכשל');
+      return body;
+    };
+
+    if (partial) {
+      let recommended = null;
+      try {
+        if (row.equipment_policy_refund) {
+          const preview = await refundPreview('equipment-refund-preview');
+          recommended = Number(preview.recommendation?.amount);
+        } else if (row.has_passes) {
+          const preview = await refundPreview('pass-refund-preview');
+          recommended = Number(preview.total);
+        }
+        if (!Number.isFinite(recommended)) recommended = null;
+      } catch {
+        recommended = null;
+      }
+      const entered = window.prompt(
+        `סכום לזיכוי (מתוך ${moneyPrecise.format(row.amount)})`
+          + (recommended != null ? `\nהמלצת המדיניות: ${moneyPrecise.format(recommended)}` : ''),
+        recommended != null ? String(recommended) : '',
+      );
+      if (entered == null) return false;
+      const amount = Number(String(entered).replace(/[^\d.]/g, ''));
+      if (!(amount > 0) || amount > Number(row.amount || 0)) throw new Error('סכום הזיכוי אינו תקין');
+      const reason = window.prompt('סיבת הזיכוי (חובה):', '') ?? '';
+      if (!reason.trim()) throw new Error('זיכוי חלקי מחייב סיבה');
+      const policyNote = recommended != null && Math.abs(amount - recommended) >= 0.005
+        ? `\nזו חריגה מהמלצת המדיניות (${moneyPrecise.format(recommended)}) והיא תתועד.`
+        : '';
+      if (!window.confirm(`להחזיר ${moneyPrecise.format(amount)}?${policyNote}\nהפעולה תתבצע בפועל בכרטיס ותפיק מסמך זיכוי.`)) return false;
+      await postRefund('manual-refund', { amount, reason: reason.trim(), recommended_amount: recommended });
+      return true;
+    }
+
+    if (row.equipment_policy_refund) {
+      const preview = await refundPreview('equipment-refund-preview');
+      const recommendation = preview.recommendation || {};
+      if (!recommendation.period_resolved) {
+        throw new Error('לא ניתן לקבוע כמה מתקופת ההשכרה נוצלה — יש לבחור זיכוי חלקי ולהזין סכום ידני');
+      }
+      const amount = Number(recommendation.amount) || 0;
+      if (!(amount > 0)) throw new Error('לפי מדיניות ההשכרה אין יתרה לזיכוי');
+      const feeLine = Number(recommendation.fixed_fee) > 0
+        ? `\nדמי ביטול: ${moneyPrecise.format(recommendation.fixed_fee)}`
+        : '';
+      if (!window.confirm(
+        `זיכוי השכרת ציוד לפי ${preview.policy?.name || 'המדיניות'}:`
+          + `\nשולם: ${moneyPrecise.format(preview.paid_amount)}`
+          + `\nנותרו ${recommendation.remaining_units} מתוך ${recommendation.total_units} יחידות`
+          + feeLine
+          + `\n\nלהחזיר ${moneyPrecise.format(amount)}?`,
+      )) return false;
+      const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+      await postRefund('equipment-refund', { approved_amount: amount, reason: reason.trim() });
+      return true;
+    }
+
+    if (row.has_passes) {
+      const preview = await refundPreview('pass-refund-preview');
+      if (!preview.resolved) {
+        throw new Error('לא ניתן לקבוע כמה מהכרטיס נוצל — יש לבחור זיכוי חלקי ולהזין סכום ידני');
+      }
+      const amount = Number(preview.total) || 0;
+      if (!(amount > 0)) throw new Error('לפי מדיניות הכרטיס אין יתרה לזיכוי');
+      const lines = (preview.items || []).map((item) => {
+        const unit = item.unit === 'days' ? 'ימים' : 'כניסות';
+        return `${item.pass_name}: נוצלו ${item.used_units} מתוך ${item.total_units} ${unit} · מוחזר ${moneyPrecise.format(item.amount)}`;
+      });
+      if (!window.confirm(
+        `זיכוי לפי ${preview.policy?.name || 'מדיניות הכרטיס'}:`
+          + `\n\n${lines.join('\n')}`
+          + `\n\nסה״כ להחזר: ${moneyPrecise.format(amount)}`
+          + '\nהכרטיסים יבוטלו רק לאחר שהכסף יוחזר.',
+      )) return false;
+      const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+      await postRefund('pass-refund', { approved_amount: amount, reason: reason.trim() });
+      return true;
+    }
+
+    const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+    if (!window.confirm(`לזכות את מלוא התשלום בסך ${moneyPrecise.format(row.amount)}?`)) return false;
+    await postRefund('refund', { reason: reason.trim() });
+    return true;
+  };
+
+  return <div className="finance-payment-centre">
+    <section className="finance-metrics finance-payment-metrics">
+      <Metric label="גבייה נטו" value={summary.net_collected} note={`${number.format(summary.paid_count || 0)} תשלומים`} icon={BadgeDollarSign} color="#2DD4BF" />
+      <Metric label="חיובים פתוחים" value={summary.open_amount} note={`${number.format(summary.open_count || 0)} ממתינים`} icon={Clock3} color="#FBBF24" />
+      <Metric label="זיכויים" value={summary.refunds} note={`${number.format(summary.refunded_count || 0)} פעולות`} icon={RotateCcw} color="#FB7185" />
+      <Metric label="לקוחות בתקופה" value={summary.customers} note={`${number.format(summary.records || 0)} רשומות`} icon={UsersRound} color="#A78BFA" plain />
+    </section>
+
+    <section className="card finance-payment-workspace">
+      <header className="finance-payment-header">
+        <div><h2>כל העסקאות והתשלומים</h2><p>חיובים פתוחים, גבייה, זיכויים ומסמכי iCount במקום אחד</p></div>
+        <div className="finance-payment-header-actions">
+          <a className="btn btn-ghost btn-sm" href={`/api/finance/payments/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={15} />ייצוא CSV</a>
+          <button className="btn btn-ghost btn-sm" onClick={onReload}><RefreshCw size={15} />רענון</button>
+        </div>
+      </header>
+
+      <div className="finance-payment-filters">
+        <label className="finance-payment-search"><span>חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
+        <label><span>סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">כל הסטטוסים</option>{Object.entries(PAYMENT_STATUS).map(([key, meta]) => <option key={key} value={key}>{meta.label}{filters.statuses?.[key] ? ` (${filters.statuses[key]})` : ''}</option>)}</AppSelect></label>
+        <label><span>אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}><option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span>מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
+        <label><span>מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span>אירוע</span><AppSelect className="input select input-sm" value={activity} onChange={(event) => setActivity(event.target.value)}><option value="all">כל האירועים</option>{(filters.events || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span>מיון</span><AppSelect className="input select input-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">החדש ביותר</option><option value="oldest">הישן ביותר</option><option value="amount-high">סכום גבוה</option><option value="amount-low">סכום נמוך</option><option value="open-high">חוב פתוח גבוה</option><option value="customer">שם לקוח</option></AppSelect></label>
+      </div>
+      <div className="finance-payment-filter-meta"><span>מוצגות {number.format(visibleRows.length)} מתוך {number.format(rows.length)} רשומות</span>{hasFilters && <button className="btn btn-ghost btn-sm" onClick={clear}><XCircle size={14} />ניקוי סינון</button>}</div>
+      {message.text && <div className={`alert alert-${message.type}`} style={{ margin: '0 18px 14px' }}>{message.text}</div>}
+
+      <div className="table-wrap finance-payment-table-wrap"><table className="crm-table finance-payment-table">
+        <thead><tr><th>תאריך</th><th>לקוח</th><th>תיאור</th><th>מקור</th><th>תשלום</th><th>סכום</th><th>סטטוס</th><th /></tr></thead>
+        <tbody>{visibleRows.map((row) => {
+          const meta = paymentStatus(row.status);
+          const isOpen = expanded === row.id;
+          const customerLink = row.customer_id ? `/leads?open=parent:${encodeURIComponent(row.customer_id)}` : '';
+          const billingClientLink = icountClientUrl(row.icount_client_id);
+          const canRefund = !!row.payment_id && ['paid', 'partial_refund'].includes(row.status) && !!row.document_number;
+          const primaryDocumentLabel = row.accounting_only && row.status === 'refunded' ? 'מסמך זיכוי' : 'חשבונית';
+          const primaryDocumentActionLabel = `${row.payment_id ? 'הורדת' : 'פתיחת'} ${primaryDocumentLabel}`;
+          return <React.Fragment key={row.id}>
+            <tr className={isOpen ? 'is-expanded' : ''} onClick={() => setExpanded(isOpen ? '' : row.id)} title="לחיצה לפירוט ופעולות">
+              <td><strong>{formatDate(row.date)}</strong><small>{row.created_at ? formatDateTime(row.created_at).split(',').pop() : ''}</small></td>
+              <td>{customerLink ? <a href={customerLink} onClick={(event) => event.stopPropagation()}><strong>{row.customer_name}</strong></a> : <strong>{row.customer_name}</strong>}<small>{row.customer_phone || row.customer_email || ''}</small></td>
+              <td><strong>{row.description}</strong><small>{row.activities?.join(', ') || row.product_names?.slice(0, 2).join(', ')}</small></td>
+              <td><span className="finance-payment-source">{PAYMENT_SOURCE[row.source] || row.source}</span><small>{row.sold_by || ''}</small></td>
+              <td>{row.payment_method_label}<small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
+              <td><strong>{moneyPrecise.format(row.amount)}</strong>{row.open_amount > 0 && <small className="finance-open-amount">פתוח {moneyPrecise.format(row.open_amount)}</small>}{row.refund_amount > 0 && <small className="finance-refund-amount">זוכה {moneyPrecise.format(row.refund_amount)}</small>}</td>
+              <td><span className={meta.cls}>{meta.label}</span></td>
+              <td><button className="btn btn-ghost btn-icon btn-sm" aria-label="פתיחת פירוט" onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? '' : row.id); }}><ChevronDown size={16} style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }} /></button></td>
+            </tr>
+            {isOpen && <tr className="finance-payment-detail-row"><td colSpan="8"><div className="finance-payment-detail">
+              <div className="finance-payment-detail-grid">
+                <div><span>מסמך חיוב</span><strong>{row.document_number || 'טרם הופק'}</strong></div>
+                <div><span>מסמך זיכוי</span><strong>{row.refund_document_number || '—'}</strong></div>
+                <div><span>נגבה בפועל</span><strong>{moneyPrecise.format(row.gross_collected)}</strong></div>
+                <div><span>נטו לאחר זיכויים</span><strong>{moneyPrecise.format(row.net_amount)}</strong></div>
+                <div><span>אמצעי ומזהה</span><strong>{row.payment_method_label}{row.card_last4 ? ` · ••••${row.card_last4}` : ''}</strong></div>
+                <div><span>שיוך</span><strong>{row.activities?.join(', ') || PAYMENT_SOURCE[row.source] || row.source}</strong></div>
+              </div>
+              <div className="finance-payment-items"><h3>פירוט פריטים</h3>{row.items?.length ? row.items.map((item, index) => <div key={`${row.id}-item-${index}`}><span>{item.name}{item.quantity > 1 ? ` × ${item.quantity}` : ''}</span><strong>{moneyPrecise.format(item.total)}</strong></div>) : <p>אין פירוט פריטים במסמך</p>}</div>
+              {row.refund_reason && <div className="finance-payment-note"><strong>סיבת זיכוי:</strong> {row.refund_reason}</div>}
+              <div className="finance-payment-actions">
+                {row.payment_url && ['pending', 'open', 'quoted'].includes(row.status) && <><button className="btn btn-ghost btn-sm" onClick={() => navigator.clipboard.writeText(row.payment_url)}><Copy size={14} />העתקת קישור תשלום</button><a className="btn btn-ghost btn-sm" href={row.payment_url} target="_blank" rel="noreferrer"><ExternalLink size={14} />פתיחת קישור</a></>}
+                {(row.document_url || row.payment_id) && <button className="btn btn-ghost btn-sm" disabled={busyKey === `${row.id}:download`} onClick={() => act(`${row.id}:download`, () => downloadPaymentDocument(row), `${primaryDocumentLabel} נפתח`)}><Download size={14} />{primaryDocumentActionLabel}</button>}
+                {(row.document_url || row.payment_id) && <button className="btn btn-ghost btn-sm" onClick={() => { try { printPaymentDocument(row); } catch (error) { setMessage({ type: 'error', text: error.message }); } }}><Printer size={14} />הדפסת {primaryDocumentLabel}</button>}
+                {row.payment_id && row.document_number && <button className="btn btn-ghost btn-sm" disabled={busyKey === `${row.id}:send`} onClick={() => act(`${row.id}:send`, () => sendInvoice(row), 'החשבונית נשלחה בוואטסאפ')}><Send size={14} />שליחה ללקוח</button>}
+                {row.document_url && <a className="btn btn-ghost btn-sm" href={row.document_url} target="_blank" rel="noreferrer"><ReceiptText size={14} />מסמך iCount</a>}
+                {billingClientLink && <a className="btn btn-ghost btn-sm" href={billingClientLink} target="_blank" rel="noreferrer"><UsersRound size={14} />תיק לקוח ב־iCount</a>}
+                {customerLink && <a className="btn btn-ghost btn-sm" href={customerLink}><ExternalLink size={14} />תיק לקוח במערכת</a>}
+                {row.refund_document_url && <><button className="btn btn-ghost btn-sm" onClick={() => act(`${row.id}:refund-download`, () => downloadPaymentDocument(row, 'refund'), 'מסמך הזיכוי הורד')}><Download size={14} />מסמך זיכוי</button>{row.payment_id && <button className="btn btn-ghost btn-sm" onClick={() => act(`${row.id}:refund-send`, () => sendInvoice(row, 'refund'), 'מסמך הזיכוי נשלח')}><Send size={14} />שליחת זיכוי</button>}</>}
+                {canRefund && <><span className="finance-payment-actions-spacer" /><button className="btn btn-ghost btn-sm is-danger" disabled={busyKey.startsWith(`${row.id}:`)} onClick={() => act(`${row.id}:refund`, () => refund(row), 'הזיכוי המלא בוצע')}><RotateCcw size={14} />זיכוי מלא</button><button className="btn btn-ghost btn-sm is-danger" disabled={busyKey.startsWith(`${row.id}:`)} onClick={() => act(`${row.id}:partial`, () => refund(row, true), 'הזיכוי החלקי בוצע')}><MoreHorizontal size={14} />זיכוי חלקי</button></>}
+              </div>
+            </div></td></tr>}
+          </React.Fragment>;
+        })}{!visibleRows.length && <tr><td colSpan="8" className="finance-empty">לא נמצאו תשלומים שמתאימים לסינון</td></tr>}</tbody>
+      </table></div>
+    </section>
+    <SalesViews data={salesData} view={salesView} onViewChange={onSalesViewChange} />
+  </div>;
+}
+
 function TrendChart({ rows = [] }) {
   const max = Math.max(1, ...rows.flatMap((row) => [row.revenue, row.expenses, row.collected]));
   if (!rows.length) return <div className="finance-empty">אין עדיין נתונים בתקופה שנבחרה</div>;
@@ -162,12 +493,14 @@ function MatchBadge({ match }) {
 export default function FinancialReports() {
   const requestedTab = new URLSearchParams(window.location.search).get('tab');
   const requestedSalesView = new URLSearchParams(window.location.search).get('view');
-  const [tab, setTab] = useState(TABS.some(([key]) => key === requestedTab) ? requestedTab : 'overview');
+  const normalizedRequestedTab = requestedTab === 'sales' ? 'payments' : requestedTab;
+  const [tab, setTab] = useState(normalizedRequestedTab === 'payments' || TABS.some(([key]) => key === normalizedRequestedTab) ? normalizedRequestedTab : 'overview');
   const [from, setFrom] = useState(yearStart());
   const [to, setTo] = useState(today());
   const [dashboard, setDashboard] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [salesBreakdown, setSalesBreakdown] = useState({ summary: {}, deals: [], daily: [], events: [], products: [], payment_methods: [], customers: [] });
+  const [paymentsReport, setPaymentsReport] = useState({ summary: {}, rows: [], filters: {} });
   const [salesView, setSalesView] = useState(SALES_VIEWS.some(([key]) => key === requestedSalesView) ? requestedSalesView : 'deals');
   const [reconciliation, setReconciliation] = useState({ rows: [], counts: {} });
   const [syncStatus, setSyncStatus] = useState(null);
@@ -186,15 +519,16 @@ export default function FinancialReports() {
     setLoading(true); setError('');
     try {
       const query = new URLSearchParams({ from, to, pageSize: '500' });
-      const [dashboardBody, transactionBody, salesBody, reconciliationBody, statusBody, automationBody] = await Promise.all([
+      const [dashboardBody, transactionBody, salesBody, paymentsBody, reconciliationBody, statusBody, automationBody] = await Promise.all([
         fetchJson(`/api/finance/dashboard?${query}`),
         fetchJson(`/api/finance/transactions?${query}`),
         fetchJson(`/api/finance/sales-breakdown?${query}`),
+        fetchJson(`/api/finance/payments?${query}`),
         fetchJson('/api/finance/reconciliation'),
         fetchJson('/api/finance/sync-status'),
         fetchJson('/api/finance/automation'),
       ]);
-      setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setSalesBreakdown(salesBody); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
+      setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setSalesBreakdown(salesBody); setPaymentsReport(paymentsBody); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
     } catch (loadError) { setError(loadError.message); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -344,7 +678,7 @@ export default function FinancialReports() {
       {(tab === 'overview' || tab === 'revenue') && <><section className="finance-metrics">
         <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" />
       </section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>{tab === 'revenue' && <article className="card finance-panel"><header><div><h2>מסמכי הכנסה</h2><p>הצעות וחשבונות עסקה אינם הכנסה</p></div></header><TransactionsTable rows={transactions} kind="document" /></article>}</>}
-      {tab === 'sales' && <SalesViews data={salesBreakdown} view={salesView} onViewChange={setSalesView} />}
+      {tab === 'payments' && <PaymentCentre data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />}
       {tab === 'expenses' && <><section className="finance-metrics"><Metric label="הוצאות לפני מע״מ" value={kpi.expenses_net} note="הזנה ישירה + iCount + ארכיון Notion" icon={ReceiptText} color="#FB7185" /><Metric label="הוצאות כולל מע״מ" value={kpi.expenses_gross} note={`${number.format(counts.expenses || 0)} רשומות שמורות`} icon={Banknote} color="#F97316" /></section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הוצאות לפי סיווג</h2><p>חלוקה ניהולית מכל מקורות ההוצאות</p></div></header><div className="finance-category-list">{expenseCategories.map(([category, amount]) => <div key={category}><span>{category}</span><div><i style={{ width: `${Math.max(4, amount / Math.max(1, expenseCategories[0]?.[1]) * 100)}%` }} /></div><strong>{money.format(amount)}</strong></div>)}</div></article><article className="card finance-panel finance-source-card"><header><div><h2>מקורות הנתונים</h2><p>הזנה שוטפת כאן; Notion נשאר ארכיון</p></div></header><div><span className="finance-source is-manual">הזנה ישירה</span><p>הוצאות חדשות נשמרות במערכת הזו.</p></div><div><span className="finance-source is-icount">iCount</span><p>מקור חשבונאי לסכומים, מע״מ וסטטוס.</p></div><div><span className="finance-source is-notion">Notion · ארכיון</span><p>היסטוריה שיובאה פעם אחת; ללא סנכרון שוטף.</p></div></article></section><article className="card finance-panel"><header><div><h2>פירוט הוצאות</h2><p>כל ההוצאות השמורות במערכת</p></div></header><TransactionsTable rows={transactions} kind="expense" /></article></>}
       {tab === 'automation' && <div className="finance-automation">
         <section className="card finance-automation-hero"><div><span className="finance-eyebrow"><Sparkles size={15} /> מנוע הוצאות חכם</span><h2>מחשבונית לתנועה — ומשם לרואה החשבון</h2><p>המערכת שומרת את המסמך, מתאימה אותו לתנועת בנק או אשראי, ומעבירה רק התאמות ודאיות. כל ספק נשאר גלוי לבדיקה.</p></div><button className="btn btn-primary" onClick={runMatching} disabled={automationBusy}><Link2 size={16} />{automationBusy ? 'מעבד…' : 'הרצת התאמה'}</button></section>

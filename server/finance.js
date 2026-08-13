@@ -219,6 +219,133 @@ const paymentMethodLabel = (method) => ({
   barter: 'ברטר',
 }[String(method || '').toLowerCase()] || String(method || 'לא ידוע'));
 
+function financeDocumentKey(document) {
+  const docnum = String(document?.docnum || '').trim();
+  const doctype = String(document?.doctype || '').trim().toLowerCase();
+  return docnum ? `${doctype || 'document'}:${docnum}` : String(document?.id || '');
+}
+
+function financeDocumentScore(document, linesByDocument = new Map()) {
+  return (
+    (document?.source_url ? 8 : 0) +
+    (document?.client_id ? 4 : 0) +
+    (document?.client_name ? 2 : 0) +
+    ((linesByDocument.get(String(document?.id || '')) || []).length ? 6 : 0) +
+    (document?.updated_at ? 1 : 0)
+  );
+}
+
+/**
+ * iCount syncs can occasionally return the same document more than once with
+ * different source ids. A receipt must only contribute once to totals.
+ */
+function uniqueFinanceDocuments(documents = [], linesByDocument = new Map()) {
+  const unique = new Map();
+  for (const document of documents) {
+    const key = financeDocumentKey(document);
+    if (!key) continue;
+    const current = unique.get(key);
+    if (!current || financeDocumentScore(document, linesByDocument) > financeDocumentScore(current, linesByDocument)) {
+      unique.set(key, document);
+    }
+  }
+  return [...unique.values()];
+}
+
+export function normalizePaymentStatus(status, { amount = 0, refundAmount = 0 } = {}) {
+  const raw = String(status || '').trim().toLowerCase();
+  if (['pending', 'pending_payment', 'waiting', 'open'].includes(raw)) return raw === 'open' ? 'open' : 'pending';
+  if (['cancelled', 'canceled', 'void'].includes(raw)) return 'cancelled';
+  if (['failed', 'declined', 'error'].includes(raw)) return 'failed';
+  if (['quoted', 'quote', 'offer'].includes(raw)) return 'quoted';
+  if (['refunded', 'refund', 'credit'].includes(raw)) {
+    const paid = Math.abs(Number(amount) || 0);
+    const refunded = Math.abs(Number(refundAmount) || 0);
+    return refunded > 0 && paid > 0 && refunded + 0.005 < paid ? 'partial_refund' : 'refunded';
+  }
+  if (['paid', 'completed', 'success', 'succeeded'].includes(raw)) return 'paid';
+  return raw || 'unknown';
+}
+
+function normalizedItem(row, fallbackAmount = 0) {
+  const quantity = Math.abs(Number(row?.quantity) || 1);
+  const unitPrice = Number(row?.unitprice ?? row?.unit_price);
+  const explicitTotal = Number(row?.line_gross ?? row?.total ?? row?.amount);
+  const total = Number.isFinite(explicitTotal)
+    ? explicitTotal
+    : (Number.isFinite(unitPrice) ? unitPrice * quantity : Number(fallbackAmount) || 0);
+  return {
+    id: row?.pricelist_id || row?.item_id || row?.sku || row?.id || row?.name || row?.description || null,
+    name: row?.name || row?.description || 'מוצר ללא שם',
+    quantity,
+    unit_price: Number.isFinite(unitPrice) ? unitPrice : (quantity ? total / quantity : total),
+    total: roundFinance(total),
+  };
+}
+
+function paymentSource(payment, sale, linkedActivities) {
+  if (payment?.equipment_checkout_token || payment?.equipment_payment || payment?.equipment_family_payment || payment?.equipment_shoes_upgrade) {
+    return 'equipment';
+  }
+  if (linkedActivities.length || payment?.activity_id || payment?.activity_registration_id || payment?.activity_host_payment) {
+    return 'activity';
+  }
+  if (payment?.pos_sale_id || sale) return 'pos';
+  return 'customer';
+}
+
+function paymentRowAmounts(status, amount, explicitRefund = 0, { accountingCredit = false, collected = null } = {}) {
+  const absoluteAmount = Math.abs(Number(amount) || 0);
+  let refund = Math.abs(Number(explicitRefund) || 0);
+  let gross = 0;
+  let open = 0;
+
+  if (accountingCredit) {
+    refund = refund || absoluteAmount;
+  } else if (status === 'paid' || status === 'partial_refund' || status === 'refunded') {
+    gross = collected == null ? absoluteAmount : Math.min(absoluteAmount, Math.abs(Number(collected) || 0));
+    if (status === 'refunded' && !refund) refund = absoluteAmount;
+  } else if (status === 'pending' || status === 'open' || status === 'quoted') {
+    gross = Math.min(absoluteAmount, Math.abs(Number(collected) || 0));
+    open = Math.max(0, absoluteAmount - gross);
+  }
+
+  return {
+    amount: roundFinance(absoluteAmount),
+    gross_collected: roundFinance(gross),
+    open_amount: roundFinance(open),
+    refund_amount: roundFinance(refund),
+    net_amount: roundFinance(gross - refund),
+  };
+}
+
+function summarizePaymentRows(rows) {
+  return {
+    records: rows.length,
+    customers: new Set(rows.map((row) => row.customer_id || row.customer_name).filter(Boolean)).size,
+    paid_count: rows.filter((row) => ['paid', 'partial_refund', 'refunded'].includes(row.status)).length,
+    open_count: rows.filter((row) => ['pending', 'open', 'quoted'].includes(row.status)).length,
+    refunded_count: rows.filter((row) => Number(row.refund_amount) > 0).length,
+    gross_collected: roundFinance(rows.reduce((sum, row) => sum + Number(row.gross_collected || 0), 0)),
+    open_amount: roundFinance(rows.reduce((sum, row) => sum + Number(row.open_amount || 0), 0)),
+    refunds: roundFinance(rows.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0)),
+    net_collected: roundFinance(rows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)),
+  };
+}
+
+function operationalStatusScore(status) {
+  const normalized = normalizePaymentStatus(status);
+  return ({ refunded: 100, partial_refund: 90, cancelled: 80, paid: 40, pending: 20, open: 20, quoted: 10 }[normalized] || 0);
+}
+
+function mergeMeaningful(fallback, preferred) {
+  const merged = { ...(fallback || {}) };
+  Object.entries(preferred || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') merged[key] = value;
+  });
+  return merged;
+}
+
 function addAggregate(map, key, base, amount, customerId) {
   const current = map.get(key) || { ...base, deals: 0, revenue: 0, refunds: 0, customers: new Set() };
   current.deals += 1;
@@ -261,9 +388,10 @@ export function buildSalesBreakdown({
 } = {}) {
   const linesByDocument = new Map();
   for (const line of lines) {
-    const rows = linesByDocument.get(line.document_id) || [];
+    const key = String(line.document_id || '');
+    const rows = linesByDocument.get(key) || [];
     rows.push(line);
-    linesByDocument.set(line.document_id, rows);
+    linesByDocument.set(key, rows);
   }
   const paymentEventsByDocument = new Map();
   for (const payment of paymentEvents) {
@@ -296,7 +424,8 @@ export function buildSalesBreakdown({
   const customers = new Map();
   const deals = [];
 
-  const recognizedDocumentNumbers = new Set(documents
+  const uniqueDocuments = uniqueFinanceDocuments(documents, linesByDocument);
+  const recognizedDocumentNumbers = new Set(uniqueDocuments
     .filter((document) => classifyDocument(document.doctype, {
       isStorno: document.is_storno,
       total: document.total_gross,
@@ -319,7 +448,7 @@ export function buildSalesBreakdown({
       operational_payment: payment,
     }));
 
-  for (const document of [...documents, ...operationalDocuments]) {
+  for (const document of [...uniqueDocuments, ...operationalDocuments]) {
     if (!dateInRange(document.document_date, from, to)) continue;
     const classification = classifyDocument(document.doctype, {
       isStorno: document.is_storno,
@@ -343,7 +472,7 @@ export function buildSalesBreakdown({
         : []),
       ...registrationsForPayment.map((row) => activityById.get(String(row.activity_id))).filter(Boolean),
     ].map((row) => [String(row.id), row])).values()];
-    const documentLines = linesByDocument.get(document.id) || [];
+    const documentLines = linesByDocument.get(String(document.id || '')) || [];
     const eventLabels = linkedActivities.map((row) => row.name || 'אירוע ללא שם');
     const detailRows = sale?.items?.length
       ? sale.items
@@ -452,5 +581,289 @@ export function buildSalesBreakdown({
     })).sort((a, b) => Math.abs(b.revenue) - Math.abs(a.revenue)),
     payment_methods: finalizeAggregate(methods),
     customers: finalizeAggregate(customers).slice(0, 20),
+  };
+}
+
+/**
+ * Unified operational payment centre. Payments are the source of truth for
+ * actionable records; accounting documents fill historical gaps only. That
+ * keeps open links visible without counting the same iCount receipt twice.
+ */
+export function buildPaymentsReport({
+  documents = [],
+  lines = [],
+  paymentEvents = [],
+  payments = [],
+  posSales = [],
+  registrations = [],
+  activities = [],
+  parents = [],
+  students = [],
+  customerPasses = [],
+  from,
+  to,
+} = {}) {
+  const linesByDocument = new Map();
+  for (const line of lines) {
+    const key = String(line.document_id || '');
+    const rows = linesByDocument.get(key) || [];
+    rows.push(line);
+    linesByDocument.set(key, rows);
+  }
+  const eventsByDocument = new Map();
+  for (const event of paymentEvents) {
+    const key = String(event.document_id || '');
+    const rows = eventsByDocument.get(key) || [];
+    rows.push(event);
+    eventsByDocument.set(key, rows);
+  }
+
+  const uniqueDocuments = uniqueFinanceDocuments(documents, linesByDocument);
+  const documentByNumber = new Map();
+  uniqueDocuments.forEach((document) => {
+    if (!document.docnum) return;
+    const key = String(document.docnum);
+    const rows = documentByNumber.get(key) || [];
+    rows.push(document);
+    documentByNumber.set(key, rows);
+  });
+  const saleById = new Map(posSales.map((sale) => [String(sale.id), sale]));
+  const saleByPayment = new Map(posSales.filter((sale) => sale.payment_id).map((sale) => [String(sale.payment_id), sale]));
+  const parentById = new Map(parents.map((parent) => [String(parent.id), parent]));
+  const studentById = new Map(students.map((student) => [String(student.id), student]));
+  const activityById = new Map(activities.map((activity) => [String(activity.id), activity]));
+  const registrationsByPayment = new Map();
+  for (const registration of registrations) {
+    if (!registration.payment_id) continue;
+    const key = String(registration.payment_id);
+    const rows = registrationsByPayment.get(key) || [];
+    rows.push(registration);
+    registrationsByPayment.set(key, rows);
+  }
+  const hostActivityByPayment = new Map(activities
+    .filter((activity) => activity.host_payment_id)
+    .map((activity) => [String(activity.host_payment_id), activity]));
+  const passSaleIds = new Set(customerPasses.map((pass) => String(pass.sale_id || '')).filter(Boolean));
+
+  const rows = [];
+  const claimedDocuments = new Set();
+  const paymentGroups = new Map();
+  for (const candidate of payments) {
+    const candidateSale = (candidate.pos_sale_id && saleById.get(String(candidate.pos_sale_id)))
+      || saleByPayment.get(String(candidate.id))
+      || null;
+    const docnum = candidate.icount_doc_number || candidateSale?.icount_doc_number || '';
+    const doctype = candidate.icount_doctype || candidateSale?.icount_doctype || 'invrec';
+    const key = docnum
+      ? `document:${String(doctype).toLowerCase()}:${docnum}`
+      : (candidateSale?.id || candidate.pos_sale_id
+        ? `sale:${candidateSale?.id || candidate.pos_sale_id}`
+        : `payment:${candidate.id}`);
+    const score = operationalStatusScore(candidate.status)
+      + (candidateSale ? 30 : 0)
+      + (candidate.pos_sale_id ? 15 : 0)
+      + (candidate.icount_doc_number ? 6 : 0)
+      + (candidate.payment_url ? 2 : 0);
+    const current = paymentGroups.get(key);
+    if (!current) {
+      paymentGroups.set(key, { payment: candidate, sale: candidateSale, score });
+      continue;
+    }
+    const candidateWins = score > current.score;
+    const preferred = candidateWins ? candidate : current.payment;
+    const fallback = candidateWins ? current.payment : candidate;
+    paymentGroups.set(key, {
+      payment: mergeMeaningful(fallback, preferred),
+      sale: candidateWins ? (candidateSale || current.sale) : (current.sale || candidateSale),
+      score: Math.max(score, current.score),
+    });
+  }
+  const paymentRows = [...paymentGroups.values()]
+    .sort((a, b) => String(b.payment.created_at || '').localeCompare(String(a.payment.created_at || '')));
+
+  for (const paymentEntry of paymentRows) {
+    const payment = paymentEntry.payment;
+    const sale = paymentEntry.sale;
+    const matchingDocuments = payment.icount_doc_number
+      ? documentByNumber.get(String(payment.icount_doc_number)) || []
+      : [];
+    const documentCandidates = uniqueFinanceDocuments(matchingDocuments, linesByDocument);
+    const document = documentCandidates.find((candidate) => classifyDocument(candidate.doctype, {
+      isStorno: candidate.is_storno,
+      total: candidate.total_gross,
+    }).sign > 0) || documentCandidates[0] || null;
+
+    const date = israelDate(payment.paid_at || payment.completed_at || payment.created_at || payment.updated_at || document?.document_date);
+    if (!dateInRange(date, from, to)) continue;
+    if (document) claimedDocuments.add(financeDocumentKey(document));
+    const refundDocumentNumber = payment.refund_doc_number || sale?.refund_doc_number || '';
+    if (refundDocumentNumber) {
+      const matchingRefundDocuments = uniqueFinanceDocuments(
+        documentByNumber.get(String(refundDocumentNumber)) || [],
+        linesByDocument,
+      );
+      matchingRefundDocuments
+        .filter((candidate) => classifyDocument(candidate.doctype, {
+          isStorno: candidate.is_storno,
+          total: candidate.total_gross,
+        }).sign < 0)
+        .forEach((candidate) => claimedDocuments.add(financeDocumentKey(candidate)));
+    }
+
+    const linkedActivities = [...new Map([
+      ...(hostActivityByPayment.get(String(payment.id)) ? [hostActivityByPayment.get(String(payment.id))] : []),
+      ...(payment.activity_id && activityById.get(String(payment.activity_id)) ? [activityById.get(String(payment.activity_id))] : []),
+      ...(registrationsByPayment.get(String(payment.id)) || [])
+        .map((registration) => activityById.get(String(registration.activity_id)))
+        .filter(Boolean),
+    ].map((activity) => [String(activity.id), activity])).values()];
+    const parent = parentById.get(String(payment.parent_id || sale?.parent_id || '')) || null;
+    const student = studentById.get(String(payment.student_id || sale?.student_id || '')) || null;
+    const detailRows = sale?.items?.length
+      ? sale.items
+      : (document ? (linesByDocument.get(String(document.id)) || []) : []);
+    const items = detailRows.length
+      ? detailRows.map((item) => normalizedItem(item))
+      : (payment.description ? [normalizedItem({ description: payment.description, amount: payment.amount })] : []);
+    const explicitRefund = Number(payment.refund_amount ?? sale?.refund_amount ?? 0);
+    const status = normalizePaymentStatus(payment.status || sale?.status, {
+      amount: payment.amount ?? sale?.total,
+      refundAmount: explicitRefund,
+    });
+    const amounts = paymentRowAmounts(status, payment.amount ?? sale?.total ?? document?.total_gross, explicitRefund);
+    const customerId = payment.parent_id || sale?.parent_id || document?.client_id || null;
+    const paymentMethod = operationalPaymentMethod(payment, sale);
+
+    rows.push({
+      id: `payment:${payment.id}`,
+      payment_id: payment.id,
+      sale_id: sale?.id || payment.pos_sale_id || null,
+      date,
+      created_at: payment.created_at || sale?.created_at || payment.paid_at || null,
+      paid_at: payment.paid_at || payment.completed_at || null,
+      customer_id: customerId,
+      customer_name: parent?.name || sale?.customer_name || document?.client_name || student?.name || 'לקוח ללא שם',
+      customer_phone: parent?.phone || sale?.customer_phone || student?.phone || '',
+      customer_email: parent?.email || sale?.customer_email || student?.email || '',
+      student_id: payment.student_id || sale?.student_id || null,
+      student_name: student?.name || '',
+      icount_client_id: payment.icount_client_id || sale?.icount_client_id || parent?.icount_client_id || document?.client_id || null,
+      description: payment.description || items.map((item) => item.name).join(', ') || 'תשלום',
+      items,
+      product_names: items.map((item) => item.name),
+      activity_ids: linkedActivities.map((activity) => activity.id),
+      activities: linkedActivities.map((activity) => activity.name || 'אירוע ללא שם'),
+      source: paymentSource(payment, sale, linkedActivities),
+      payment_method: paymentMethod || (document ? eventsByDocument.get(String(document.id))?.[0]?.method : '') || '',
+      payment_method_label: paymentMethodLabel(paymentMethod || (document ? eventsByDocument.get(String(document.id))?.[0]?.method : '')),
+      status,
+      original_status: payment.status || sale?.status || '',
+      ...amounts,
+      document_number: payment.icount_doc_number || sale?.icount_doc_number || document?.docnum || '',
+      document_type: payment.icount_doctype || sale?.icount_doctype || document?.doctype || 'invrec',
+      document_id: payment.icount_doc_id || sale?.icount_doc_id || null,
+      document_url: payment.icount_doc_url || sale?.icount_doc_url || document?.source_url || null,
+      refund_document_number: refundDocumentNumber,
+      refund_document_url: payment.refund_doc_url || sale?.refund_doc_url || null,
+      payment_url: payment.payment_url || sale?.payment_url || '',
+      sold_by: sale?.sold_by || payment.created_by || '',
+      confirmation_code: payment.cc_confirmation_code || sale?.cc_confirmation_code || '',
+      card_last4: payment.cc_last4 || sale?.cc_last4 || '',
+      has_passes: !!payment.pos_sale_id && passSaleIds.has(String(payment.pos_sale_id)),
+      equipment_payment: !!(
+        payment.equipment_checkout_token || payment.equipment_payment || payment.equipment_family_payment || payment.equipment_shoes_upgrade
+      ),
+      equipment_policy_refund: !!payment.equipment_checkout_token,
+      refund_reason: payment.refund_reason || sale?.refund_reason || '',
+      refunded_at: payment.refunded_at || sale?.refunded_at || null,
+      accounting_only: false,
+    });
+  }
+
+  for (const document of uniqueDocuments) {
+    const classification = classifyDocument(document.doctype, {
+      isStorno: document.is_storno,
+      total: document.total_gross,
+    });
+    if (!classification.recognized || claimedDocuments.has(financeDocumentKey(document))) continue;
+    if (!dateInRange(document.document_date, from, to)) continue;
+    const documentLines = linesByDocument.get(String(document.id)) || [];
+    const events = eventsByDocument.get(String(document.id)) || [];
+    const items = documentLines.map((line) => normalizedItem(line));
+    const isCredit = classification.sign < 0;
+    const status = isCredit ? 'refunded' : 'paid';
+    const amounts = paymentRowAmounts(status, document.total_gross, isCredit ? document.total_gross : 0, {
+      accountingCredit: isCredit,
+    });
+    rows.push({
+      id: `document:${financeDocumentKey(document)}`,
+      payment_id: null,
+      sale_id: null,
+      date: document.document_date,
+      created_at: document.created_at || `${document.document_date}T00:00:00`,
+      paid_at: isCredit ? null : document.document_date,
+      customer_id: document.client_id || null,
+      customer_name: document.client_name || 'לקוח ללא שם',
+      customer_phone: '',
+      customer_email: '',
+      student_id: null,
+      student_name: '',
+      icount_client_id: document.client_id || null,
+      description: items.map((item) => item.name).join(', ') || 'מסמך iCount',
+      items,
+      product_names: items.map((item) => item.name),
+      activity_ids: [],
+      activities: [],
+      source: 'icount',
+      payment_method: events[0]?.method || '',
+      payment_method_label: events.length
+        ? [...new Set(events.map((event) => paymentMethodLabel(event.method)))].join(', ')
+        : 'לא ידוע',
+      status,
+      original_status: status,
+      ...amounts,
+      document_number: document.docnum || '',
+      document_type: document.doctype || '',
+      document_id: document.source_id || null,
+      document_url: document.source_url || null,
+      refund_document_number: '',
+      refund_document_url: null,
+      payment_url: '',
+      sold_by: '',
+      confirmation_code: '',
+      card_last4: '',
+      has_passes: false,
+      equipment_payment: false,
+      equipment_policy_refund: false,
+      refund_reason: '',
+      refunded_at: isCredit ? document.document_date : null,
+      accounting_only: true,
+    });
+  }
+
+  rows.sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
+  const statusCounts = {};
+  const methodCounts = {};
+  const sourceCounts = {};
+  rows.forEach((row) => {
+    statusCounts[row.status] = (statusCounts[row.status] || 0) + 1;
+    methodCounts[row.payment_method_label] = (methodCounts[row.payment_method_label] || 0) + 1;
+    sourceCounts[row.source] = (sourceCounts[row.source] || 0) + 1;
+  });
+
+  return {
+    summary: summarizePaymentRows(rows),
+    rows,
+    filters: {
+      statuses: statusCounts,
+      payment_methods: methodCounts,
+      sources: sourceCounts,
+      products: [...new Set(rows.flatMap((row) => row.product_names).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
+      events: [...new Set(rows.flatMap((row) => row.activities).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
+      customers: [...new Map(rows.filter((row) => row.customer_name).map((row) => [String(row.customer_id || row.customer_name), {
+        id: row.customer_id || null,
+        name: row.customer_name,
+      }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'he')),
+    },
   };
 }

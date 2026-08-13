@@ -21,7 +21,7 @@ import {
   KnownFamilyPrompt,
   useFamilyMatch,
 } from './publicFormKit.jsx';
-import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
+import { checkKnownChild, linkFieldsFor, needsChildAnswer } from '../utils/childCheck.js';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
 import {
   blankAnswers,
@@ -950,7 +950,7 @@ export default function PublicOnboardingForm() {
     familyCheckComplete,
     waitingForFamily,
   } = useFamilyMatch(parent.lastName, parent.phone, {
-    skip: identityStatus !== 'new',
+    skip: !['found', 'new'].includes(identityStatus),
     verificationToken: otp.token,
   });
   /**
@@ -1114,7 +1114,7 @@ export default function PublicOnboardingForm() {
   };
 
   /** Children have no stable id until they are saved — identify them by what was typed. */
-  const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
+  const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}|${String(child?.idNumber || '').replace(/\D/g, '')}`;
 
   /**
    * A parent or guardian signs for their minors only — an adult signs for
@@ -2021,8 +2021,16 @@ export default function PublicOnboardingForm() {
           return [childKey(kid), { ...match, linked: match.match ? null : false }];
         }));
         setKnownChildren((current) => ({ ...current, ...Object.fromEntries(checked) }));
-        if (checked.some(([, match]) => match.match)) return;
+        if (checked.some(([, match]) => match.match)) {
+          setError('מצאנו משתתף/ת דומה בתיק אחר. יש לענות על שאלת הזיהוי שמופיעה בכרטיס לפני שממשיכים.');
+          return;
+        }
       }
+    }
+    const pendingChild = kids.find((kid) => needsChildAnswer(knownChildren[childKey(kid)]));
+    if (pendingChild) {
+      setError(`יש לאשר אם ${pendingChild.name} כבר רשום/ה אצלנו, או לבחור שזה משתתף אחר.`);
+      return;
     }
     // Leaving someone unanswered must not happen by accident: a card whose
     // "האם משתתף/ת?" was never answered is not in the submission, and a parent

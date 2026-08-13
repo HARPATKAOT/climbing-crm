@@ -79,6 +79,14 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
+const israelDay = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date);
+};
+
 export default function CashRegister({ isOwner = true, canResetCash = isOwner, sharedStation = false, initialTab = null }) {
   const navigate = useNavigate();
   const [expectedAmount, setExpectedAmount] = useState('');
@@ -88,9 +96,13 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
-  const [activeTab, setActiveTab] = useState(
-    ['products', 'activity-prices', 'discounts', 'manager'].includes(initialTab) && isOwner ? initialTab : 'sale'
-  );
+  const [activeTab, setActiveTab] = useState(() => {
+    const sharedTabs = ['sale', 'links', 'close', 'history'];
+    const ownerTabs = ['products', 'activity-prices', 'discounts', 'manager', 'icount'];
+    if (sharedTabs.includes(initialTab)) return initialTab;
+    if (isOwner && ownerTabs.includes(initialTab)) return initialTab;
+    return 'sale';
+  });
   const [employees, setEmployees] = useState([]);
 
   const [icountStatus, setIcountStatus] = useState({ loading: true });
@@ -111,8 +123,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [historySearch, setHistorySearch] = useState('');
   const [historyStatus, setHistoryStatus] = useState('all');
   const [historyPaymentMethod, setHistoryPaymentMethod] = useState('all');
-  const [historyDateFrom, setHistoryDateFrom] = useState('');
-  const [historyDateTo, setHistoryDateTo] = useState('');
   const [historySort, setHistorySort] = useState('newest');
   const [reports, setReports] = useState(null);
   const [reportsLoading, setReportsLoading] = useState(false);
@@ -433,10 +443,10 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     { k: 'links', label: 'קישורים ללקוח', icon: Link2 },
     { k: 'close', label: 'פתיחה / סגירה', icon: Calculator },
     ...(isOwner ? [{ k: 'manager', label: 'מסוף מנהל', icon: Wallet }] : []),
-    { k: 'history', label: 'היסטוריה', icon: History },
+    { k: 'history', label: 'עסקאות היום', icon: History },
     ...(isOwner
       ? [
-          { k: 'reports', label: 'דוחות פיננסיים', icon: BarChart3, route: '/reports' },
+          { k: 'reports', label: 'כל התשלומים', icon: BarChart3, route: '/reports?tab=payments' },
           { k: 'icount', label: 'סליקה ומסמכים', icon: ReceiptText },
         ]
       : []),
@@ -494,9 +504,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
         return false;
       }
 
-      const saleDate = String(sale.created_at || '').slice(0, 10);
-      if (historyDateFrom && saleDate < historyDateFrom) return false;
-      if (historyDateTo && saleDate > historyDateTo) return false;
+      if (israelDay(sale.created_at) !== israelDay()) return false;
 
       if (query) {
         const itemText = (Array.isArray(sale.items) ? sale.items : [])
@@ -543,8 +551,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     historySearch,
     historyStatus,
     historyPaymentMethod,
-    historyDateFrom,
-    historyDateTo,
     historySort,
   ]);
 
@@ -552,8 +558,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     setHistorySearch('');
     setHistoryStatus('all');
     setHistoryPaymentMethod('all');
-    setHistoryDateFrom('');
-    setHistoryDateTo('');
     setHistorySort('newest');
     setExpandedSaleId('');
   };
@@ -562,8 +566,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     !!historySearch.trim() ||
     historyStatus !== 'all' ||
     historyPaymentMethod !== 'all' ||
-    !!historyDateFrom ||
-    !!historyDateTo ||
     historySort !== 'newest';
 
   const statusLine = icountStatus.loading
@@ -641,11 +643,11 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
           <div className="card card-p">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div>
-                <div className="section-title" style={{ marginBottom: 4 }}>היסטוריית עסקאות</div>
+                <div className="section-title" style={{ marginBottom: 4 }}>עסקאות היום</div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                   {isOwner
-                    ? 'לחיצה על שורה פותחת פירוט · זיכוי וקישורים נמצאים בתוך הפירוט'
-                    : 'לחיצה על שורה פותחת פירוט · זיכוי זמין לעסקאות שלך בתוך הפירוט'}
+                    ? 'כל עסקאות הדלפק של היום · לחיצה על שורה פותחת פירוט ופעולות'
+                    : 'עסקאות הדלפק של היום · לחיצה על שורה פותחת פירוט'}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
@@ -696,24 +698,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                   </AppSelect>
                 </label>
                 <label className="form-group">
-                  <span className="form-label">מתאריך</span>
-                  <input
-                    className="input input-sm"
-                    type="date"
-                    value={historyDateFrom}
-                    onChange={(e) => setHistoryDateFrom(e.target.value)}
-                  />
-                </label>
-                <label className="form-group">
-                  <span className="form-label">עד תאריך</span>
-                  <input
-                    className="input input-sm"
-                    type="date"
-                    value={historyDateTo}
-                    onChange={(e) => setHistoryDateTo(e.target.value)}
-                  />
-                </label>
-                <label className="form-group">
                   <span className="form-label">מיון</span>
                   <AppSelect
                     className="input select input-sm"
@@ -730,7 +714,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
               </div>
               <div className="pos-history-filters-meta">
                 <span>
-                  מוצגות {filteredPosSales.length} מתוך {posSales.length} עסקאות
+                  {new Date().toLocaleDateString('he-IL')} · {filteredPosSales.length} עסקאות היום
                 </span>
                 {hasActiveHistoryFilters && (
                   <button

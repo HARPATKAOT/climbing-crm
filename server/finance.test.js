@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDashboard, buildSalesBreakdown, chooseExpenseRows, classifyDocument, expenseFingerprint, reconcileExpenses } from './finance.js';
+import { buildDashboard, buildPaymentsReport, buildSalesBreakdown, chooseExpenseRows, classifyDocument, expenseFingerprint, reconcileExpenses } from './finance.js';
 
 test('recognizes only accounting revenue documents', () => {
   assert.equal(classifyDocument('invoice').recognized, true);
@@ -87,4 +87,137 @@ test('sales breakdown shows a paid CRM payment before its accounting sync arrive
   assert.equal(report.products[0].name, 'הרשמה למחנה');
   assert.equal(report.payment_methods[0].method, 'אשראי אונליין');
   assert.equal(report.deals[0].customer_name, 'משפחת ישראלי');
+});
+
+test('sales breakdown counts a duplicated accounting document only once', () => {
+  const report = buildSalesBreakdown({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    documents: [
+      { id: 'sync-a', doctype: 'invrec', docnum: '4152', document_date: '2026-08-13', total_gross: 35, client_name: 'נועה' },
+      { id: 'sync-b', doctype: 'invrec', docnum: '4152', document_date: '2026-08-13', total_gross: 35, client_name: 'נועה', source_url: 'https://example.test/doc' },
+    ],
+    lines: [{ document_id: 'sync-b', description: 'כניסה לקיר', quantity: 1, line_gross: 35 }],
+  });
+
+  assert.equal(report.summary.deals, 1);
+  assert.equal(report.summary.revenue, 35);
+  assert.equal(report.deals[0].source_url, 'https://example.test/doc');
+});
+
+test('payments report combines open operational payments with accounting-only history', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-01',
+    to: '2026-08-31',
+    payments: [{
+      id: 'pay-open',
+      parent_id: 'parent-1',
+      amount: 180,
+      description: 'כניסה לקיר, נעליים',
+      status: 'pending',
+      payment_url: 'https://pay.test/open',
+      created_at: '2026-08-13T15:00:00.000Z',
+    }],
+    parents: [{ id: 'parent-1', name: 'דנה צפוני', phone: '0500000000', icount_client_id: 'ic-1' }],
+    documents: [{
+      id: 'doc-1', doctype: 'invrec', docnum: '4000', document_date: '2026-08-12',
+      total_gross: 35, client_id: 'ic-2', client_name: 'נועה', source_url: 'https://doc.test/4000',
+    }],
+    lines: [{ document_id: 'doc-1', description: 'כניסה לקיר', quantity: 1, line_gross: 35 }],
+    paymentEvents: [{ document_id: 'doc-1', method: 'cash', amount: 35 }],
+  });
+
+  assert.equal(report.rows.length, 2);
+  assert.equal(report.summary.open_count, 1);
+  assert.equal(report.summary.open_amount, 180);
+  assert.equal(report.summary.gross_collected, 35);
+  assert.equal(report.rows.find((row) => row.payment_id === 'pay-open').customer_name, 'דנה צפוני');
+  assert.equal(report.rows.find((row) => row.accounting_only).payment_method_label, 'מזומן');
+});
+
+test('payments report never duplicates a linked iCount receipt', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    payments: [{
+      id: 'pay-1', status: 'paid', amount: 105, icount_doc_number: '4153',
+      paid_at: '2026-08-13T18:02:35.000Z', parent_id: 'p1', description: 'כניסה לקיר',
+    }],
+    parents: [{ id: 'p1', name: 'טל צברי' }],
+    documents: [
+      { id: 'doc-a', doctype: 'invrec', docnum: '4153', document_date: '2026-08-13', total_gross: 105, client_name: 'טל צברי' },
+      { id: 'doc-b', doctype: 'invrec', docnum: '4153', document_date: '2026-08-13', total_gross: 105, client_name: 'טל צברי', source_url: 'https://doc.test/4153' },
+    ],
+  });
+
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.summary.gross_collected, 105);
+  assert.equal(report.rows[0].document_url, 'https://doc.test/4153');
+});
+
+test('payments report shows accounting credits as refunds instead of revenue', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-01',
+    to: '2026-08-31',
+    documents: [{
+      id: 'credit-1', doctype: 'refund', docnum: 'R100', document_date: '2026-08-13',
+      total_gross: 80, client_id: 'c1', client_name: 'לקוח מזוכה',
+    }],
+  });
+
+  assert.equal(report.summary.gross_collected, 0);
+  assert.equal(report.summary.refunds, 80);
+  assert.equal(report.summary.net_collected, -80);
+  assert.equal(report.rows[0].status, 'refunded');
+});
+
+test('payments report never counts a linked refund document twice', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-01',
+    to: '2026-08-31',
+    payments: [{
+      id: 'pay-refunded', status: 'refunded', amount: 80, refund_amount: 80,
+      icount_doc_number: '4100', refund_doc_number: 'R4100',
+      paid_at: '2026-08-10T10:00:00.000Z', refunded_at: '2026-08-13T10:00:00.000Z',
+    }],
+    documents: [
+      { id: 'charge-4100', doctype: 'invrec', docnum: '4100', document_date: '2026-08-10', total_gross: 80 },
+      { id: 'credit-4100', doctype: 'refund', docnum: 'R4100', document_date: '2026-08-13', total_gross: 80 },
+    ],
+  });
+
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.summary.gross_collected, 80);
+  assert.equal(report.summary.refunds, 80);
+  assert.equal(report.summary.net_collected, 0);
+  assert.equal(report.rows[0].refund_document_number, 'R4100');
+});
+
+test('payments report merges a generic webhook payment with its POS payment', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    payments: [
+      {
+        id: 'generic-payment', parent_id: 'p1', amount: 35, status: 'paid',
+        description: 'תשלום iCount', icount_doc_number: '4152', paid_at: '2026-08-13T14:37:00.000Z',
+      },
+      {
+        id: 'pos-payment', parent_id: 'p1', amount: 35, status: 'paid',
+        description: 'כניסה לקיר', pos_sale_id: 'sale-1', paid_at: '2026-08-13T14:37:02.000Z',
+      },
+    ],
+    posSales: [{
+      id: 'sale-1', parent_id: 'p1', total: 35, status: 'paid', payment_method: 'cash',
+      icount_doc_number: '4152', items: [{ name: 'כניסה לקיר', quantity: 1, unitprice: 35 }],
+    }],
+    parents: [{ id: 'p1', name: 'נועה כידן' }],
+    documents: [{ id: 'doc-4152', doctype: 'invrec', docnum: '4152', document_date: '2026-08-13', total_gross: 35 }],
+  });
+
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.summary.gross_collected, 35);
+  assert.equal(report.rows[0].payment_id, 'pos-payment');
+  assert.equal(report.rows[0].description, 'כניסה לקיר');
+  assert.deepEqual(report.rows[0].product_names, ['כניסה לקיר']);
 });

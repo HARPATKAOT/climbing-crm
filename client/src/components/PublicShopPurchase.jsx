@@ -24,7 +24,7 @@ import {
   usePhoneVerification,
   SignaturePad,
 } from './publicFormKit.jsx';
-import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
+import { checkKnownChild, linkFieldsFor, needsChildAnswer } from '../utils/childCheck.js';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
 import {
   clearanceTriggers,
@@ -148,7 +148,7 @@ function ShopPurchase({ slug }) {
     setFamilyParentId,
     waitingForFamily,
   } = useFamilyMatch(buyer.lastName, buyer.phone, {
-    skip: identityStatus !== 'new',
+    skip: !['found', 'new'].includes(identityStatus),
     verificationToken: otp.token,
   });
   const identityReady = phoneVerification.verified && ['found', 'new'].includes(identityStatus);
@@ -273,7 +273,7 @@ function ShopPurchase({ slug }) {
         return;
       }
     }
-    if (!found?.found && waitingForFamily) return;
+    if (waitingForFamily) return;
     if (forSelf) {
       const ready = !!found?.adult_health_document_valid && !!found?.adult_waiver_valid;
       setStep(ready ? 4 : 3);
@@ -331,7 +331,14 @@ function ShopPurchase({ slug }) {
           verificationToken: otp.token,
         });
         setKnownChild({ ...match, linked: match.match ? null : false });
-        if (match.match) return;
+        if (match.match) {
+          setError('מצאנו משתתף/ת דומה בתיק אחר. יש לענות על שאלת הזיהוי לפני שממשיכים.');
+          return;
+        }
+      }
+      if (needsChildAnswer(knownChild)) {
+        setError(`יש לאשר אם ${holder.name} כבר רשום/ה אצלנו, או לבחור שזה משתתף אחר.`);
+        return;
       }
       setStep(needsDeclaration ? 3 : 4);
       return;
@@ -515,12 +522,8 @@ function ShopPurchase({ slug }) {
                     <GenderPicker value={buyer.gender} onChange={(gender) => setBuyer({ ...buyer, gender })} />
                   </>
                 )}
-                {!household?.found && (
-                  <>
-                    <KnownFamilyPrompt families={families} chosenId={familyParentId} onChoose={setFamilyParentId} />
-                    <KnownFamilyNote families={families} chosenId={familyParentId} onCancel={() => setFamilyParentId(null)} />
-                  </>
-                )}
+                <KnownFamilyPrompt families={families} chosenId={familyParentId} onChoose={setFamilyParentId} />
+                <KnownFamilyNote families={families} chosenId={familyParentId} onCancel={() => setFamilyParentId(null)} />
               </>
             )}
           </section>

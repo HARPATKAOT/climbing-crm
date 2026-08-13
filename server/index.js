@@ -8552,20 +8552,24 @@ app.get('/api/public/family-check', publicFormRateLimit, async (req, res) => {
     const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
     if (!verified) return;
     if (supa.isEnabled()) {
-      const [remoteParents, remoteStudents, remoteGuardians] = await Promise.all([
+      const [remoteParents, remoteStudents, remoteGuardians, remoteMembers] = await Promise.all([
         supa.getAll('parents'),
         supa.getAll('students'),
         supa.getAll('student_guardians'),
+        supa.getAll('household_members'),
       ]);
       if (remoteParents) db.set('parents', remoteParents);
       if (remoteStudents) db.set('students', remoteStudents);
       if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+      if (remoteMembers) db.set('household_members', remoteMembers);
     }
     const ownParent = findParentForOnboard({ phone: normalizePhone(req.query.phone || '') });
-    // A parent we already know is handled by the household lookup, not here.
-    if (ownParent) return res.json({ families: [] });
+    // A known phone can still belong to a parent whose spouse and children sit
+    // on a separate card. Exclude the caller's current household and offer any
+    // other household with the same surname for explicit confirmation.
     res.json(publicFamilyCandidatesPayload(familyCandidates(db, {
       lastName: req.query.lastName,
+      excludeParentId: ownParent?.id || null,
     })));
   } catch (err) {
     console.error('public family check error:', err.message);

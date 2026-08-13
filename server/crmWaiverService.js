@@ -9,6 +9,8 @@ import {
   linkGuardian,
   linkHouseholdGuardians,
   guardianParentIds,
+  childrenOfParent,
+  canMergeSingleParentFamilies,
   expandHousehold,
   mergeFamily,
   normalizedIdNumber,
@@ -495,6 +497,16 @@ export async function saveCrmParticipants({
   const savedParticipants = [];
   const declarations = [];
   const waivers = [];
+  const confirmedFamilyParentId = clean(parentInput?.family_parent_id || parentInput?.familyParentId);
+  if (
+    confirmedFamilyParentId
+    && !canMergeSingleParentFamilies(db, parent.id, confirmedFamilyParentId)
+  ) {
+    throw Object.assign(
+      new Error('לא ניתן לחבר את המשפחות: החיבור אפשרי רק כאשר לשני ההורים אין בן או בת זוג בתיק.'),
+      { status: 409 }
+    );
+  }
   const medicalQuestions = template.medicalQuestions
     || CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question }));
   const waiverQuestions = template.waiverQuestions
@@ -586,6 +598,50 @@ export async function saveCrmParticipants({
         student = candidate;
       } else if (candidate) {
         throw Object.assign(new Error('אפשר לרשום רק משתתפים מתיק המשפחה'), { status: 403 });
+      }
+    }
+    if (!student) {
+      const claimedParticipantId = normalizedIdNumber(input.idNumber || input.climberIdNum);
+      if (claimedParticipantId.length >= 5) {
+        const identityMatches = (db.get('students') || []).filter(
+          (item) => normalizedIdNumber(item.idNumber) === claimedParticipantId
+        );
+        if (identityMatches.length > 1) {
+          throw Object.assign(
+            new Error(`תעודת הזהות של ${name} כבר מופיעה בכמה תיקי משתתפים — יש לפנות לצוות לאיחוד הרשומות`),
+            { status: 409 }
+          );
+        }
+        const candidate = identityMatches[0] || null;
+        if (candidate) {
+          const candidateIsAdult = candidate.isAdult === true;
+          if (candidateIsAdult !== (participantType === 'adult')) {
+            throw Object.assign(
+              new Error(`תעודת הזהות של ${name} כבר שייכת למשתתף מסוג אחר במערכת — יש לפנות לצוות`),
+              { status: 409 }
+            );
+          }
+          const ownStudentIds = new Set(
+            expandHousehold(db, parent.id).students.map((item) => String(item.id))
+          );
+          const confirmedFamilyStudentIds = confirmedFamilyParentId
+            ? new Set(childrenOfParent(db, confirmedFamilyParentId).map((item) => String(item.id)))
+            : new Set();
+          if (ownStudentIds.has(String(candidate.id))) {
+            student = candidate;
+          } else if (confirmedFamilyStudentIds.has(String(candidate.id))) {
+            // The signer explicitly confirmed the household on the family
+            // prompt. Reuse the canonical participant while the merge below
+            // makes both parents visible on the family file.
+            student = candidate;
+            linkedFromOtherFamily = true;
+          } else {
+            throw Object.assign(
+              new Error(`${name} כבר רשום/ה בתיק משפחה אחר. יש לאשר את ההתאמה בטופס או לפנות לצוות`),
+              { status: 409 }
+            );
+          }
+        }
       }
     }
     if (!student) {
@@ -942,7 +998,7 @@ export async function saveCrmParticipants({
 
   // "We are the same family as this card" — confirmed on the form, so both
   // parents end up on one file with every child listed once.
-  const familyParentId = clean(parentInput?.family_parent_id || parentInput?.familyParentId);
+  const familyParentId = confirmedFamilyParentId;
   const familyLinks = familyParentId
     ? mergeFamily(db, {
         parentId: parent.id,

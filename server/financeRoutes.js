@@ -4,6 +4,7 @@ import { db, persistCore } from './db.js';
 import { hasSensitiveAccess } from './userAccess.js';
 import {
   buildDashboard,
+  buildPaymentsReport,
   buildSalesBreakdown,
   chooseExpenseRows,
   classifyDocument,
@@ -118,6 +119,24 @@ financeRouter.get('/sales-breakdown', (req, res) => {
     registrations: db.get('activity_registrations'),
     activities: db.get('activities'),
     parents: db.get('parents'),
+    from,
+    to,
+  }));
+});
+
+financeRouter.get('/payments', (req, res) => {
+  const { from, to } = period(req);
+  res.json(buildPaymentsReport({
+    documents: db.get('finance_documents'),
+    lines: db.get('finance_document_lines'),
+    paymentEvents: db.get('finance_payment_events'),
+    payments: db.get('payments'),
+    posSales: db.get('pos_sales'),
+    registrations: db.get('activity_registrations'),
+    activities: db.get('activities'),
+    parents: db.get('parents'),
+    students: db.get('students'),
+    customerPasses: db.get('customer_passes'),
     from,
     to,
   }));
@@ -311,5 +330,48 @@ financeRouter.get('/export.csv', (req, res) => {
   const rows = report.deals.map((row) => [row.date, row.document_number, row.customer_name, row.amount, row.events.join(' | '), row.products.join(' | '), row.payment_methods.join(' | ')]);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="finance-${from}-${to}.csv"`);
+  res.send(`\uFEFF${[header, ...rows].map((row) => row.map(escape).join(',')).join('\n')}`);
+});
+
+financeRouter.get('/payments/export.csv', (req, res) => {
+  const { from, to } = period(req);
+  const report = buildPaymentsReport({
+    documents: db.get('finance_documents'),
+    lines: db.get('finance_document_lines'),
+    paymentEvents: db.get('finance_payment_events'),
+    payments: db.get('payments'),
+    posSales: db.get('pos_sales'),
+    registrations: db.get('activity_registrations'),
+    activities: db.get('activities'),
+    parents: db.get('parents'),
+    students: db.get('students'),
+    customerPasses: db.get('customer_passes'),
+    from,
+    to,
+  });
+  const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const header = [
+    'תאריך', 'לקוח', 'תיאור', 'מוצרים', 'אירועים', 'מקור', 'אמצעי תשלום', 'סטטוס',
+    'סכום דרישה', 'נגבה', 'פתוח', 'זוכה', 'נטו', 'מספר מסמך', 'עובד',
+  ];
+  const rows = report.rows.map((row) => [
+    row.date,
+    row.customer_name,
+    row.description,
+    row.product_names.join(' | '),
+    row.activities.join(' | '),
+    row.source,
+    row.payment_method_label,
+    row.status,
+    row.amount,
+    row.gross_collected,
+    row.open_amount,
+    row.refund_amount,
+    row.net_amount,
+    row.document_number,
+    row.sold_by,
+  ]);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="payments-${from}-${to}.csv"`);
   res.send(`\uFEFF${[header, ...rows].map((row) => row.map(escape).join(',')).join('\n')}`);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { familySelectionAfterLookup } from './childCheck.js';
+import { familySelectionAfterLookup, needsChildAnswer } from './childCheck.js';
 
 test('an empty family-candidate list never means new family', () => {
   assert.equal(familySelectionAfterLookup({
@@ -27,4 +27,11 @@ test('an explicit answer is preserved for the same lookup', () => {
     answeredForKey: 'איל|0508862878',
     checkKey: 'איל|0508862878',
   }), 'p1');
+});
+
+test('a discovered child match blocks progress until the parent answers', () => {
+  assert.equal(needsChildAnswer({ match: true, linked: null }), true);
+  assert.equal(needsChildAnswer({ match: true, linked: true }), false);
+  assert.equal(needsChildAnswer({ match: true, linked: false }), false);
+  assert.equal(needsChildAnswer({ match: false }), false);
 });

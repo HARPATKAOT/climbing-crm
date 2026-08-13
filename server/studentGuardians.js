@@ -286,6 +286,35 @@ export function childrenOfParent(db, parentId) {
   });
 }
 
+/** Parents recorded as one family, through guardian links or the household table. */
+export function familyParentIds(db, parentId) {
+  const wanted = String(parentId || '');
+  if (!wanted) return [];
+  const ids = new Set(expandHousehold(db, wanted).parentIds.map(String));
+  const ownMember = (db.get('household_members') || []).find(
+    (row) => String(row.parent_id || '') === wanted
+  );
+  if (ownMember?.household_id) {
+    for (const row of db.get('household_members') || []) {
+      if (row.household_id === ownMember.household_id && row.parent_id) {
+        ids.add(String(row.parent_id));
+      }
+    }
+  }
+  return [...ids].filter((id) => db.getOne('parents', id));
+}
+
+/** Public forms may join only two genuinely single-parent family cards. */
+export function canMergeSingleParentFamilies(db, parentId, familyParentId) {
+  const callerId = String(parentId || '');
+  const candidateId = String(familyParentId || '');
+  if (!callerId || !candidateId || callerId === candidateId) return false;
+  if (!db.getOne('parents', callerId) || !db.getOne('parents', candidateId)) return false;
+  if (familyParentIds(db, callerId).length !== 1) return false;
+  if (familyParentIds(db, candidateId).length !== 1) return false;
+  return childrenOfParent(db, candidateId).some((child) => child.isAdult !== true);
+}
+
 /**
  * Families already on file under the same surname.
  *
@@ -301,9 +330,17 @@ export function familyCandidates(db, { lastName, excludeParentId = null, limit =
   const wanted = normalizedChildName(lastName);
   if (!wanted || wanted.length < 2) return [];
   const exclude = String(excludeParentId || '');
+  // A recognised parent may still be sitting on a separate card from their
+  // spouse. Search for that spouse, but never offer somebody who is already
+  // reachable through the recognised parent's current household.
+  const callerParents = exclude ? familyParentIds(db, exclude) : [];
+  // A household that already has two adults must never be invited to attach a
+  // third parent through a loose surname match.
+  if (callerParents.length > 1) return [];
+  const excludedHousehold = new Set(callerParents);
 
   const matches = (db.get('parents') || []).filter((parent) => {
-    if (exclude && String(parent.id) === exclude) return false;
+    if (excludedHousehold.has(String(parent.id))) return false;
     return normalizedChildName(parentLastName(parent)) === wanted;
   });
 
@@ -312,8 +349,13 @@ export function familyCandidates(db, { lastName, excludeParentId = null, limit =
   const seen = new Set();
   for (const parent of matches) {
     if (seen.has(String(parent.id))) continue;
+    const candidateParentIds = familyParentIds(db, parent.id);
+    for (const id of candidateParentIds) seen.add(id);
+    // The proposed side must also be a single-parent file. Staff can still
+    // merge more complex households manually, where the relationships are
+    // visible and can be reviewed safely.
+    if (candidateParentIds.length !== 1) continue;
     const household = expandHousehold(db, parent.id);
-    for (const id of household.parentIds) seen.add(id);
     const children = household.students.filter((child) => child.isAdult !== true);
     // A card with no children is not a family anyone can recognise.
     if (!children.length) continue;

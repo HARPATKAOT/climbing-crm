@@ -72,6 +72,11 @@ export function familySelectionAfterLookup({
   return currentSelection;
 }
 
+/** A discovered child match is a question, never implicit consent to ignore it. */
+export function needsChildAnswer(match) {
+  return match?.match === true && match.linked !== true && match.linked !== false;
+}
+
 /** The fields a confirmed link adds to a participant before it is submitted. */
 export function linkFieldsFor(known) {
   if (!known?.linked) return {};
