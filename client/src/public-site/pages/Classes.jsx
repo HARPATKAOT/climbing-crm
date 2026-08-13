@@ -75,7 +75,7 @@ function Legend() {
     <div className="ks-legend" aria-label="מקרא שכבות גיל">
       <strong className="ks-legend-title">שכבות גיל</strong>
       {AGE_BANDS.map((band) => (
-        <span className="ks-legend-item" key={band.key}>
+        <span className="ks-legend-item" key={band.key} style={{ '--ks-chip-accent': band.color }}>
           <i style={{ background: band.color }} />
           {band.key}
         </span>
