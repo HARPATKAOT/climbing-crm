@@ -50,6 +50,8 @@ import GenderPicker, {
 } from './GenderPicker.jsx';
 import {
   adultParticipantFromContext,
+  hasCompleteParticipantProfile,
+  participantNeedsProfileEdit,
   participationGenderValue,
 } from '../utils/participationForm.js';
 import { CANONICAL_HEALTH_QUESTIONS } from '../utils/participationDocuments.js';
@@ -157,13 +159,6 @@ function ageFromBirthDate(value) {
 
 function isExistingDeclarationRenewal(participant) {
   return !!participant?.id && !!(participant?.renewOptIn || participant?.resignHealth);
-}
-
-function hasCompleteParticipantProfile(participant) {
-  return !!String(participant?.name || '').trim()
-    && !!String(participant?.idNumber || '').trim()
-    && !!String(participant?.birthDate || '').trim()
-    && !!String(participant?.gender || '').trim();
 }
 
 function hasLockedParticipantProfile(participant) {
@@ -1327,7 +1322,7 @@ export default function PublicOnboardingForm() {
             // already answered on their behalf — and a parent who scrolled past
             // it would have declared, in signature, that nothing applies.
             const answers = blankAnswers(qs);
-            return {
+            const participant = {
               id: s.id,
               name: s.name || '',
               idNumber: s.idNumber || '',
@@ -1349,6 +1344,10 @@ export default function PublicOnboardingForm() {
               healthChanged: null,
               waiverAccepted: false,
               signature: '',
+            };
+            return {
+              ...participant,
+              editProfile: participantNeedsProfileEdit(participant),
             };
           }));
         } else {
@@ -1643,25 +1642,31 @@ export default function PublicOnboardingForm() {
           const alreadyListed = new Set(typed.map((c) => c.name.trim()));
           const fromFile = existing
             .filter((s) => s.name && !alreadyListed.has(String(s.name).trim()))
-            .map((s) => ({
-              ...emptyChild(allQuestions),
-              id: s.id,
-              name: s.name || '',
-              lastName: s.lastName || '',
-              idNumber: s.idNumber || '',
-              birthDate: s.birthDate || '',
-              gender: participationGenderValue(s.gender),
-              // The same two fields the first load sets. Without them this
-              // path — the one that runs when a returning parent types their
-              // phone — handed them their own declaration to sign again.
-              onFileHealthValid: !!(s.healthDocumentValid ?? s.health_document_valid),
-              onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
-              onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
-              onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
-              onFileWaiverSignedAt: s.waiverSignedAt || s.waiver_signed_at || '',
-              onFileDeclarationSummary: s.declarationSummary || null,
-              resignHealth: false,
-            }));
+            .map((s) => {
+              const participant = {
+                ...emptyChild(allQuestions),
+                id: s.id,
+                name: s.name || '',
+                lastName: s.lastName || '',
+                idNumber: s.idNumber || '',
+                birthDate: s.birthDate || '',
+                gender: participationGenderValue(s.gender),
+                // The same two fields the first load sets. Without them this
+                // path — the one that runs when a returning parent types their
+                // phone — handed them their own declaration to sign again.
+                onFileHealthValid: !!(s.healthDocumentValid ?? s.health_document_valid),
+                onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
+                onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
+                onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
+                onFileWaiverSignedAt: s.waiverSignedAt || s.waiver_signed_at || '',
+                onFileDeclarationSummary: s.declarationSummary || null,
+                resignHealth: false,
+              };
+              return {
+                ...participant,
+                editProfile: participantNeedsProfileEdit(participant),
+              };
+            });
           const merged = [...fromFile, ...typed];
           return merged.length ? merged : current;
         });

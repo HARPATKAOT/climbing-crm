@@ -21,6 +21,23 @@ export function participationGenderValue(value) {
   return '';
 }
 
+/** Whether the public form already has every identity field it needs. */
+export function hasCompleteParticipantProfile(participant) {
+  return !!String(participant?.name || '').trim()
+    && !!String(participant?.idNumber || '').trim()
+    && !!String(participant?.birthDate || '').trim()
+    && !!String(participant?.gender || '').trim();
+}
+
+/**
+ * A returning participant with a gap in their CRM file starts in edit mode.
+ * This decision is made once, when the file is loaded, so typing the first
+ * missing character cannot turn the form back into a locked summary.
+ */
+export function participantNeedsProfileEdit(participant) {
+  return !hasCompleteParticipantProfile(participant);
+}
+
 /**
  * Build the participant details used when a parent fills the form for
  * themselves. Birth date and gender belong to the adult's student card, while

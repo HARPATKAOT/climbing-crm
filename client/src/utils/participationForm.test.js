@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adultParticipantFromContext,
+  hasCompleteParticipantProfile,
+  participantNeedsProfileEdit,
   participationGenderValue,
 } from './participationForm.js';
 
@@ -46,4 +48,23 @@ test('Hebrew CRM gender values activate the public form buttons', () => {
 
   const participant = adultParticipantFromContext({ gender: 'זכר' });
   assert.equal(participant.gender, 'male');
+});
+
+test('a returning participant missing an ID stays in edit mode while it is typed', () => {
+  const participant = {
+    id: 'student-1',
+    name: 'ילד קיים',
+    idNumber: '',
+    birthDate: '2015-04-12',
+    gender: 'male',
+  };
+  const loaded = {
+    ...participant,
+    editProfile: participantNeedsProfileEdit(participant),
+  };
+  const afterFirstDigit = { ...loaded, idNumber: '1' };
+
+  assert.equal(loaded.editProfile, true);
+  assert.equal(hasCompleteParticipantProfile(afterFirstDigit), true);
+  assert.equal(afterFirstDigit.editProfile, true);
 });
