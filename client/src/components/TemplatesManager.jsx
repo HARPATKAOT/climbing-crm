@@ -1294,6 +1294,7 @@ export default function TemplatesManager() {
           <option value="manual">רק בשליחה ידנית</option>
           <option value="bot">רק של הבוט</option>
           <option value="automation">רק של אוטומציות</option>
+          <option value="registration">רק של תהליך ההרשמה</option>
           <option value="event">רק של מסך אירועים</option>
           <option value="none">אף אחד לא שולח</option>
         </AppSelect>

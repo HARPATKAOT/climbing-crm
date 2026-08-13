@@ -32,7 +32,7 @@ const DRAFTS = [
   {
     id: 'tpl-intro-no-show-followup-v1',
     kind: 'intro_no_show_prompt',
-    body: '{{1}} לא הגיע/ה לאימון ההיכרות. אפשר לשלם שוב למפגש הבא בתוך 24 שעות; לאחר מכן המקום ישתחרר.',
+    body: 'עדכון לגבי {{1}}: לא הגיע/ה לאימון ההיכרות. אפשר לשלם שוב למפגש הבא בתוך 24 שעות; לאחר מכן המקום ישתחרר.',
   },
   {
     id: 'tpl-placement-legacy-hold-warning-v1',
@@ -42,7 +42,7 @@ const DRAFTS = [
   {
     id: 'tpl-placement-other-waitlists-choice-v1',
     kind: 'other_waitlists_choice',
-    body: '{{1}} נרשם/ה לקבוצה. להשאיר אותו/ה גם ברשימות ההמתנה האחרות?',
+    body: 'עדכון: {{1}} נרשם/ה לקבוצה. להשאיר אותו/ה גם ברשימות ההמתנה האחרות?',
   },
 ];
 

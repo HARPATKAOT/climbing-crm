@@ -23,6 +23,7 @@ export const USAGE_KINDS = {
   finance: { label: 'תשלומים', icon: 'card' },
   form: { label: 'טפסים', icon: 'clipboard' },
   agenda: { label: 'יומן אליי', icon: 'clock' },
+  registration: { label: 'תהליך הרשמה', icon: 'clock' },
   none: { label: 'אף אחד', icon: 'none' },
 };
 
@@ -42,6 +43,13 @@ export const TEMPLATE_SENDERS = {
   participation_form_link: 'form',              // participationFormWhatsappTemplate.js
   customer_details_v2: 'form',                  // onboardingWhatsappTemplate.js
   my_agenda_v1: 'agenda',                       // agendaDigestTemplate.js
+  placement_parent_deadline_v1: 'registration', // registrationLifecycleTemplates.js
+  placement_centre_expired_v1: 'registration',
+  placement_waitlist_offer_v1: 'registration',
+  intro_decision_followup_v1: 'registration',
+  intro_no_show_followup_v1: 'registration',
+  placement_legacy_hold_warning_v1: 'registration',
+  placement_other_waitlists_choice_v1: 'registration',
 };
 
 /** השדות באוטומציה שמחזיקים שם תבנית. */
