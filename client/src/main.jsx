@@ -53,7 +53,7 @@ window.setTimeout(() => {
 // own routes — load them on demand so the CRM shell stays light.
 const PublicOnboardingForm       = lazy(() => import('./components/PublicOnboardingForm.jsx'));
 const PublicEmployeeOnboardForm  = lazy(() => import('./components/PublicEmployeeOnboardForm.jsx'));
-const LeadIntakeForm             = lazy(() => import('./components/LeadIntakeForm.jsx'));
+const WhatsAppRedirect           = lazy(() => import('./public-site/components/WhatsAppRedirect.jsx'));
 const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy.jsx'));
 const PublicActivityRegistration = lazy(() => import('./components/PublicActivityRegistration.jsx'));
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
@@ -117,7 +117,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/staff-onboard" element={<PublicEmployeeOnboardForm />} />
             {/* זמינות למשמרות — הקישור שמחליף את הסקר בוואטסאפ. */}
             <Route path="/shift-signup/:token" element={<PublicShiftSignup />} />
-            <Route path="/join" element={<LeadIntakeForm />} />
+            {/* The retired lead form now sends every legacy link to WhatsApp. */}
+            <Route path="/join" element={<WhatsAppRedirect />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
             <Route path="/event-host/:token" element={<PublicHostPayment />} />

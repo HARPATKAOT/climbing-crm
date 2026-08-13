@@ -16,7 +16,7 @@ export default function Contact() {
             <div className="ks-sectionhead"><div><span className="ks-eyebrow">יצירת קשר</span><h2 className="ks-h2">ספרו לנו מה מחפשים</h2><p>חוג, ביקור ראשון, יום הולדת או טיול — הודעה אחת מספיקה כדי להתחיל.</p></div></div>
             <div className="ks-grid" style={{ gridTemplateColumns: 'repeat(2,minmax(0,1fr))' }}>
               <a className="ks-card" href={whatsappUrl('שלום, הגעתי דרך האתר ואשמח לקבל פרטים')} target="_blank" rel="noreferrer"><div className="ks-iconbox"><MessageCircle /></div><h3>WhatsApp</h3><p>הדרך המהירה לשאלה, בדיקת מקום או תיאום.</p><span className="ks-seeall">פתיחת שיחה <ArrowLeft size={17} /></span></a>
-              <a className="ks-card" href="/join"><div className="ks-iconbox is-sand"><Clock3 /></div><h3>שנחזור אליכם?</h3><p>משאירים פרטים קצרים ואנחנו חוזרים בהמשך היום.</p><span className="ks-seeall">להשארת פרטים <ArrowLeft size={17} /></span></a>
+              <a className="ks-card" href={whatsappUrl('שלום, אשמח שתחזרו אליי לגבי חוגים או פעילויות בקיר בועז')} target="_blank" rel="noreferrer"><div className="ks-iconbox is-sand"><Clock3 /></div><h3>שנחזור אליכם?</h3><p>כתבו לנו הודעה קצרה ב־WhatsApp ונחזור אליכם בהקדם.</p><span className="ks-seeall">שליחת הודעה <ArrowLeft size={17} /></span></a>
             </div>
             <div className="ks-card" style={{ marginTop: 18 }}>
               <div className="ks-iconbox is-blue"><MapPin /></div><h3>{ADDRESS}</h3><p>קיר הטיפוס נמצא במתחם הקהילתי בתל מונד. המקום מונגש.</p>

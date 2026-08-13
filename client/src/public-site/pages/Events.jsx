@@ -30,7 +30,7 @@ export default function Events() {
         </div>
       </section>
       <section className="ks-section ks-section--canvas">
-        <div className="ks-wrap"><div className="ks-cta"><span className="ks-eyebrow">בדיקת תאריך</span><h2 className="ks-h2">ספרו לנו מה חוגגים</h2><p>שלחו תאריך רצוי, גיל ומספר משתתפים. נחזור עם האפשרויות שמתאימות ונעזור לסגור את כל הפרטים.</p><div className="ks-actions"><a className="ks-btn ks-btn--light" href={whatsappUrl('שלום, אשמח לבדוק תאריך לאירוע בקיר בועז')} target="_blank" rel="noreferrer">בדיקת תאריך בוואטסאפ</a><a className="ks-btn ks-btn--ghost" style={{ color: '#fff', borderColor: 'rgba(255,255,255,.35)' }} href="/join?interest=event">השארת פרטים</a></div></div></div>
+        <div className="ks-wrap"><div className="ks-cta"><span className="ks-eyebrow">בדיקת תאריך</span><h2 className="ks-h2">ספרו לנו מה חוגגים</h2><p>שלחו ב־WhatsApp תאריך רצוי, גיל ומספר משתתפים. נחזור עם האפשרויות שמתאימות ונעזור לסגור את כל הפרטים.</p><div className="ks-actions"><a className="ks-btn ks-btn--light" href={whatsappUrl('שלום, אשמח לבדוק תאריך לאירוע בקיר בועז')} target="_blank" rel="noreferrer">בדיקת תאריך בוואטסאפ</a></div></div></div>
       </section>
     </>
   );

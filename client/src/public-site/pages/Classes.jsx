@@ -248,7 +248,6 @@ export default function Classes() {
 
           <div className="ks-actions" style={{ marginTop: 24 }}>
             <a className="ks-btn ks-btn--wa" href={whatsappUrl('שלום, אשמח לבדוק קבוצה מתאימה ומקום פנוי בחוגי הטיפוס')} target="_blank" rel="noreferrer">בדיקת מקום בקבוצה</a>
-            <a className="ks-btn ks-btn--ghost" href="/join?interest=classes">השארת פרטים לחזרה</a>
           </div>
           <p className="ks-meta" style={{ marginTop: 12 }}>מחירים ותדירות נמסרים לפי הקבוצה המתאימה ומספר האימונים בשבוע.</p>
         </div>

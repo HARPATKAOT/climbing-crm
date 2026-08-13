@@ -11,7 +11,6 @@ const PublicActivityRegistration = lazy(() => import('./PublicActivityRegistrati
 const PublicHostPayment          = lazy(() => import('./PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./PublicEquipmentPayment.jsx'));
 const PublicOnboardingForm       = lazy(() => import('./PublicOnboardingForm.jsx'));
-const LeadIntakeForm             = lazy(() => import('./LeadIntakeForm.jsx'));
 const PrivacyPolicy              = lazy(() => import('./PrivacyPolicy.jsx'));
 
 const AuthContext = createContext(null);
@@ -327,7 +326,6 @@ export default function AuthGate({ children }) {
     let publicPage = null;
     if (['/register', '/health'].some((p) => path === p || path.startsWith(`${p}/`))) publicPage = <PublicOnboardingForm />;
     else if (path === '/onboard' || path.startsWith('/onboard/')) publicPage = <PublicOnboardingForm />;
-    else if (path === '/join') publicPage = <LeadIntakeForm />;
     else if (path === '/privacy') publicPage = <PrivacyPolicy />;
     else if (path.startsWith('/event/')) publicPage = <PublicActivityRegistration />;
     else if (path.startsWith('/event-host/')) publicPage = <PublicHostPayment />;

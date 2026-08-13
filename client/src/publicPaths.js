@@ -2,7 +2,6 @@
 export const PUBLIC_PATH_PREFIXES = [
   '/register',
   '/health',
-  '/join',
   '/onboard',
   '/event',
   '/event-host',
