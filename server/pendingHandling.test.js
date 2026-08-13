@@ -153,6 +153,82 @@ test('a climber with nothing open moves to the shift list, not the task list', (
   assert.deepEqual(active.map((r) => r.name), ['יונתן כהן']);
 });
 
+test('a paid cash wall entry repairs a missing check-in on the live counter', () => {
+  const base = {
+    checkIns: [],
+    sales: [{
+      id: 'cash-entry',
+      payment_method: 'cash',
+      status: 'paid',
+      student_id: 's1',
+      created_at: '2026-08-10T09:00:00.000Z',
+      items: [{
+        name: 'wall entry',
+        product_type: 'product',
+        grants_wall_climbing: true,
+        participant_ids: ['s1'],
+      }],
+    }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+  };
+
+  const valid = buildCounterQueues({ ...base, safetyOf: () => ({ state: 'valid' }) });
+  assert.deepEqual(valid.pending, []);
+  assert.deepEqual(valid.active.map((row) => row.name), [students.s1.name]);
+
+  const missing = buildCounterQueues({ ...base, safetyOf: () => ({ state: 'missing' }) });
+  assert.deepEqual(missing.pending.map((row) => row.name), [students.s1.name]);
+  assert.deepEqual(missing.active, []);
+});
+
+test('buying a pass does not count as entering until the pass is punched', () => {
+  const queues = buildCounterQueues({
+    checkIns: [],
+    sales: [{
+      id: 'pass-sale', status: 'paid', student_id: 's1', created_at: '2026-08-10T09:00:00.000Z',
+      items: [{ product_type: 'punch_card', grants_wall_climbing: true }],
+    }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+  });
+  assert.deepEqual(queues.active, []);
+});
+
+test('a successful pass punch is a wall entry even without a separate check-in', () => {
+  const queues = buildCounterQueues({
+    checkIns: [],
+    sales: [],
+    punches: [{
+      id: 'punch-1', student_id: 's1', punched_at: '2026-08-10T09:00:00.000Z',
+    }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+  });
+  assert.deepEqual(queues.active.map((row) => row.name), [students.s1.name]);
+});
+
+test('a cancelled pass punch is not a wall entry', () => {
+  const queues = buildCounterQueues({
+    checkIns: [],
+    sales: [],
+    punches: [{
+      id: 'punch-1', student_id: 's1', punched_at: '2026-08-10T09:00:00.000Z',
+      cancelled_at: '2026-08-10T09:01:00.000Z',
+    }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+  });
+  assert.deepEqual(queues.active, []);
+});
+
 test('someone whose payment is still open is not counted as climbing', () => {
   const { pending, active } = buildCounterQueues({
     checkIns: [{ climber_id: 's1', timestamp: '2026-08-10T09:00:00.000Z' }],

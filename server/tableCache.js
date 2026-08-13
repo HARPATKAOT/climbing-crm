@@ -75,6 +75,23 @@ export async function readTable(table) {
   return cached;
 }
 
+/**
+ * Pull the durable answer before responding.
+ *
+ * Most list screens can tolerate the normal stale-while-revalidate path above.
+ * Live counter screens cannot: a sale may be written by another server instance
+ * and the climber must appear on the very next refresh.
+ */
+export async function readTableFresh(table) {
+  const cached = db.get(table) || [];
+  if (!supa.isEnabled()) return cached;
+  return (await refreshTable(table)) ?? cached;
+}
+
+export async function readTablesFresh(...tables) {
+  return Promise.all(tables.map((table) => readTableFresh(table)));
+}
+
 /** Same contract as `readTable`, for the routes that need several tables. */
 export async function readTables(...tables) {
   return Promise.all(tables.map((table) => readTable(table)));

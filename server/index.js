@@ -5,7 +5,7 @@ import cors from 'cors';
 import compression from 'compression';
 import { db, initDb, persistCore, parentPhonesMatch, setBotEnabledDurable } from './db.js';
 import { supa, CORE_TABLES } from './supa.js';
-import { readTable, readTables, markFreshlyLoaded } from './tableCache.js';
+import { readTable, readTables, readTablesFresh, markFreshlyLoaded } from './tableCache.js';
 import {
   requiresDurableStore,
   publicStoreUnavailableError,
@@ -11468,7 +11468,7 @@ app.post('/api/icount/webhook', async (req, res) => {
             docNumber: docnum || payment.icount_doc_number,
           });
           decrementInventory(lines);
-          registerEntriesForSale({ lines, studentId: sale.student_id });
+          await registerEntriesForSale({ lines, studentId: sale.student_id });
           const docUrl =
             updated?.icount_doc_url ||
             payload.doc_url ||
@@ -14548,7 +14548,7 @@ async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
  * רשימה: לא ביומן הכניסות, ולא בין מי שממתין לתדריך ולמבחן אבטחה. מי ששילם
  * על כניסה עכשיו נכנס עכשיו, וזה נרשם כאן.
  */
-function registerEntriesForSale({ lines, studentId }) {
+async function registerEntriesForSale({ lines, studentId }) {
   if (!studentId) return null;
   const entryLines = (lines || []).filter((line) => (
     line.grants_wall_climbing === true
@@ -14569,7 +14569,7 @@ function registerEntriesForSale({ lines, studentId }) {
     if (!student) continue;
     const documents = wallDocumentsFor(climberId);
     const group = student.groupId ? db.getOne('groups', student.groupId) : null;
-    inserted.push(db.insert('check_ins', {
+    const record = db.insert('check_ins', {
       climber_id: student.id,
       climber_name: student.name,
       group_name: group?.name || 'טיפוס חופשי',
@@ -14578,7 +14578,14 @@ function registerEntriesForSale({ lines, studentId }) {
       documents_state: documents.state,
       documents_label: documents.label,
       source: 'pos_sale',
-    }));
+    });
+    inserted.push(record);
+    const persisted = await persistCore('check_ins', record);
+    if (persisted?.ok === false) {
+      // The sale has already been charged; never turn a durable check-in error
+      // into a misleading checkout failure that could cause a duplicate charge.
+      console.error(`POS check-in persistence failed for ${student.id}:`, persisted.error);
+    }
   }
   return inserted[0] || null;
 }
@@ -15989,7 +15996,7 @@ app.post('/api/pos/sale', async (req, res) => {
       docNumber: doc?.docnum,
     });
     decrementInventory(lines);
-    registerEntriesForSale({ lines, studentId: student?.id });
+    await registerEntriesForSale({ lines, studentId: student?.id });
 
     db.insert('payments', {
       parent_id: syncedParent?.id || null,
@@ -17491,13 +17498,16 @@ app.post('/api/checkin/send-form-to-phone', async (req, res) => {
  *
  * הכללים עצמם ב-`pendingHandling.js`; כאן רק אספקת הנתונים.
  */
-app.get('/api/checkin/pending', (req, res) => {
+app.get('/api/checkin/pending', async (req, res) => {
   const today = israelDateStr();
+  // The counter is a live operational view. Await these small durable tables so
+  // a sale handled by another server instance is visible on this very request.
+  const [checkIns, sales, punches] = await readTablesFresh('check_ins', 'pos_sales', 'pass_punches');
   const tests = db.get('level_tests') || [];
-  const checkIns = db.get('check_ins') || [];
   res.json(buildCounterQueues({
     checkIns,
-    sales: db.get('pos_sales') || [],
+    sales,
+    punches,
     today,
     dateOf: (iso) => israelLocalParts(iso)?.date || null,
     studentOf: (id) => db.getOne('students', id),
@@ -17563,7 +17573,7 @@ app.post('/api/checkin/pending/payment/:saleId/handled', async (req, res) => {
   res.json({ ok: true, sale: updated });
 });
 
-app.post('/api/check-ins', (req, res) => {
+app.post('/api/check-ins', async (req, res) => {
   // Decided here, never taken from the screen: the counter used to compute it
   // with a looser rule of its own, so the day's log could show a green "תקין"
   // beside someone whose pass had just been refused.
@@ -17574,6 +17584,10 @@ app.post('/api/check-ins', (req, res) => {
     documents_state: documents.state,
     documents_label: documents.label,
   });
+  const persisted = await persistCore('check_ins', record);
+  if (persisted?.ok === false) {
+    return res.status(503).json({ error: 'שמירת הכניסה נכשלה', code: 'CHECK_IN_NOT_DURABLE' });
+  }
   res.status(201).json(record);
 });
 

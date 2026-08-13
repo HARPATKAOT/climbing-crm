@@ -74,6 +74,63 @@ export function saleGrantsEntry(sale) {
     .some((line) => line?.grants_wall_climbing === true);
 }
 
+/**
+ * Recover an immediate wall entry from its paid POS sale.
+ *
+ * The normal write path creates a check-in. This second source keeps the live
+ * counter correct if that write is delayed or another server instance has not
+ * seen it yet. Passes and memberships are intentionally excluded: their entry
+ * is recorded when the pass is punched, not when it is bought.
+ */
+export function withPaidEntries({ checkIns = [], sales = [], punches = [], today, dateOf }) {
+  const merged = [...(Array.isArray(checkIns) ? checkIns : [])];
+  const entrants = new Set(todaysEntrants(merged, today, dateOf).keys());
+
+  for (const sale of Array.isArray(sales) ? sales : []) {
+    const at = sale?.created_at || sale?.updated_at;
+    if (sale?.status !== 'paid' || !at || dateOf(at) !== today) continue;
+    const lines = (Array.isArray(sale.items) ? sale.items : []).filter((line) => (
+      line?.grants_wall_climbing === true
+      && (line?.product_type || 'product') === 'product'
+    ));
+    for (const line of lines) {
+      const participantIds = line?.participant_ids?.length
+        ? line.participant_ids
+        : [sale.student_id];
+      for (const rawId of participantIds) {
+        const studentId = rawId ? String(rawId) : '';
+        if (!studentId || entrants.has(studentId)) continue;
+        entrants.add(studentId);
+        merged.push({
+          id: `sale-entry:${sale.id}:${studentId}`,
+          climber_id: studentId,
+          timestamp: at,
+          source: 'paid_pos_sale_recovery',
+          sale_id: sale.id,
+        });
+      }
+    }
+  }
+
+  // A punch is the payment event for a punch card. Unlike buying the card,
+  // every successful, non-cancelled punch is an immediate wall entry.
+  for (const punch of Array.isArray(punches) ? punches : []) {
+    const at = punch?.punched_at || punch?.created_at;
+    const studentId = punch?.student_id ? String(punch.student_id) : '';
+    if (punch?.cancelled_at || !studentId || !at || dateOf(at) !== today) continue;
+    if (entrants.has(studentId)) continue;
+    entrants.add(studentId);
+    merged.push({
+      id: `punch-entry:${punch.id}:${studentId}`,
+      climber_id: studentId,
+      timestamp: at,
+      source: 'pass_punch',
+      pass_punch_id: punch.id,
+    });
+  }
+  return merged;
+}
+
 export function paymentRows({ sales = [], today, dateOf, studentOf }) {
   return (Array.isArray(sales) ? sales : [])
     .filter((sale) => {
@@ -182,16 +239,20 @@ export function shiftSales({
 }
 
 export function buildCounterQueues(parts) {
-  const pending = buildPendingQueue(parts);
+  const current = {
+    ...parts,
+    checkIns: withPaidEntries(parts || {}),
+  };
+  const pending = buildPendingQueue(current);
   const pendingStudents = new Set(pending.map((row) => row.student_id).filter(Boolean));
-  const dismissed = new Set(parts?.dismissedIds || []);
-  const active = entryRows({ ...parts, includeSettled: true })
+  const dismissed = new Set(current.dismissedIds || []);
+  const active = entryRows({ ...current, includeSettled: true })
     .filter((row) => !row.needs_safety
       && !pendingStudents.has(row.student_id)
       && !dismissed.has(row.id))
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
   const openSaleIds = new Set(pending.map((row) => row.sale_id).filter(Boolean).map(String));
-  return { pending, active, sales: shiftSales({ ...parts, openSaleIds }) };
+  return { pending, active, sales: shiftSales({ ...current, openSaleIds }) };
 }
 
 export function buildPendingQueue(parts) {
