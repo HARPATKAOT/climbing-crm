@@ -255,6 +255,8 @@ import {
   summarizeActivityCancellation,
   registrationsToRelease,
   activityIsCancelled,
+  activityIsArchived,
+  activityCanBeArchived,
 } from './activityCancellation.js';
 import {
   paymentOwner,
@@ -5529,13 +5531,17 @@ function rejectActivitySensitiveChanges(req, body = {}, existing = {}) {
 }
 
 app.get('/api/activities', async (req, res) => {
+  const includeArchived = String(req.query?.include_archived || '') === '1';
+  const visibleRows = (rows) => includeArchived
+    ? rows
+    : rows.filter((row) => !activityIsArchived(row));
   try {
     const rows = await readTable('activities');
-    return res.json(rows.map((row) => activityForRequest(req, row)));
+    return res.json(visibleRows(rows).map((row) => activityForRequest(req, row)));
   } catch (err) {
     console.error('activities read failed:', err.message);
   }
-  res.json((db.get('activities') || []).map((row) => activityForRequest(req, row)));
+  res.json(visibleRows(db.get('activities') || []).map((row) => activityForRequest(req, row)));
 });
 
 app.post('/api/activities', async (req, res) => {
@@ -5673,6 +5679,47 @@ app.delete('/api/activities/:id', async (req, res) => {
   applyVacationAttendanceForActivities(existing).catch((err) =>
     console.error('Vacation attendance sync failed:', err.message)
   );
+});
+
+// A historical registration must keep its parent activity, but that does not
+// mean the old event has to stay on the operational calendar. Archiving keeps
+// the audit trail intact and closes every public entry point.
+app.post('/api/activities/:id/archive', async (req, res) => {
+  try {
+    const existing = db.getOne('activities', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Activity not found' });
+    await refreshCancellationTables();
+    const fresh = db.getOne('activities', req.params.id) || existing;
+    const summary = summarizeActivityCancellation(db, fresh, organizerCancelReview(fresh));
+    if (!activityCanBeArchived(summary)) {
+      return res.status(409).json({
+        error: 'יש לבטל תחילה את ההרשמות הפעילות והזיכויים של האירוע',
+        code: 'activity_has_active_registrations',
+        summary,
+      });
+    }
+
+    const archived = db.update('activities', fresh.id, {
+      status: 'archived',
+      registration_enabled: false,
+      show_on_site: false,
+      updated_at: new Date().toISOString(),
+    });
+    if (!archived) return res.status(404).json({ error: 'Activity not found' });
+    const durable = await persistCore('activities', archived);
+    if (durable?.ok === false) {
+      console.error('activity archive persist failed:', durable.error);
+      return res.status(503).json({ error: durable.error || 'שמירת האירוע בארכיון נכשלה' });
+    }
+
+    res.json({ success: true, activity: activityForRequest(req, archived) });
+    applyVacationAttendanceForActivities(fresh, archived).catch((err) =>
+      console.error('Vacation attendance sync failed:', err.message)
+    );
+  } catch (err) {
+    console.error('activity archive error:', err.message);
+    res.status(500).json({ error: err.message || 'העברת האירוע לארכיון נכשלה' });
+  }
 });
 
 app.get('/api/activities/unpaid-open', (req, res) => {
@@ -7443,6 +7490,9 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
+    if (activityIsArchived(activity)) {
+      return res.status(410).json({ error: 'האירוע הועבר לארכיון וקישור התשלום אינו פעיל' });
+    }
     const theme = normalizeActivityTheme(
       activity.registration_theme || activity.theme || {}
     );
@@ -7487,6 +7537,9 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     }
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    }
+    if (activityIsArchived(activity)) {
+      return res.status(410).json({ error: 'האירוע הועבר לארכיון וקישור התשלום אינו פעיל' });
     }
     if (activity.payment_status === 'paid') {
       return res.json({ success: true, alreadyPaid: true });
@@ -8691,7 +8744,7 @@ app.post('/api/google-calendar/sync', async (req, res) => {
     let pushFailed = 0;
     const pushErrors = [];
     for (const activity of activities) {
-      if (activity.status === 'cancelled') continue;
+      if (['cancelled', 'archived'].includes(String(activity.status || '').toLowerCase())) continue;
       try {
         const updated = await syncActivityToGoogle(activity);
         if (updated?.google_event_id) pushed += 1;

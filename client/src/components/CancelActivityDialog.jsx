@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Ban, Loader2, RotateCcw, Send } from 'lucide-react';
+import { Archive, Ban, Loader2, RotateCcw, Send } from 'lucide-react';
 import { formatIls } from '../utils/vat.js';
 
 /**
@@ -9,19 +9,22 @@ import { formatIls } from '../utils/vat.js';
  * לראות אותו חוזר, ורק אז להחליט אם להודיע. ההודעה אחרונה ולא אוטומטית בכוונה —
  * אסור שתצא הודעה על זיכוי לפני שהזיכוי עצמו רץ.
  */
-export default function CancelActivityDialog({ activity, summary, onClose, onCancelled }) {
+export default function CancelActivityDialog({ activity, summary, onClose, onCancelled, onArchived }) {
   const [stage, setStage] = useState('confirm'); // confirm | working | report
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [notifyState, setNotifyState] = useState(null); // null | 'sending' | תוצאה
   const [current, setCurrent] = useState(summary);
+  const [workingAction, setWorkingAction] = useState('cancel');
 
   const refundTotal = Number(current?.refund_total) || 0;
   const registrations = Number(current?.registrations_count) || 0;
   const blocked = current?.blocked || [];
   const unpaid = current?.unpaid || [];
+  const archiveOnly = registrations === 0 && refundTotal === 0;
 
   const runCancel = async () => {
+    setWorkingAction('cancel');
     setStage('working');
     setError('');
     try {
@@ -45,6 +48,22 @@ export default function CancelActivityDialog({ activity, summary, onClose, onCan
       onCancelled?.(data);
     } catch (err) {
       setError(err.message || 'ביטול האירוע נכשל');
+      setStage('confirm');
+    }
+  };
+
+  const runArchive = async () => {
+    setWorkingAction('archive');
+    setStage('working');
+    setError('');
+    try {
+      const res = await fetch(`/api/activities/${activity.id}/archive`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'העברת האירוע לארכיון נכשלה');
+      await onArchived?.(data);
+      onClose?.();
+    } catch (err) {
+      setError(err.message || 'העברת האירוע לארכיון נכשלה');
       setStage('confirm');
     }
   };
@@ -93,15 +112,15 @@ export default function CancelActivityDialog({ activity, summary, onClose, onCan
         <div style={{ padding: '16px 20px', display: 'grid', gap: 14 }}>
           {/* אין מה לבטל ואין למי לזכות, אבל יש רישומים שמצביעים על האירוע —
               מחיקה הייתה משאירה אותם בלי הסבר. */}
-          {stage === 'confirm' && current?.history_only && refundTotal === 0 && (
+          {stage === 'confirm' && archiveOnly && (
             <Note tone="muted">
-              אי אפשר למחוק את האירוע: יש לו {current.total_registrations} רישומי הרשמה
-              {current.already_cancelled ? ' (האירוע כבר מבוטל)' : ''}. מחיקה הייתה משאירה
-              אותם בלי אירוע שיסביר אותם, ואת התשלומים בלי מקור.
+              אין כרגע משתתפים פעילים באירוע. נמצאה היסטוריית הרשמה או תשלום ולכן אי אפשר
+              למחוק אותו לגמרי — זה גם מסביר למה טאב המשתתפים מציג 0. אפשר להעביר את
+              האירוע לארכיון: ההיסטוריה תישמר, והוא ייעלם מיומן הפעילויות ומהאתר.
             </Note>
           )}
 
-          {stage === 'confirm' && !(current?.history_only && refundTotal === 0) && (
+          {stage === 'confirm' && !archiveOnly && (
             <>
               <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
                 אי אפשר למחוק אירוע שיש בו נרשמים — ההרשמות והתשלומים היו נשארים בלי
@@ -151,14 +170,19 @@ export default function CancelActivityDialog({ activity, summary, onClose, onCan
                   כולל זיכוי דמי הזמנה למזמין — {formatIls(current.host_refund.amount)}.
                 </Note>
               )}
-              {error && <Note tone="error">{error}</Note>}
             </>
           )}
+
+          {stage === 'confirm' && error && <Note tone="error">{error}</Note>}
 
           {stage === 'working' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 0' }}>
               <Loader2 size={18} className="spin" />
-              <span style={{ fontSize: 13 }}>מבטל את האירוע ומזכה את הנרשמים…</span>
+              <span style={{ fontSize: 13 }}>
+                {workingAction === 'archive'
+                  ? 'מעביר את האירוע לארכיון…'
+                  : 'מבטל את האירוע ומזכה את הנרשמים…'}
+              </span>
             </div>
           )}
 
@@ -256,7 +280,17 @@ export default function CancelActivityDialog({ activity, summary, onClose, onCan
             >
               {stage === 'report' ? 'סגור' : 'חזרה'}
             </button>
-            {stage === 'confirm' && !(current?.history_only && refundTotal === 0) && (
+            {stage === 'confirm' && archiveOnly && (
+              <button
+                type="button"
+                className="btn activity-modal-btn activity-modal-btn--danger"
+                onClick={runArchive}
+              >
+                <Archive size={14} />
+                העבר לארכיון
+              </button>
+            )}
+            {stage === 'confirm' && !archiveOnly && (
               <button
                 type="button"
                 className="btn activity-modal-btn activity-modal-btn--danger"

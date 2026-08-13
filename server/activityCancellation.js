@@ -24,6 +24,10 @@ export function activityIsCancelled(activity) {
   return CANCELLED_STATUSES.includes(String(activity.status || '').toLowerCase());
 }
 
+export function activityIsArchived(activity) {
+  return String(activity?.status || '').toLowerCase() === 'archived';
+}
+
 function participantLabel(registration) {
   return registration?.participant_name || registration?.name || 'משתתף';
 }
@@ -171,4 +175,14 @@ export function registrationsToRelease(summary) {
   for (const row of summary.unpaid) ids.add(row.registration_id);
   for (const row of summary.blocked) ids.add(row.registration_id);
   return [...ids];
+}
+
+/**
+ * Archiving keeps the activity as the parent of its registration/payment
+ * history, but removes it from the working calendar. It is safe only when
+ * nobody currently holds a place and there is no refund still to perform.
+ */
+export function activityCanBeArchived(summary) {
+  return Number(summary?.registrations_count) === 0
+    && Number(summary?.refund_total) === 0;
 }

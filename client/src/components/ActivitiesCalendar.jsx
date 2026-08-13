@@ -6206,6 +6206,13 @@ export default function ActivitiesCalendar({
                 : `האירוע בוטל · ${result.refunded_amount || 0} ₪ זוכו`
             );
           }}
+          onArchived={async () => {
+            setModal(null);
+            setCancelDialog(null);
+            await loadActivities();
+            refreshStaffNames();
+            setBanner('האירוע הועבר לארכיון והוסר מהיומן');
+          }}
         />
       )}
 
