@@ -21,12 +21,19 @@ import { runCustomerToolTurn } from './botToolTurn.js';
 import { capabilitySettingKey } from './botCapabilities.js';
 import { FOLLOWUP_COLLECTION } from './botFollowUps.js';
 import { INTEREST_COLLECTION } from './activityInterest.js';
+import {
+  HOLD_COLLECTION,
+  INTRO_COLLECTION,
+  LIFECYCLE_EVENT_COLLECTION,
+  WAITLIST_COLLECTION,
+} from './registrationLifecycle.js';
 
 /** Collections a scenario may touch. Everything is restored afterwards. */
 const SCENARIO_COLLECTIONS = [
   'parents',
   'groups',
   'students',
+  'enrollments',
   'health_declarations',
   'participation_waivers',
   'activities',
@@ -41,6 +48,10 @@ const SCENARIO_COLLECTIONS = [
   'program_eligibility',
   'placement_requests',
   'level_tests',
+  HOLD_COLLECTION,
+  WAITLIST_COLLECTION,
+  INTRO_COLLECTION,
+  LIFECYCLE_EVENT_COLLECTION,
 ];
 
 /**
@@ -178,7 +189,7 @@ test('אישור צוות ממשיך לפי מזהי המתאמן והקבוצה
       frequency: 'פעמיים בשבוע',
     });
     assert.equal(result.error, undefined);
-    assert.equal(student(ido.id).status, 'pending_signup');
+    assert.equal(student(ido.id).status, 'awaiting_parent_confirmation');
     assert.equal(student(ido.id).groupId, squad.id);
     assert.match(result.חבילת_הרשמה.שלב_2_הרשמה_לקבוצה.קישור, /\/api\/s\/g-adult-squad\/2$/);
   });
@@ -235,7 +246,7 @@ test('ממשיך מהעונה הקודמת נכנס לנבחרת בלי לפתו
       frequency: 'פעמיים בשבוע',
     });
     assert.equal(signup.error, undefined);
-    assert.equal(student(returning.id).status, 'pending_signup');
+    assert.equal(student(returning.id).status, 'awaiting_parent_confirmation');
     assert.equal(student(returning.id).groupId, squad.id);
   });
 });
@@ -459,9 +470,9 @@ test('מתאמן רשום — לא מעבירים קבוצה ולא מבטלים
   });
 });
 
-// ─── שיבוץ רך והחזרתו ────────────────────────────────────────────────────────
+// ─── שמירת מקום קשיחה והחזרתה ────────────────────────────────────────────────
 
-test('שיבוץ רך: הכרטיס עובר לממתין להרשמה, נקבעת בדיקה למחר, ונרשמת שורת יומן', async () => {
+test('שיבוץ קשיח: הכרטיס ממתין לאישור הורה, תופס מקום ונרשמת שורת יומן', async () => {
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
@@ -476,19 +487,20 @@ test('שיבוץ רך: הכרטיס עובר לממתין להרשמה, נקבע
     const result = await tools.startSignup({ childName: 'יותם', grade: 'ג' });
 
     assert.equal(result.שובץ, 'יותם כהן');
-    assert.equal(result.סטטוס_פנימי, 'ממתין להרשמה');
-    assert.equal(student('s-yotam').status, 'pending_signup');
+    assert.equal(result.סטטוס_פנימי, 'awaiting_parent_confirmation');
+    assert.equal(result.מקום_שמור, true);
+    assert.equal(student('s-yotam').status, 'awaiting_parent_confirmation');
     assert.equal(student('s-yotam').groupId, GROUP_GD.id);
 
     // הצוות שומע על זה מיד — שיבוץ שאיש לא יודע עליו הוא שיבוץ שאי אפשר להחזיר.
     assert.equal(notices.length, 1);
-    assert.equal(notices[0].kind, 'pending_signup');
+    assert.equal(notices[0].kind, 'awaiting_parent_confirmation');
 
-    // הבדיקה של מחר נקבעת בקוד השיבוץ, לא בזיכרון של המודל.
-    const pending = followUps().filter((f) => f.reason === 'pending_signup');
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0].status, 'open');
-    assert.equal(pending[0].created_by, 'bot');
+    // התזכורת שייכת להחזקה העמידה, לא לרשומת follow-up כללית.
+    assert.equal(followUps().filter((f) => f.reason === 'pending_signup').length, 0);
+    const holds = db.get(HOLD_COLLECTION) || [];
+    assert.equal(holds.length, 1);
+    assert.ok(holds[0].reminder_at);
 
     assert.equal(journal().length, 1);
     assert.equal(journal()[0].type, 'placement');
@@ -524,7 +536,8 @@ test('אותו שיבוץ פעמיים נשמר פעם אחת בלבד ולא י
     );
     assert.equal(notices.length, 1);
     assert.equal(journal().filter((row) => row.type === 'placement').length, 1);
-    assert.equal(followUps().filter((row) => row.reason === 'pending_signup').length, 1);
+    assert.equal(followUps().filter((row) => row.reason === 'pending_signup').length, 0);
+    assert.equal((db.get(HOLD_COLLECTION) || []).length, 1);
   });
 });
 
@@ -547,7 +560,8 @@ test('שיבוץ פעמיים באותה שיחה אינו יוצר שתי תז�
 
     assert.equal(student('s-yotam').groupId, GROUP_GD.id);
     assert.equal(student('s-alma').groupId, GROUP_HV.id);
-    assert.equal(followUps().filter((f) => f.reason === 'pending_signup').length, 1);
+    assert.equal(followUps().filter((f) => f.reason === 'pending_signup').length, 0);
+    assert.equal((db.get(HOLD_COLLECTION) || []).length, 2);
   });
 });
 
@@ -562,7 +576,7 @@ test('«תוציאו אותו מהקבוצה» — השיבוץ מוסר, והט
 
     assert.equal(result.בוטל, 'יותם כהן');
     // חתם הצהרה — לא ליד חדש. זה המצב שהיה לפני השיבוץ.
-    assert.equal(student('s-yotam').status, 'health_signed');
+    assert.equal(student('s-yotam').status, 'details_completed');
     assert.equal(student('s-yotam').groupId, null);
     assert.equal(journal()[0].type, 'placement_cancelled');
   });
@@ -922,14 +936,14 @@ test('שיבוץ אמיתי דרך תור מלא: הכלי כותב, והתשו�
       phone: PARENT.phone,
       callModel: scriptedModel([
         toolCall('startSignup', { childName: 'יותם', grade: 'ג', day: 0 }),
-        textReply('שיבצתי את יותם לקבוצת ג׳-ד׳ ביום א׳ 16:00. המקום נשמר כ*ממתין להרשמה*.'),
+        textReply('יותם משובץ לקבוצת ג׳-ד׳ ביום א׳ 16:00. המקום שמור לשלושה ימים עד לאישור ההרשמה במתנ״ס.'),
       ]),
     });
 
     assert.equal(turn.reason, 'ok');
-    assert.match(turn.text, /ממתין להרשמה/);
+    assert.match(turn.text, /המקום שמור/);
     assert.deepEqual(turn.toolsUsed, ['startSignup']);
-    assert.equal(student('s-yotam').status, 'pending_signup');
+    assert.equal(student('s-yotam').status, 'awaiting_parent_confirmation');
   });
 });
 
@@ -1225,7 +1239,7 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
     assert.match(yotam.קבוצה, /ג׳-ד׳/);
     assert.ok(yotam.גיל && yotam.גיל !== 'לא ידוע');
 
-    assert.equal(alma.סטטוס, 'health_signed');
+    assert.equal(alma.סטטוס, 'details_completed');
     assert.match(alma.הערת_סטטוס, /אין להציג/);
     assert.match(card.הערה, /אין לחשב גיל/);
   });
