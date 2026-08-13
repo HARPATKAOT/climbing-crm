@@ -3409,23 +3409,26 @@ select option, select optgroup {
   box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.16) !important;
 }
 
-/* שלוש האפשרויות של „מי יכול להירשם” הן בחירה אחת, ולכן הן שורה אחת — קודם
-   השלישית נפלה לשורה נפרדת ונקראה כמו הגדרה אחרת. */
-.activity-settings-card .choice-row {
+/* ארבע האפשרויות של „מי יכול להירשם” הן בחירה אחת. הן נשארות בשורה אחת
+   ובסדר עברי קבוע, כדי שאפשר יהיה לסרוק אותן מימין לשמאל. */
+.activity-settings-card .choice-row--visibility {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  direction: rtl;
+  gap: 4px;
 }
 
-.activity-settings-card .choice-row .choice-pill {
+.activity-settings-card .choice-row--visibility .choice-pill {
   justify-content: center;
   min-width: 0;
-  padding-inline: 8px;
+  gap: 4px;
+  padding: 6px 5px;
+  font-size: 11.5px;
   /* בלי זה כיתוב ארוך גולש מהתא ונדרס על הפיל שלידו. */
   overflow: hidden;
 }
 
-.activity-settings-card .choice-row .choice-pill > svg {
+.activity-settings-card .choice-row--visibility .choice-pill > svg {
   flex: 0 0 auto;
 }
 

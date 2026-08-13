@@ -1842,7 +1842,7 @@ function RegularActivityModal({
                 {!isOps && (
                   <div>
                     <span className="activity-settings-label">מי יכול להירשם</span>
-                    <div className="choice-row" style={{ marginTop: 4 }}>
+                    <div className="choice-row choice-row--visibility" style={{ marginTop: 4 }}>
                       {VISIBILITY_CHOICES.map(({ value, label, icon: Icon, accent }) => (
                         <button
                           key={value}
@@ -1852,7 +1852,7 @@ function RegularActivityModal({
                           disabled={readOnly}
                           onClick={() => setForm((prev) => ({ ...prev, ...visibilityFields(value) }))}
                         >
-                          <Icon size={14} /> {label}
+                          <Icon size={13} /> {label}
                         </button>
                       ))}
                     </div>
@@ -2496,8 +2496,8 @@ function visibilityFields(value) {
 
 /** Grey is off, blue is a link you hand out, green is out in the world. */
 const VISIBILITY_CHOICES = [
+  { value: 'closed', label: 'אירוע סגור', icon: Lock, accent: 'var(--text-3)' },
   { value: 'idea', label: 'רעיון', icon: Lightbulb, accent: '#FBBF24' },
-  { value: 'closed', label: 'סגור', icon: Lock, accent: 'var(--text-3)' },
   { value: 'link', label: 'קישור פרטי', icon: Link2, accent: '#A78BFA' },
   { value: 'public', label: 'מפורסם', icon: Globe, accent: '#34D399' },
 ];
