@@ -77,8 +77,12 @@ function scoreParentRecord(p) {
 }
 
 const STUDENT_STATUS_RANK = {
-  registered: 50,
+  registered: 60,
+  awaiting_centre_confirmation: 50,
+  awaiting_parent_confirmation: 48,
+  intro_scheduled: 46,
   past_registered: 45,
+  details_completed: 42,
   health_signed: 40,
   pending_signup: 35,
   intro_paid: 30,
