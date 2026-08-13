@@ -1560,7 +1560,7 @@ export default function PublicOnboardingForm() {
     if (digits.length < 9 && idDigits.length < 5) return { status: 'missing' };
     try {
       const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
-      if (healthOnlyMode && targetStudentId) params.set('studentId', targetStudentId);
+      if (targetStudentId) params.set('studentId', targetStudentId);
       if (template?.slug) params.set('templateSlug', template.slug);
       if (formSource) params.set('source', formSource);
       if (verificationToken) params.set('verificationToken', verificationToken);
@@ -2492,7 +2492,7 @@ export default function PublicOnboardingForm() {
           phoneVerification: otp.token ? { token: otp.token } : null,
           healthOnly: healthOnlyMode,
           mode: healthOnlyMode ? 'health-renewal' : 'full',
-          targetStudentId: healthOnlyMode ? targetStudentId : null,
+          targetStudentId: targetStudentId || null,
         }),
       });
       const data = await res.json().catch(() => ({}));

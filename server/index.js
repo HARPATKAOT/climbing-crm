@@ -11461,7 +11461,7 @@ app.post('/api/icount/webhook', async (req, res) => {
               coupon_code: stored.coupon_code,
             };
           });
-          fulfillSalePasses({
+          await fulfillSalePasses({
             sale,
             lines,
             studentId: sale.student_id,
@@ -14623,7 +14623,7 @@ async function registerEntriesForSale({ lines, studentId }) {
   return inserted[0] || null;
 }
 
-function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
+async function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
   const issued = [];
   for (const line of lines) {
     if (!requiresCustomer(line.product_type)) continue;
@@ -14659,7 +14659,16 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
             }
           : null,
       });
-      if (passFields) issued.push(db.insert('customer_passes', passFields));
+      if (passFields) {
+        const pass = db.insert('customer_passes', passFields);
+        const persisted = await persistCore('customer_passes', pass);
+        if (persisted?.ok === false) {
+          const error = new Error(persisted.error || 'שמירת הכרטיסייה בתיק הלקוח נכשלה');
+          error.status = 503;
+          throw error;
+        }
+        issued.push(pass);
+      }
     }
   }
   return issued;
@@ -16046,7 +16055,7 @@ app.post('/api/pos/sale', async (req, res) => {
       console.log(`🎟️ [POS] coupon ${coupon.code} redeemed on sale ${sale.id} (₪${couponDiscount})`);
     }
 
-    const passes = fulfillSalePasses({
+    const passes = await fulfillSalePasses({
       sale,
       lines,
       studentId: student?.id,
@@ -18749,6 +18758,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       phoneVerification,
       evidenceContext: { requestContext: requestEvidence(req) },
       healthOnly,
+      targetStudentId: String(req.body?.targetStudentId || req.body?.target_student_id || '').trim(),
       source: parentBody.source || 'form',
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,

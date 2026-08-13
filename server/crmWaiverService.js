@@ -84,6 +84,22 @@ export function sameHouseholdParticipantCandidate(db, parentId, input = {}, part
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+/** Resolve the exact CRM card named by a staff-issued participation link. */
+export function targetedParticipantCandidate(db, targetStudentId, input = {}) {
+  const targetId = clean(targetStudentId);
+  if (!targetId) return null;
+  const candidate = (db.get('students') || []).find((item) => String(item.id) === targetId);
+  if (!candidate) return null;
+  const claimedId = normalizedIdNumber(input.idNumber || input.climberIdNum);
+  const candidateId = normalizedIdNumber(candidate.idNumber);
+  const birthDate = clean(input.birthDate);
+  const sameId = claimedId.length >= 5 && candidateId && claimedId === candidateId;
+  const sameNameAndBirth = normalizedName(input.name) === normalizedName(candidate.name)
+    && !!birthDate
+    && String(candidate.birthDate || '').trim() === birthDate;
+  return sameId || sameNameAndBirth ? candidate : null;
+}
+
 function wantsReuse(participant) {
   return participant?.reuse_health === true
     || participant?.reuseHealth === true
@@ -393,6 +409,7 @@ export async function saveCrmParticipants({
   allowEmptyParticipants = false,
   skipDocuments = false,
   healthOnly = false,
+  targetStudentId = null,
   source = 'form',
   onStudentCreated,
   onStudentStatusChanged,
@@ -513,6 +530,15 @@ export async function saveCrmParticipants({
     const participantType = input.type === 'adult' ? 'adult' : 'child';
     const name = clean(input.name);
     let student = null;
+    if (targetStudentId && (participants || []).length === 1) {
+      student = targetedParticipantCandidate(db, targetStudentId, input);
+      if (!student) {
+        throw Object.assign(
+          new Error('פרטי המשתתף אינם תואמים לתיק שעבורו נשלח הקישור'),
+          { status: 409 }
+        );
+      }
+    }
     // The form was told this child already exists on another family's file and
     // the person filling it confirmed they are a second parent. Re-check the
     // identity here: a client could otherwise post any student id and attach
@@ -603,7 +629,8 @@ export async function saveCrmParticipants({
       const parentIdentity = normalizedIdNumber(parentInput?.idNumber || parentInput?.parentIdNum || parent.idNumber);
       const sameIdentity = (adultId && parentIdentity && adultId === parentIdentity)
         || normalizedName(name) === normalizedName(parentName);
-      const signsForOwnCard = (!student || String(student.parentId || '') === String(parent.id))
+      const targetedOwnCard = !!targetStudentId && String(student?.id || '') === String(targetStudentId);
+      const signsForOwnCard = (!student || String(student.parentId || '') === String(parent.id) || targetedOwnCard)
         && sameIdentity;
       if (!signsForOwnCard) {
         throw Object.assign(new Error('מבוגר רשאי לחתום רק עבור עצמו'), { status: 403 });
@@ -621,7 +648,7 @@ export async function saveCrmParticipants({
       // שם המשפחה בשדה משלו, כמו על תיק ההורה — לא ניחוש מהמילה האחרונה.
       lastName: clean(input.lastName || input.last_name) || student?.lastName || '',
       // A second parent joins the child's file; they do not take it over.
-      parentId: linkedFromOtherFamily ? student.parentId : parent.id,
+      parentId: (linkedFromOtherFamily || (targetStudentId && student?.parentId)) ? student.parentId : parent.id,
       isAdult: participantType === 'adult',
       birthDate: clean(input.birthDate) || student?.birthDate || '',
       gender: clean(input.gender) || student?.gender || '',

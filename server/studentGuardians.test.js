@@ -19,7 +19,10 @@ import {
   studentsForParent,
   unlinkGuardian,
 } from './studentGuardians.js';
-import { saveCrmParticipants, sameHouseholdParticipantCandidate } from './crmWaiverService.js';
+import {
+  saveCrmParticipants,
+  sameHouseholdParticipantCandidate,
+} from './crmWaiverService.js';
 import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 import { declarationGap, mustConfirm } from './healthQuestions.js';
 import { addPendingSpouse, ensureHouseholdForParent, splitExplicitHousehold } from './households.js';
@@ -140,6 +143,40 @@ test('a minor cannot bypass guardian signing by posting type adult', async () =>
     }),
     /קטין אינו רשאי לחתום עבור עצמו/
   );
+});
+
+test('a staff-targeted link files an adult signature on the named CRM card', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-staff-card', name: 'נטעלי קרפל', phone: '0523609711' },
+    ],
+    students: [
+      {
+        id: 's-yair', name: 'יאיר קרפל', parentId: 'p-staff-card',
+        birthDate: '1978-03-08', isAdult: true,
+      },
+    ],
+  });
+
+  const result = await saveCrmParticipants({
+    db,
+    persist,
+    parent: {
+      name: 'יאיר קרפל', phone: '0546922227', idNumber: '031455983',
+    },
+    participants: [{
+      type: 'adult', name: 'יאיר קרפל', birthDate: '1978-03-08',
+      idNumber: '031455983', answers: healthyAnswers,
+      waiverAccepted: true, signature: 'data:image/png;base64,signed',
+    }],
+    targetStudentId: 's-yair',
+  });
+
+  assert.equal(db.store.students.length, 1, 'no duplicate adult trainee');
+  assert.equal(result.participants[0].student.id, 's-yair');
+  assert.equal(db.store.health_declarations[0].studentId, 's-yair');
+  assert.equal(db.store.participation_waivers[0].student_id, 's-yair');
+  assert.equal(db.getOne('students', 's-yair').parentId, 'p-staff-card', 'the existing file owner is preserved');
 });
 
 test('matching an existing spouse joins their whole explicit household', async () => {
