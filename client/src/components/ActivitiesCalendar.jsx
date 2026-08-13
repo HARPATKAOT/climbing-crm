@@ -1990,14 +1990,7 @@ function RegularActivityModal({
                         >
                           <span className="activity-participation-form-icon"><KindIcon size={18} /></span>
                           <span className="activity-participation-form-copy">
-                            <strong>{kind.key === GENERIC_KIND.key ? template.title : `הסרת אחריות — ${kind.label}`}</strong>
-                            <small>
-                              {kind.key === 'trip'
-                                ? 'טופס מותאם לטיולים, סנפלינג, טיפוס ומערנות'
-                                : kind.key === 'wall'
-                                  ? 'טופס מותאם לטיפוס בקיר, חוגים ואירועים'
-                                  : 'טופס מותאם לפעילות הספציפית'}
-                            </small>
+                            <strong>{kind.key === GENERIC_KIND.key ? template.title : kind.label}</strong>
                           </span>
                           <span className="activity-participation-form-check" aria-hidden="true">
                             {selected ? <Check size={14} /> : null}
@@ -2011,12 +2004,6 @@ function RegularActivityModal({
                   )}
                   {!participationTemplatesLoading && !participationTemplates.length && (
                     <span className="activity-participation-form-status is-error">לא נמצאו טופסי השתתפות פעילים</span>
-                  )}
-                  {selectedParticipationTemplate && (
-                    <span className="activity-participation-form-status">
-                      טופס ההרשמה ייפתח עם ההצהרות, כללי הבטיחות והסרת האחריות של
-                      {' '}{templateKind(selectedParticipationTemplate).label}.
-                    </span>
                   )}
                 </div>
               )}
