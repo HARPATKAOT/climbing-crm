@@ -45,7 +45,25 @@ function saleBucket(method) {
   return 'other';
 }
 
-export function calculateDailySales(sales = [], now = new Date()) {
+function paymentCompletedAt(payment) {
+  return payment?.paid_at || payment?.completed_at || payment?.updated_at || payment?.created_at;
+}
+
+function paymentBucket(payment, linkedSale) {
+  const explicit = payment?.payment_method || linkedSale?.payment_method;
+  if (explicit) return saleBucket(explicit);
+  if (
+    payment?.cc_confirmation_code ||
+    payment?.cc_card_type ||
+    payment?.cc_last4 ||
+    payment?.payment_url
+  ) {
+    return 'online';
+  }
+  return 'other';
+}
+
+export function calculateDailySales(sales = [], now = new Date(), payments = []) {
   const date = israelDate(now);
   const result = {
     date,
@@ -56,12 +74,38 @@ export function calculateDailySales(sales = [], now = new Date()) {
     other: 0,
   };
 
+  const saleByPayment = new Map(
+    (sales || [])
+      .filter((sale) => sale?.payment_id)
+      .map((sale) => [String(sale.payment_id), sale])
+  );
+  const countedPaymentIds = new Set();
+
+  for (const payment of payments || []) {
+    const status = String(payment?.status || '').trim().toLowerCase();
+    if (
+      !COMPLETED_SALE_STATUSES.has(status) ||
+      israelDate(paymentCompletedAt(payment)) !== date
+    ) {
+      continue;
+    }
+    const amount = Number(payment?.amount ?? payment?.total ?? 0);
+    if (!Number.isFinite(amount)) continue;
+    const paymentId = String(payment?.id || '');
+    const bucket = paymentBucket(payment, saleByPayment.get(paymentId));
+    result[bucket] += amount;
+    result.total += amount;
+    result.count += 1;
+    if (paymentId) countedPaymentIds.add(paymentId);
+  }
+
   for (const sale of sales || []) {
     const status = String(sale?.status || '').trim().toLowerCase();
     if (
       EXCLUDED_SALE_STATUSES.has(status) ||
       !COMPLETED_SALE_STATUSES.has(status) ||
-      israelDate(saleCompletedAt(sale)) !== date
+      israelDate(saleCompletedAt(sale)) !== date ||
+      (sale?.payment_id && countedPaymentIds.has(String(sale.payment_id)))
     ) {
       continue;
     }
@@ -156,13 +200,14 @@ export function trackingStart(history = []) {
 
 export function calculateDashboardStats({
   sales = [],
+  payments = [],
   parents = [],
   students = [],
   history = [],
   now = new Date(),
 } = {}) {
   return {
-    dailySales: calculateDailySales(sales, now),
+    dailySales: calculateDailySales(sales, now, payments),
     funnel: calculateFunnel(parents, students),
     conversion: calculateConversion(history),
     trackingSince: trackingStart(history),

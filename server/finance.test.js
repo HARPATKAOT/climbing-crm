@@ -60,3 +60,31 @@ test('sales breakdown links accounting documents to events and products without 
   assert.equal(report.products[0].name, 'מחנה טיפוס');
   assert.equal(report.payment_methods[0].method, 'אשראי');
 });
+
+test('sales breakdown shows a paid CRM payment before its accounting sync arrives', () => {
+  const report = buildSalesBreakdown({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    documents: [],
+    payments: [{
+      id: 'pay-today',
+      status: 'paid',
+      amount: 3900,
+      paid_at: '2026-08-13T09:13:43.851Z',
+      parent_id: 'parent1',
+      activity_id: 'event1',
+      description: 'הרשמה למחנה',
+      cc_confirmation_code: 'confirmed',
+    }],
+    activities: [{ id: 'event1', name: 'מחנה קיץ', date: '2026-08-20', type: 'camp' }],
+    parents: [{ id: 'parent1', name: 'משפחת ישראלי' }],
+  });
+
+  assert.equal(report.summary.deals, 1);
+  assert.equal(report.summary.revenue, 3900);
+  assert.equal(report.daily[0].date, '2026-08-13');
+  assert.equal(report.events[0].name, 'מחנה קיץ');
+  assert.equal(report.products[0].name, 'הרשמה למחנה');
+  assert.equal(report.payment_methods[0].method, 'אשראי אונליין');
+  assert.equal(report.deals[0].customer_name, 'משפחת ישראלי');
+});

@@ -1,6 +1,7 @@
 const REVENUE_DOC_TYPES = new Set(['invoice', 'invrec']);
 const PIPELINE_DOC_TYPES = new Set(['deal', 'offer', 'proforma']);
 const CREDIT_DOC_TYPES = new Set(['refund', 'credit', 'creditinvoice', 'credit_invoice']);
+const COMPLETED_PAYMENT_STATUSES = new Set(['paid', 'completed']);
 
 export function roundFinance(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -27,6 +28,26 @@ export function dateInRange(value, from, to) {
   const date = String(value || '').slice(0, 10);
   if (!date) return false;
   return (!from || date >= from) && (!to || date <= to);
+}
+
+function israelDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function operationalPaymentMethod(payment, sale) {
+  const explicit = payment?.payment_method || sale?.payment_method;
+  if (explicit) return explicit;
+  if (payment?.cc_confirmation_code || payment?.cc_card_type || payment?.cc_last4 || payment?.payment_url) {
+    return 'online';
+  }
+  return '';
 }
 
 export function expenseFingerprint(expense = {}) {
@@ -234,6 +255,7 @@ export function buildSalesBreakdown({
   posSales = [],
   registrations = [],
   activities = [],
+  parents = [],
   from,
   to,
 } = {}) {
@@ -262,6 +284,7 @@ export function buildSalesBreakdown({
     registrationsByPayment.set(String(registration.payment_id), rows);
   }
   const activityById = new Map(activities.map((row) => [String(row.id), row]));
+  const parentById = new Map(parents.map((row) => [String(row.id), row]));
   const activityByHostPayment = new Map(activities
     .filter((row) => row.host_payment_id)
     .map((row) => [String(row.host_payment_id), row]));
@@ -273,15 +296,38 @@ export function buildSalesBreakdown({
   const customers = new Map();
   const deals = [];
 
-  for (const document of documents) {
+  const recognizedDocumentNumbers = new Set(documents
+    .filter((document) => classifyDocument(document.doctype, {
+      isStorno: document.is_storno,
+      total: document.total_gross,
+    }).recognized)
+    .map((document) => String(document.docnum || ''))
+    .filter(Boolean));
+  const operationalDocuments = payments
+    .filter((payment) => COMPLETED_PAYMENT_STATUSES.has(String(payment.status || '').trim().toLowerCase()))
+    .filter((payment) => dateInRange(israelDate(payment.paid_at || payment.completed_at || payment.updated_at || payment.created_at), from, to))
+    .filter((payment) => !payment.icount_doc_number || !recognizedDocumentNumbers.has(String(payment.icount_doc_number)))
+    .map((payment) => ({
+      id: `payment:${payment.id}`,
+      document_date: israelDate(payment.paid_at || payment.completed_at || payment.updated_at || payment.created_at),
+      docnum: payment.icount_doc_number || payment.id,
+      doctype: 'payment',
+      total_gross: Number(payment.amount ?? payment.total ?? 0),
+      client_id: payment.parent_id || null,
+      client_name: parentById.get(String(payment.parent_id || ''))?.name || '',
+      source_url: payment.icount_doc_url || null,
+      operational_payment: payment,
+    }));
+
+  for (const document of [...documents, ...operationalDocuments]) {
     if (!dateInRange(document.document_date, from, to)) continue;
     const classification = classifyDocument(document.doctype, {
       isStorno: document.is_storno,
       total: document.total_gross,
     });
-    if (!classification.recognized) continue;
+    if (!classification.recognized && !document.operational_payment) continue;
     const amount = roundFinance(Math.abs(Number(document.total_gross) || 0) * classification.sign);
-    const linkedPayment = paymentsByDocnum.get(String(document.docnum || '')) || null;
+    const linkedPayment = document.operational_payment || paymentsByDocnum.get(String(document.docnum || '')) || null;
     const sale = (linkedPayment && salesByPayment.get(String(linkedPayment.id)))
       || salesByDocnum.get(String(document.docnum || ''))
       || null;
@@ -292,15 +338,21 @@ export function buildSalesBreakdown({
       ...(linkedPayment && activityByHostPayment.get(String(linkedPayment.id))
         ? [activityByHostPayment.get(String(linkedPayment.id))]
         : []),
+      ...(linkedPayment?.activity_id && activityById.get(String(linkedPayment.activity_id))
+        ? [activityById.get(String(linkedPayment.activity_id))]
+        : []),
       ...registrationsForPayment.map((row) => activityById.get(String(row.activity_id))).filter(Boolean),
     ].map((row) => [String(row.id), row])).values()];
     const documentLines = linesByDocument.get(document.id) || [];
     const eventLabels = linkedActivities.map((row) => row.name || 'אירוע ללא שם');
-    const itemLabels = (sale?.items || documentLines)
+    const detailRows = sale?.items?.length
+      ? sale.items
+      : (documentLines.length ? documentLines : (linkedPayment?.description ? [{ description: linkedPayment.description }] : []));
+    const itemLabels = detailRows
       .map((row) => row.name || row.description)
       .filter(Boolean);
     const paymentMethods = paymentEventsByDocument.get(document.id) || [];
-    const fallbackMethod = linkedPayment?.payment_method || sale?.payment_method || '';
+    const fallbackMethod = operationalPaymentMethod(linkedPayment, sale);
 
     const deal = {
       id: document.id,
@@ -308,7 +360,7 @@ export function buildSalesBreakdown({
       document_number: document.docnum || '',
       doctype: document.doctype,
       customer_id: document.client_id || linkedPayment?.parent_id || null,
-      customer_name: document.client_name || sale?.customer_name || 'לקוח ללא שם',
+      customer_name: document.client_name || sale?.customer_name || parentById.get(String(linkedPayment?.parent_id || ''))?.name || 'לקוח ללא שם',
       amount,
       event_ids: linkedActivities.map((row) => row.id),
       events: eventLabels,
@@ -340,7 +392,12 @@ export function buildSalesBreakdown({
       name: item.name || item.description || 'מוצר ללא שם',
       quantity: Number(item.quantity) || 1,
       amount: (Number(item.unitprice) || 0) * (Number(item.quantity) || 1),
-    })) : documentLines
+    })) : (documentLines.length ? documentLines : (linkedPayment?.description ? [{
+      item_id: linkedPayment.description,
+      description: linkedPayment.description,
+      quantity: 1,
+      line_gross: amount,
+    }] : []))
       .filter((line) => Number(line.line_gross) > 0 && !/^הנחה\s*:/i.test(String(line.description || '')))
       .map((line) => ({
         id: line.item_id || line.sku || line.description,

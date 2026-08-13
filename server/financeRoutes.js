@@ -117,6 +117,7 @@ financeRouter.get('/sales-breakdown', (req, res) => {
     posSales: db.get('pos_sales'),
     registrations: db.get('activity_registrations'),
     activities: db.get('activities'),
+    parents: db.get('parents'),
     from,
     to,
   }));
@@ -301,6 +302,7 @@ financeRouter.get('/export.csv', (req, res) => {
     posSales: db.get('pos_sales'),
     registrations: db.get('activity_registrations'),
     activities: db.get('activities'),
+    parents: db.get('parents'),
     from,
     to,
   });

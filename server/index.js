@@ -1099,17 +1099,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
     ? stats
     : omitFields(stats, new Set(['dailySales']));
   try {
-    const [sales, parents, students, history] = await readTables(
+    const [sales, payments, parents, students, history] = await readTables(
       'pos_sales',
+      'payments',
       'parents',
       'students',
       'lead_status_history'
     );
-    res.json(visibleStats(calculateDashboardStats({ sales, parents, students, history })));
+    res.json(visibleStats(calculateDashboardStats({ sales, payments, parents, students, history })));
   } catch (error) {
     console.error('GET /api/dashboard/stats failed:', error.message);
     res.json(visibleStats(calculateDashboardStats({
       sales: db.get('pos_sales') || [],
+      payments: db.get('payments') || [],
       parents: db.get('parents') || [],
       students: db.get('students') || [],
       history: db.get('lead_status_history') || [],

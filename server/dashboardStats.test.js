@@ -54,6 +54,60 @@ test('daily sales use the Israel date and completed sales only', () => {
   });
 });
 
+test('daily sales include paid payment records and avoid double counting their POS sale', () => {
+  const result = calculateDailySales(
+    [
+      {
+        id: 'sale-linked',
+        payment_id: 'payment-linked',
+        status: 'paid',
+        total: 120,
+        payment_method: 'online',
+        updated_at: '2026-08-13T09:01:00.000Z',
+      },
+      {
+        id: 'cash-only',
+        status: 'paid',
+        total: 30,
+        payment_method: 'cash',
+        created_at: '2026-08-13T10:00:00.000Z',
+      },
+    ],
+    new Date('2026-08-13T12:00:00.000Z'),
+    [
+      {
+        id: 'payment-linked',
+        status: 'paid',
+        amount: 120,
+        cc_confirmation_code: 'confirmed',
+        paid_at: '2026-08-13T09:00:00.000Z',
+      },
+      {
+        id: 'activity-payment',
+        status: 'paid',
+        amount: 3900,
+        payment_url: 'https://pay.example.test',
+        paid_at: '2026-08-13T11:00:00.000Z',
+      },
+      {
+        id: 'pending',
+        status: 'pending',
+        amount: 500,
+        created_at: '2026-08-13T11:00:00.000Z',
+      },
+    ]
+  );
+
+  assert.deepEqual(result, {
+    date: '2026-08-13',
+    total: 4050,
+    count: 3,
+    cash: 30,
+    online: 4020,
+    other: 0,
+  });
+});
+
 test('funnel counts one highest stage per family including parent-only leads', () => {
   const result = calculateFunnel(
     [
