@@ -7459,6 +7459,51 @@ export default function Leads({
   // the signature images, which nothing on this screen draws and which are 30
   // times the weight of everything the marks actually read.
   const [declarations, setDeclarations] = useState([]);
+  const [showLifecycleMigration, setShowLifecycleMigration] = useState(false);
+  const [lifecycleMigrationReport, setLifecycleMigrationReport] = useState(null);
+  const [lifecycleMigrationBusy, setLifecycleMigrationBusy] = useState(false);
+  const [lifecycleMigrationMessage, setLifecycleMigrationMessage] = useState('');
+
+  const runLifecycleMigrationDryRun = async () => {
+    setLifecycleMigrationBusy(true);
+    setLifecycleMigrationMessage('');
+    try {
+      const response = await fetch('/api/registration-lifecycle/dry-run');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'בדיקת המעבר נכשלה');
+      setLifecycleMigrationReport(payload);
+    } catch (error) {
+      setLifecycleMigrationMessage(error.message || 'בדיקת המעבר נכשלה');
+    } finally {
+      setLifecycleMigrationBusy(false);
+    }
+  };
+
+  const applyLifecycleMigration = async () => {
+    if (!lifecycleMigrationReport?.safe_to_apply) return;
+    if (!window.confirm('להפעיל את מעבר שמירת המקומות על הרשומות הקיימות?')) return;
+    setLifecycleMigrationBusy(true);
+    setLifecycleMigrationMessage('');
+    try {
+      const response = await fetch('/api/registration-lifecycle/migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approved: true,
+          confirmation: 'APPLY_REGISTRATION_LIFECYCLE_MIGRATION',
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || payload.reason || 'המעבר לא הושלם');
+      setLifecycleMigrationMessage(`המעבר הושלם: ${payload.holds || 0} שמירות מקום, ${payload.waitlists || 0} רשומות המתנה.`);
+      await refreshData();
+      await runLifecycleMigrationDryRun();
+    } catch (error) {
+      setLifecycleMigrationMessage(error.message || 'המעבר לא הושלם');
+    } finally {
+      setLifecycleMigrationBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/health-declarations?summary=1')
@@ -8021,8 +8066,55 @@ export default function Leads({
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <Plus size={16} /> ליד חדש
           </button>
+          {canManageBilling && (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                setShowLifecycleMigration((value) => !value);
+                if (!lifecycleMigrationReport) runLifecycleMigrationDryRun();
+              }}
+            >
+              מעבר שמירת מקומות
+            </button>
+          )}
         </div>
       </div>
+
+      {showLifecycleMigration && canManageBilling && (
+        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div>
+              <strong>מעבר שמירת מקומות</strong>
+              {lifecycleMigrationReport && (
+                <div className="section-sub" style={{ marginTop: 4 }}>
+                  שמירות: {lifecycleMigrationReport.plannedHolds?.filter((row) => !row.status_only).length || 0} · המתנה: {lifecycleMigrationReport.plannedWaitlists?.length || 0} · חריגים: {(lifecycleMigrationReport.uncertain?.length || 0) + (lifecycleMigrationReport.overloaded?.length || 0) + (lifecycleMigrationReport.unverifiedIntroBookings?.length || 0)}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-sm btn-ghost" type="button" disabled={lifecycleMigrationBusy} onClick={runLifecycleMigrationDryRun}>
+                בדיקה מחדש
+              </button>
+              <button className="btn btn-sm btn-primary" type="button" disabled={lifecycleMigrationBusy || !lifecycleMigrationReport?.safe_to_apply} onClick={applyLifecycleMigration}>
+                הפעל מעבר
+              </button>
+            </div>
+          </div>
+          {lifecycleMigrationBusy && <div className="section-sub" style={{ marginTop: 8 }}>בודק...</div>}
+          {lifecycleMigrationReport && !lifecycleMigrationReport.safe_to_apply && (
+            <div className="alert alert-warn" style={{ marginTop: 10 }}>
+              המעבר חסום עד לטיפול בחריגים. לא השתנו נתונים.
+            </div>
+          )}
+          {lifecycleMigrationReport?.safe_to_apply && (
+            <div className="alert alert-success" style={{ marginTop: 10 }}>
+              הבדיקה נקייה. אפשר להפעיל את המעבר.
+            </div>
+          )}
+          {lifecycleMigrationMessage && <div className="alert" style={{ marginTop: 10 }}>{lifecycleMigrationMessage}</div>}
+        </div>
+      )}
 
       {loadError && (
         <div
