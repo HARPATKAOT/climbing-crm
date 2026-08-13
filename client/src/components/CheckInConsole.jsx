@@ -45,6 +45,7 @@ export default function CheckInConsole({
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('climbers');
   const [receptionStudentId, setReceptionStudentId] = useState('');
+  const [cashSessionOpen, setCashSessionOpen] = useState(null);
   // אחראי הקופה למשמרת. ברירת המחדל היא מי שפתח את הקיר, וניתן להחליף —
   // כך אף מכירה לא שואלת „מי מבצע?” באמצע הטיפול בלקוח.
   const [cashierId, setCashierId] = useState('');
@@ -56,13 +57,18 @@ export default function CheckInConsole({
   const prevStageRef = useRef(null);
 
   const loadState = useCallback(async () => {
-    const [next, emps] = await Promise.all([
+    const [next, emps, cashSession] = await Promise.all([
       fetch('/api/wall-shift/state').then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch(operationalOnly ? '/api/trainers' : '/api/employees')
         .then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      fetch('/api/cash-register/session')
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     setState(next);
     setEmployees(Array.isArray(emps) ? emps : []);
+    setCashSessionOpen(
+      typeof cashSession?.can_sell_cash === 'boolean' ? cashSession.can_sell_cash : null
+    );
     return next;
   }, [operationalOnly]);
 
@@ -238,7 +244,7 @@ export default function CheckInConsole({
           <CheckCircle2 size={64} style={{ color: 'var(--green)', marginBottom: 16 }} />
           <div style={{ fontSize: 34, fontWeight: 800, marginBottom: 8 }}>המשמרת נפתחה</div>
           <div style={{ color: 'var(--text-2)', fontSize: 15 }}>
-            {state.opener?.name} · מ-{hhmm(state.opener?.clock_in)} · הקופה פתוחה והבדיקות נחתמו
+            {state.opener?.name} · מ-{hhmm(state.opener?.clock_in)} · משמרת הקיר נפתחה והבדיקות נחתמו
           </div>
           <button
             type="button"
@@ -260,7 +266,12 @@ export default function CheckInConsole({
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16,
       }}>
-        <span className="badge badge-green">משמרת פתוחה</span>
+        <span className="badge badge-green">משמרת קיר פתוחה</span>
+        <span
+          className={`badge ${cashSessionOpen == null ? 'badge-gray' : cashSessionOpen ? 'badge-green' : 'badge-amber'}`}
+        >
+          {cashSessionOpen == null ? 'מצב קופה לא זמין' : cashSessionOpen ? 'קופה פתוחה' : 'קופה סגורה'}
+        </span>
         <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
           {state.opener?.name} · מ-{hhmm(state.opener?.clock_in)}
         </span>
@@ -320,6 +331,7 @@ export default function CheckInConsole({
               requireSeller
               sellerEmployeeId={cashier?.employee_id || ''}
               hideInvoiceContactEditor
+              onCashSessionChange={setCashSessionOpen}
               renderCustomerExtra={({ studentId }) => (
                 <ClimberEntryPanel
                   studentId={studentId}

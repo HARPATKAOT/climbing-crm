@@ -153,6 +153,7 @@ export default function PosSale({
   // מכירה הוא שאלה שנשאלת שוב ושוב על תשובה שלא משתנה.
   sellerEmployeeId = '',
   hideInvoiceContactEditor = false,
+  onCashSessionChange = null,
 }) {
   // פרטי העסק נדרשים לקבלה המודפסת — שם משפטי, מספר עוסק, כתובת ולוגו הם
   // פרטי חובה על חשבונית מס.
@@ -285,7 +286,9 @@ export default function PosSale({
       );
       setStudents(Array.isArray(s) ? s : []);
       setParents(Array.isArray(par) ? par : []);
-      setCashSessionOpen(!!sess?.can_sell_cash);
+      const canSellCash = !!sess?.can_sell_cash;
+      setCashSessionOpen(canSellCash);
+      onCashSessionChange?.(canSellCash);
       if (Array.isArray(cats) && cats.length) {
         setCatalogCategories(cats.filter((c) => c.active !== false));
       }
@@ -299,7 +302,7 @@ export default function PosSale({
       setLoadError('לא הצלחנו לטעון לקוחות — מנסה שוב...');
       return false;
     }
-  }, []);
+  }, [onCashSessionChange]);
 
   // A restarting API used to leave this screen empty until someone reloaded by
   // hand — and an empty catalogue looks like missing products, not an outage.
@@ -1099,7 +1102,7 @@ export default function PosSale({
       return false;
     }
     if (paymentMethod === 'cash' && !cashSessionOpen) {
-      setError('אי אפשר לגבות במזומן בלי לפתוח קופה קודם — עברו ללשונית פתיחה / סגירה, או גבו בסליקה בקישור');
+      setError('הקופה סגורה. פתחו אותה דרך כפתור „פתח קופה” בעגלה, או בחרו אשראי בקישור.');
       return false;
     }
     if (paymentMethod === 'cash' && Number(total) > 0) {
@@ -1298,6 +1301,7 @@ export default function PosSale({
 
   const handleCashOpened = async () => {
     setCashSessionOpen(true);
+    onCashSessionChange?.(true);
     setCashClosedHint(false);
     setShowOpenCash(false);
     setPaymentMethod('cash');
@@ -2415,7 +2419,9 @@ export default function PosSale({
 
           {cashClosedHint && !cashSessionOpen && (
             <div className="alert alert-warn" style={{ marginTop: 10, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div>הקופה סגורה — אי אפשר לגבות במזומן לפני פתיחת משמרת.</div>
+              <div>
+                משמרת הקיר פתוחה, אבל הקופה סגורה. כדי לגבות במזומן פתחו את הקופה וספרו את המזומן שבמגירה.
+              </div>
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
