@@ -205,6 +205,7 @@ export default function PosSale({
   const [formQr, setFormQr] = useState('');
   const [formQrBusy, setFormQrBusy] = useState(false);
   const [tenderedDenoms, setTenderedDenoms] = useState({});
+  const tenderedAmount = sumDenoms(tenderedDenoms);
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -214,13 +215,6 @@ export default function PosSale({
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
   const [cashSessionOpen, setCashSessionOpen] = useState(false);
-  const [tenderedAmount, setTenderedAmount] = useState('');
-  // הסכום נגזר מהספירה ולא מחושב בתוך ה-onChange: הספירה מגיעה כפונקציה על
-  // המצב הקודם (אחרת קליקים מהירים נבלעים), ואין בה את התוצאה מראש.
-  useEffect(() => {
-    const sum = sumDenoms(tenderedDenoms);
-    if (sum > 0) setTenderedAmount(String(sum));
-  }, [tenderedDenoms]);
   const [lastChange, setLastChange] = useState(null);
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
@@ -509,7 +503,6 @@ export default function PosSale({
     setAppliedCoupon(null);
     setDismissedCoupons(new Set());
     setPaymentMethod('');
-    setTenderedAmount('');
     setTenderedDenoms({});
     setEditingDiscountId(null);
     setShowCustomForm(false);
@@ -1216,7 +1209,6 @@ export default function PosSale({
       // מה שכן נשאר הוא אישור המסמך והעודף להחזר: הדלפקיסט עדיין צריך לקרוא
       // אותם. הם נמחקים מעצמם ברגע שנכנס פריט לעגלה הבאה.
       setCart([]);
-      setTenderedAmount('');
       setTenderedDenoms({});
       setPaymentMethod('');
       setShowQuoteOptions(false);
@@ -1275,7 +1267,7 @@ export default function PosSale({
       await runAction('/api/pos/payment-link', { couponCode });
       return;
     }
-    const tendered = tenderedAmount === '' ? total : Number(tenderedAmount);
+    const tendered = Number(tenderedAmount);
     await runAction('/api/pos/sale', {
       paymentMethod,
       couponCode,
@@ -1302,9 +1294,6 @@ export default function PosSale({
     }
     setCashClosedHint(false);
     setPaymentMethod(id);
-    if (id === 'cash' && tenderedAmount === '') {
-      setTenderedAmount(String(total));
-    }
   };
 
   const handleCashOpened = async () => {
@@ -1312,7 +1301,6 @@ export default function PosSale({
     setCashClosedHint(false);
     setShowOpenCash(false);
     setPaymentMethod('cash');
-    setTenderedAmount((prev) => (prev === '' ? String(total) : prev));
     await refresh();
   };
 
@@ -1996,40 +1984,6 @@ export default function PosSale({
                             <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500 }}> · מותאם</span>
                           ) : null}
                         </div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            marginTop: 6,
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ padding: '4px 8px', fontSize: 11 }}
-                            onClick={() =>
-                              isEditingDiscount
-                                ? setEditingDiscountId(null)
-                                : openDiscountEditor(line)
-                            }
-                            title="הנחה"
-                          >
-                            <Percent size={11} /> הנחה
-                          </button>
-                          {hasDiscount && (
-                            <span style={{ fontSize: 11, color: 'var(--accent, #F59E0B)' }}>
-                              {line.discountType === 'percent'
-                                ? `-${line.discountValue}%`
-                                : `-₪${line.discountValue}`}
-                              {Number(line.listPrice) !== Number(line.unitprice)
-                                ? ` (מ־₪${line.listPrice})`
-                                : ''}
-                            </span>
-                          )}
-                        </div>
-
                         {/* The payer stays the selected parent. Participants can
                             be siblings, or an approved child from another file. */}
                         {line.grants_wall_climbing && !line.family_shared
@@ -2068,20 +2022,20 @@ export default function PosSale({
                                   {participant.name} · ילד נוסף <X size={10} />
                                 </button>
                               ))}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ padding: '3px 9px', fontSize: 11 }}
+                                onClick={() => {
+                                  const opening = externalPickerLineId !== line.cartLineId;
+                                  setExternalPickerLineId(opening ? line.cartLineId : '');
+                                  setExternalParticipantQuery('');
+                                  setExternalParticipantError('');
+                                }}
+                              >
+                                <Plus size={11} /> הוספת ילד שאינו מהמשפחה
+                              </button>
                             </div>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ marginTop: 6, padding: '4px 8px', fontSize: 11 }}
-                              onClick={() => {
-                                const opening = externalPickerLineId !== line.cartLineId;
-                                setExternalPickerLineId(opening ? line.cartLineId : '');
-                                setExternalParticipantQuery('');
-                                setExternalParticipantError('');
-                              }}
-                            >
-                              <Plus size={11} /> הוספת ילד שאינו מהמשפחה
-                            </button>
                             {externalPickerLineId === line.cartLineId && (
                               <div
                                 style={{
@@ -2149,9 +2103,33 @@ export default function PosSale({
                           gap: 4,
                           flexShrink: 0,
                           paddingTop: 2,
+                          flexWrap: 'wrap',
+                          justifyContent: 'flex-end',
                         }}
-                        title="כמות יחידות"
                       >
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ padding: '4px 8px', fontSize: 11 }}
+                          onClick={() =>
+                            isEditingDiscount
+                              ? setEditingDiscountId(null)
+                              : openDiscountEditor(line)
+                          }
+                          title="הנחה"
+                        >
+                          <Percent size={11} /> הנחה
+                        </button>
+                        {hasDiscount && (
+                          <span style={{ fontSize: 11, color: 'var(--accent, #F59E0B)' }}>
+                            {line.discountType === 'percent'
+                              ? `-${line.discountValue}%`
+                              : `-₪${line.discountValue}`}
+                            {Number(line.listPrice) !== Number(line.unitprice)
+                              ? ` (מ־₪${line.listPrice})`
+                              : ''}
+                          </span>
+                        )}
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"
@@ -2185,14 +2163,15 @@ export default function PosSale({
                         >
                           <Plus size={12} />
                         </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeLine(line.cartLineId)}
+                          aria-label="מחיקת פריט"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeLine(line.cartLineId)}
-                      >
-                        <Trash2 size={12} />
-                      </button>
                     </div>
                     {isEditingDiscount && (
                       <div
@@ -2477,36 +2456,42 @@ export default function PosSale({
                 showTotal={false}
                 onChange={setTenderedDenoms}
               />
-              <label style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-                או סכום ישירות
-                <input
-                  className="input input-sm"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  inputMode="decimal"
-                  value={tenderedAmount}
-                  onChange={(e) => {
-                    setTenderedAmount(e.target.value);
-                    setTenderedDenoms({});
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    minWidth: 0,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.025)',
                   }}
-                  style={{ marginTop: 6 }}
-                />
-              </label>
-              <div style={{ fontSize: 13 }}>
-                התקבל: <strong>₪{(Number(tenderedAmount) || 0).toFixed(2)}</strong>
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>
-                {changePreview == null
-                  ? 'הזינו כמה התקבל מהלקוח'
-                  : changePreview < 0
-                    ? `חסרים ₪${Math.abs(changePreview).toFixed(2)}`
-                    : `עודף להחזר: ₪${changePreview.toFixed(2)}`}
-              </div>
-              {/* מה שנשאר במגירה הוא סכום המכירה, לא מה שהלקוח הושיט: העודף
-                  יוצא חזרה. זה מה שספירת הסגירה תיבדק מולו. */}
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                יתווסף למגירה: ₪{roundMoney(total).toFixed(2)}
+                >
+                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginBottom: 3 }}>התקבל</div>
+                  <strong style={{ fontSize: 17 }}>₪{Number(tenderedAmount).toFixed(2)}</strong>
+                </div>
+                <div
+                  style={{
+                    minWidth: 0,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: `1px solid ${changePreview < 0 ? 'rgba(251,191,36,0.42)' : 'rgba(52,211,153,0.35)'}`,
+                    background: changePreview < 0 ? 'rgba(251,191,36,0.08)' : 'rgba(52,211,153,0.07)',
+                    color: changePreview < 0 ? 'var(--amber, #FBBF24)' : 'var(--green, #34D399)',
+                  }}
+                >
+                  <div style={{ fontSize: 11.5, marginBottom: 3 }}>
+                    {changePreview < 0 ? 'חסרים' : changePreview > 0 ? 'עודף להחזר' : 'הסכום הושלם'}
+                  </div>
+                  <strong style={{ fontSize: 17 }}>
+                    ₪{Math.abs(Number(changePreview) || 0).toFixed(2)}
+                  </strong>
+                </div>
               </div>
             </div>
           )}
