@@ -11,6 +11,7 @@ import { PARTICIPATION_FORM_TEMPLATE } from './participationFormWhatsappTemplate
 import { ONBOARDING_LINK_TEMPLATE } from './onboardingWhatsappTemplate.js';
 import { AGENDA_DIGEST_TEMPLATE } from './agendaDigestTemplate.js';
 import { getPaymentTemplateName } from './icount.js';
+import { LIFECYCLE_TEMPLATE_NAMES } from './registrationLifecycleTemplates.js';
 
 // A rename in any of those modules must break here, not go unnoticed in a badge.
 test('every name in the map is still the name its module sends', () => {
@@ -22,6 +23,9 @@ test('every name in the map is still the name its module sends', () => {
   assert.equal(TEMPLATE_SENDERS[ONBOARDING_LINK_TEMPLATE], 'form');
   assert.equal(TEMPLATE_SENDERS[AGENDA_DIGEST_TEMPLATE], 'agenda');
   assert.equal(TEMPLATE_SENDERS[getPaymentTemplateName()], 'finance');
+  for (const name of Object.values(LIFECYCLE_TEMPLATE_NAMES)) {
+    assert.equal(TEMPLATE_SENDERS[name], 'registration');
+  }
 });
 
 test('every kind in the map has a label', () => {

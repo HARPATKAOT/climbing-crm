@@ -20,6 +20,7 @@ const KIND_STYLE = {
   finance: { icon: CreditCard, color: '#34D399', title: 'קישור תשלום אישי' },
   form: { icon: ClipboardList, color: '#38BDF8', title: 'טופס שנשלח ללקוח' },
   agenda: { icon: CalendarClock, color: '#94A3B8', title: 'תקציר היומן אליך' },
+  registration: { icon: CalendarClock, color: '#F59E0B', title: 'תהליך ההרשמה שולח את התבנית הזאת' },
   manual: { icon: Send, color: '#38BDF8', title: 'מסומנת לשליחה ידנית מכרטיס לקוח' },
 };
 
