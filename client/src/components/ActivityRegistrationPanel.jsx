@@ -144,6 +144,7 @@ export default function ActivityRegistrationPanel({
   // שורת המחירון שהאירוע מתומחר לפיה, כפי שנטענה בטופס האירוע. null = האירוע
   // נושא מספרים משלו.
   priceRuleNumbers = null,
+  confirmNavigation = null,
 }) {
   const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
@@ -182,8 +183,9 @@ export default function ActivityRegistrationPanel({
 
   const openLeadFile = useCallback((openId) => {
     if (!openId) return;
+    if (confirmNavigation && !confirmNavigation()) return;
     navigate(`/leads?open=${encodeURIComponent(openId)}`);
-  }, [navigate]);
+  }, [confirmNavigation, navigate]);
 
   const set = (key, value) => {
     if (readOnly) return;

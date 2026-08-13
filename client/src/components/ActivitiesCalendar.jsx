@@ -1463,6 +1463,7 @@ function RegularActivityModal({
   canViewFinance,
   canViewHr,
   onStaffChanged = null,
+  confirmNavigation = null,
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
   const isTemplateCreate = isTemplateEdit && !initial?._template_id;
@@ -2303,6 +2304,7 @@ function RegularActivityModal({
                 hideRegistrationToggle
                 templateMode={isTemplateEdit}
                 priceRuleNumbers={priceRule ? ruleNumbers(priceRule) : null}
+                confirmNavigation={confirmNavigation}
               />
             )}
 
@@ -2509,6 +2511,31 @@ const VISIBILITY_HINTS = {
   public: 'הפעילות מופיעה באתר, והבוט מציע אותה ללקוחות ששואלים על טיולים ואירועים.',
 };
 
+const UNSAVED_ACTIVITY_IGNORED_FIELDS = new Set([
+  // These fields may be refreshed from the server while the editor is open.
+  // They are not unsaved form work and must not create a false exit warning.
+  'payment_status',
+  'host_paid_at',
+  'created_at',
+  'updated_at',
+  'synced_at',
+]);
+
+function stableActivityDraft(value) {
+  if (Array.isArray(value)) return value.map(stableActivityDraft);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .filter((key) => !UNSAVED_ACTIVITY_IGNORED_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableActivityDraft(value[key])])
+  );
+}
+
+function activityDraftSnapshot(form) {
+  return JSON.stringify(stableActivityDraft(form));
+}
+
 function ActivityFormModal({
   initial,
   onSave,
@@ -2581,8 +2608,10 @@ function ActivityFormModal({
     staff_flat_amount: initial?.staff_flat_amount ?? '',
   }));
   const [localError, setLocalError] = useState('');
+  const savedDraftRef = useRef(activityDraftSnapshot(form));
   const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
+  const hasUnsavedChanges = !readOnly && activityDraftSnapshot(form) !== savedDraftRef.current;
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
   const selectedCalendarName = isOverlay
     ? (externalCalendars.find((c) => c.id === form.calendar_id)?.name || initial?.calendar_name || '')
@@ -2593,6 +2622,39 @@ function ActivityFormModal({
     setLocalError('');
     setForm((prev) => ({ ...prev, [key]: value }));
   };
+
+  const confirmDiscard = useCallback(() => (
+    !hasUnsavedChanges || window.confirm('יש שינויים באירוע שלא נשמרו. לצאת בלי לשמור?')
+  ), [hasUnsavedChanges]);
+
+  const requestClose = useCallback(() => {
+    if (saving || !confirmDiscard()) return;
+    onClose();
+  }, [confirmDiscard, onClose, saving]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const guardLinkNavigation = (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+      if (confirmDiscard()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener('click', guardLinkNavigation, true);
+    return () => document.removeEventListener('click', guardLinkNavigation, true);
+  }, [confirmDiscard, hasUnsavedChanges]);
 
   const permittedPayload = (payload) => {
     const next = { ...payload };
@@ -2615,7 +2677,7 @@ function ActivityFormModal({
     return next;
   };
 
-  const submit = (e, options = {}) => {
+  const submit = async (e, options = {}) => {
     e.preventDefault();
     if (readOnly) return;
     if (!String(form.name || '').trim()) {
@@ -2655,7 +2717,7 @@ function ActivityFormModal({
     const closeAfter = options.closeAfter !== false;
 
     if (isTemplateEdit) {
-      onSave(permittedPayload({
+      await onSave(permittedPayload({
         _editing_template: true,
         _template_id: initial._template_id,
         name: String(form.name).trim(),
@@ -2706,7 +2768,7 @@ function ActivityFormModal({
         setLocalError('בחרו יומן יעד');
         return;
       }
-      onSave({
+      const saved = await onSave({
         ...form,
         end_date: endDateNorm || null,
         overlay: true,
@@ -2715,9 +2777,10 @@ function ActivityFormModal({
         google_event_id: initial.google_event_id || '',
         closeAfter,
       });
+      if (saved !== false && !closeAfter) savedDraftRef.current = activityDraftSnapshot(form);
       return;
     }
-    onSave(permittedPayload({
+    const saved = await onSave(permittedPayload({
       ...form,
       end_date: endDateNorm || null,
       staff_role: form.staff_role || null,
@@ -2734,6 +2797,9 @@ function ActivityFormModal({
       _save_as_template: options.saveAsTemplate || null,
       closeAfter,
     }));
+    if (saved !== false && !closeAfter && !options.saveAsTemplate) {
+      savedDraftRef.current = activityDraftSnapshot(form);
+    }
   };
 
   const title = readOnly
@@ -2760,7 +2826,7 @@ function ActivityFormModal({
         initial={initial}
         onDelete={onDelete}
         onDuplicate={onDuplicate}
-        onClose={onClose}
+        onClose={requestClose}
         saving={saving}
         showError={showError}
         submit={submit}
@@ -2768,6 +2834,7 @@ function ActivityFormModal({
         canViewFinance={canViewFinance}
         canViewHr={canViewHr}
         onStaffChanged={onStaffChanged}
+        confirmNavigation={confirmDiscard}
       />
     );
   }
@@ -2779,7 +2846,7 @@ function ActivityFormModal({
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 200, padding: 16,
       }}
-      onClick={onClose}
+      onClick={requestClose}
     >
       <form
         onClick={(e) => e.stopPropagation()}
@@ -2813,7 +2880,7 @@ function ActivityFormModal({
               </div>
             )}
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="סגור">
+          <button type="button" className="icon-btn" onClick={requestClose} aria-label="סגור">
             <X size={16} />
           </button>
         </div>
@@ -3052,6 +3119,7 @@ function ActivityFormModal({
               canViewFinance={canViewFinance}
               // The same decision is made once, above, by "מי יכול להירשם".
               hideRegistrationToggle
+              confirmNavigation={confirmDiscard}
             />
           )}
 
@@ -3113,7 +3181,7 @@ function ActivityFormModal({
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, marginInlineStart: 'auto' }}>
-            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
+            <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={saving}>
               {readOnly ? 'סגור' : 'ביטול'}
             </button>
             {!readOnly && (
@@ -5166,7 +5234,7 @@ export default function ActivitiesCalendar({
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'שמירת התבנית נכשלה');
         setBanner(replacing ? 'התבנית הקיימת הוחלפה בפרטי האירוע' : 'האירוע נשמר כתבנית חדשה');
-        return;
+        return true;
       }
 
       if (payload._editing_template) {
@@ -5193,7 +5261,7 @@ export default function ActivitiesCalendar({
         }
         setModal(null);
         setBanner(isCreate ? 'התבנית נוצרה' : 'התבנית נשמרה');
-        return;
+        return true;
       }
 
       if (payload.overlay && !payload.google_event_id) {
@@ -5216,7 +5284,7 @@ export default function ActivitiesCalendar({
         }
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner(closeAfter ? 'האירוע נוצר ביומן החיצוני' : 'האירוע נוצר — ממשיכים לערוך');
-        return;
+        return true;
       }
 
       if (payload.overlay) {
@@ -5242,7 +5310,7 @@ export default function ActivitiesCalendar({
         }
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner(closeAfter ? 'האירוע נשמר' : 'השינויים הוחלו');
-        return;
+        return true;
       }
 
       const isEdit = !!payload.id;
@@ -5306,10 +5374,12 @@ export default function ActivitiesCalendar({
         setModal(data?.id ? data : { ...body, ...(data || {}) });
         setBanner(assignmentWarning ? `השינויים הוחלו · ${assignmentWarning}` : 'השינויים הוחלו');
       }
+      return true;
     } catch (err) {
       const msg = err.message || 'שמירה נכשלה';
       setFormError(msg);
       setBanner(msg);
+      return false;
     } finally {
       setSaving(false);
     }
