@@ -578,20 +578,39 @@ function WorkAssignmentsBlock({
   // Before the event exists there is nothing to attach a row to, so the picked
   // employees wait on the form and become real rows the moment it is saved.
   const draftIds = draftMode ? (draft.employeeIds || []) : [];
+  const draftDetails = draftMode ? (draft.details || {}) : {};
   const draftRows = draftMode
-    ? draftIds.map((employeeId) => ({
-      id: `draft-${employeeId}`,
-      employee_id: employeeId,
-      work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
-      // ההערכה משקפת את הגדרת התשלום של האירוע — תפקיד או סכום גלובלי.
-      role: staffPay?.role || null,
-      start_time: shiftStart,
-      end_time: shiftEnd,
-      hours: hoursFromTimes(shiftStart, shiftEnd) ?? 2,
-      pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
-      flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
-    }))
+    ? draftIds.map((employeeId) => {
+      const detail = draftDetails[employeeId] || {};
+      const startTime = detail.start_time || shiftStart;
+      const endTime = detail.end_time || shiftEnd;
+      return {
+        id: `draft-${employeeId}`,
+        employee_id: employeeId,
+        work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
+        // לכל עובד נשמרת טיוטה משלו. ברירת המחדל מגיעה מהאירוע, אבל שינוי
+        // תפקיד, סכום או נסיעות בשורה אחת אינו משנה את שאר העובדים.
+        role: Object.hasOwn(detail, 'role') ? detail.role : (staffPay?.role || null),
+        start_time: startTime,
+        end_time: endTime,
+        hours: detail.hours ?? hoursFromTimes(startTime, endTime) ?? 2,
+        pay_mode: detail.pay_mode || (staffPay?.mode === 'flat' ? 'flat' : 'hourly'),
+        flat_amount: Object.hasOwn(detail, 'flat_amount')
+          ? detail.flat_amount
+          : (staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : ''),
+        travel_amount: Object.hasOwn(detail, 'travel_amount') ? detail.travel_amount : '',
+      };
+    })
     : [];
+
+  const removeDraftAssignment = (employeeId) => {
+    draft.setEmployeeIds(draftIds.filter((id) => id !== employeeId));
+    draft.setDetails?.((prev) => {
+      const next = { ...(prev || {}) };
+      delete next[employeeId];
+      return next;
+    });
+  };
 
   const addFromPlan = async () => {
     if (!selectedIds.length) {
@@ -599,7 +618,25 @@ function WorkAssignmentsBlock({
       return;
     }
     if (draftMode) {
-      draft.setEmployeeIds([...draftIds, ...selectedIds.filter((id) => !draftIds.includes(id))]);
+      const newIds = selectedIds.filter((id) => !draftIds.includes(id));
+      draft.setEmployeeIds([...draftIds, ...newIds]);
+      draft.setDetails?.((prev) => {
+        const next = { ...(prev || {}) };
+        for (const employeeId of newIds) {
+          next[employeeId] = {
+            role: staffPay?.role || null,
+            start_time: shiftStart,
+            end_time: shiftEnd,
+            hours: hoursFromTimes(shiftStart, shiftEnd) ?? 2,
+            ...(canViewHr ? {
+              pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
+              flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
+              travel_amount: '',
+            } : {}),
+          };
+        }
+        return next;
+      });
       // השעות שנבחרו נוסעות עם הטופס, כדי שהשורות שייווצרו בשמירה יהיו אותן שעות.
       draft.setTimes?.(partialHours ? { start: shiftStart, end: shiftEnd } : null);
       setSelectedIds([]);
@@ -694,6 +731,21 @@ function WorkAssignmentsBlock({
   };
 
   const patchLocal = (id, patch) => {
+    if (draftMode) {
+      const employeeId = draftRows.find((row) => row.id === id)?.employee_id;
+      if (!employeeId) return;
+      draft.setDetails?.((prev) => {
+        const current = { ...(prev?.[employeeId] || {}) };
+        const next = { ...current, ...patch };
+        if ('start_time' in patch || 'end_time' in patch) {
+          const computed = hoursFromTimes(next.start_time, next.end_time);
+          if (computed != null) next.hours = computed;
+        }
+        if (patch.pay_mode === 'hourly') next.flat_amount = '';
+        return { ...(prev || {}), [employeeId]: next };
+      });
+      return;
+    }
     setRows((prev) => prev.map((r) => {
       if (r.id !== id) return r;
       const next = { ...r, ...patch };
@@ -786,8 +838,8 @@ function WorkAssignmentsBlock({
 
         {draftMode && canViewHr && (
           <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
-            אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה, והשיבוץ עצמו
-            ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
+            אפשר לבחור עובדים כבר עכשיו ולערוך לכל אחד תפקיד, תשלום ונסיעות.
+            השיבוץ ייווצר יחד עם שמירת האירוע.
           </div>
         )}
 
@@ -1022,7 +1074,7 @@ function WorkAssignmentsBlock({
                   title="הסר"
                   disabled={busy}
                   onClick={() => draftMode
-                    ? draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))
+                    ? removeDraftAssignment(row.employee_id)
                     : deleteRow(row.id)}
                 ><Trash2 size={13} /></button>
               </div>
@@ -1030,59 +1082,9 @@ function WorkAssignmentsBlock({
           ))}
           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נתוני שכר ותעריפים מוסתרים לפי ההרשאות שלך.</div>
         </div>
-      ) : draftMode ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {draftRows.map((row) => {
-            const agreement = agreementFor(row.employee_id);
-            const rate = rateForRow(agreement, row);
-            const amount = payAmountForAssignment(row, agreement);
-            return (
-              <div
-                key={row.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  padding: '6px 8px',
-                  borderRadius: 8,
-                  border: '1px dashed var(--border)',
-                  background: 'rgba(255,255,255,0.02)',
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <EntityLink kind="employee" id={row.employee_id} title="מעבר לתיק העובד">
-                      {empName(row.employee_id)}
-                    </EntityLink>
-                    {empPaymentMethod(row.employee_id) && (
-                      <PaymentMethodBadge method={empPaymentMethod(row.employee_id)} compact />
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                    {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
-                    {row.pay_mode === 'flat'
-                      ? 'סכום מיוחד ליום הזה'
-                      : rateLabelForRow(agreement, row, payableRoles)} · הערכה ₪{amount}
-                    {' '}{amountBasisLabel(empPaymentMethod(row.employee_id))}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() => draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))}
-                  aria-label="הסרת עובד"
-                  title="הסרה"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map((row) => {
+          {shownRows.map((row) => {
             const agreement = agreementFor(row.employee_id);
             const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
             const rate = rateForRow(agreement, row);
@@ -1115,7 +1117,7 @@ function WorkAssignmentsBlock({
                       </EntityLink>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                      {SOURCE_LABELS[row.source] || row.source}
+                      {draftMode ? 'טיוטה — יישמר עם האירוע' : (SOURCE_LABELS[row.source] || row.source)}
                       {row.approved ? ' · מאושר' : ''}
                     </div>
                   </div>
@@ -1210,21 +1212,23 @@ function WorkAssignmentsBlock({
                         <CalendarClock size={12} />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-xs"
-                      title="שמור"
-                      disabled={busy}
-                      onClick={() => saveRow(row)}
-                    >
-                      <Save size={12} />
-                    </button>
+                    {!draftMode && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        title="שמור"
+                        disabled={busy}
+                        onClick={() => saveRow(row)}
+                      >
+                        <Save size={12} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon btn-xs"
                       title="מחק"
                       disabled={busy}
-                      onClick={() => deleteRow(row.id)}
+                      onClick={() => draftMode ? removeDraftAssignment(row.employee_id) : deleteRow(row.id)}
                       style={{ color: '#F87171' }}
                     >
                       <Trash2 size={12} />
@@ -2340,6 +2344,13 @@ function RegularActivityModal({
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
                   setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                  details: form._pending_staff_details || {},
+                  setDetails: (updater) => setForm((prev) => ({
+                    ...prev,
+                    _pending_staff_details: typeof updater === 'function'
+                      ? updater(prev._pending_staff_details || {})
+                      : updater,
+                  })),
                   setTimes: (times) => setForm((prev) => ({ ...prev, _pending_staff_times: times })),
                   activityType: form.type,
                   startTime: form.start_time,
@@ -3137,6 +3148,13 @@ function ActivityFormModal({
               draft={isEdit ? null : {
                 employeeIds: form._pending_employee_ids || [],
                 setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                details: form._pending_staff_details || {},
+                setDetails: (updater) => setForm((prev) => ({
+                  ...prev,
+                  _pending_staff_details: typeof updater === 'function'
+                    ? updater(prev._pending_staff_details || {})
+                    : updater,
+                })),
                 activityType: form.type,
                 startTime: form.start_time,
                 endTime: form.end_time,
@@ -5321,6 +5339,8 @@ export default function ActivitiesCalendar({
         _pending_employee_ids: pendingEmployeeIds = [],
         // שעות חלקיות שנבחרו למשמרת לפני שהאירוע נשמר.
         _pending_staff_times: pendingStaffTimes = null,
+        // פרטי שכר ונסיעות שנערכו לכל עובד עוד לפני שלאירוע היה מזהה.
+        _pending_staff_details: pendingStaffDetails = {},
         ...body
       } = payload;
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
@@ -5349,6 +5369,7 @@ export default function ActivitiesCalendar({
             body: JSON.stringify({
               activity_id: data.id,
               employee_ids: pendingEmployeeIds,
+              employee_assignments: pendingStaffDetails,
               start_time: pendingStaffTimes?.start || undefined,
               end_time: pendingStaffTimes?.end || undefined,
             }),

@@ -12415,17 +12415,31 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
     activity_id,
     employee_ids,
     employee_roles: employeeRoles,
+    employee_assignments: employeeAssignments,
     role: roleOverride,
     pay_mode: payModeOverride,
     flat_amount: flatAmountOverride,
     start_time: startOverride,
     end_time: endOverride,
   } = req.body || {};
+  const assignmentDetails = employeeAssignments
+    && typeof employeeAssignments === 'object'
+    && !Array.isArray(employeeAssignments)
+    ? employeeAssignments
+    : {};
   try {
     rejectWorkPayOverride(req, {
       pay_mode: payModeOverride,
       flat_amount: flatAmountOverride,
     });
+    for (const detail of Object.values(assignmentDetails)) {
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
+      rejectWorkPayOverride(req, {
+        pay_mode: detail.pay_mode,
+        flat_amount: detail.flat_amount,
+        travel_amount: detail.travel_amount,
+      });
+    }
   } catch (error) {
     return res.status(error.statusCode || 403).json({ error: error.message });
   }
@@ -12485,20 +12499,46 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
 
   for (const employeeId of ids) {
     if (alreadyAssigned(employeeId)) continue;
-    const suggestion = explicitTimes
+    const detail = assignmentDetails[employeeId]
+      && typeof assignmentDetails[employeeId] === 'object'
+      && !Array.isArray(assignmentDetails[employeeId])
+      ? assignmentDetails[employeeId]
+      : {};
+    const rowStart = hm(detail.start_time) || eventStart;
+    const rowEnd = hm(detail.end_time) || eventEnd;
+    const rowHasExplicitTimes = !!(
+      (hm(detail.start_time) && hm(detail.end_time)) || explicitTimes
+    );
+    const suggestion = rowHasExplicitTimes
       ? null
-      : suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
+      : suggestHoursFromClock(employeeId, activity.date, rowStart, rowEnd);
+    const rowFlatPay = detail.pay_mode
+      ? detail.pay_mode === 'flat'
+      : flatPay;
+    const rowFlatSource = Object.hasOwn(detail, 'flat_amount')
+      ? detail.flat_amount
+      : flatAmount;
+    const rowTravelAmount = Object.hasOwn(detail, 'travel_amount')
+      ? (detail.travel_amount === '' || detail.travel_amount === null
+        ? null
+        : Math.max(0, Number(detail.travel_amount) || 0))
+      : null;
     const row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id,
       date: activity.date,
       work_type: workType,
-      role: (employeeRoles && employeeRoles[employeeId]) || defaultRole,
-      start_time: suggestion?.start_time || eventStart,
-      end_time: suggestion?.end_time || eventEnd,
-      hours: suggestion?.hours || eventHours,
-      pay_mode: flatPay ? 'flat' : 'hourly',
-      flat_amount: flatAmount,
+      role: Object.hasOwn(detail, 'role')
+        ? (detail.role || null)
+        : ((employeeRoles && employeeRoles[employeeId]) || defaultRole),
+      start_time: suggestion?.start_time || rowStart,
+      end_time: suggestion?.end_time || rowEnd,
+      hours: detail.hours === undefined || detail.hours === null || detail.hours === ''
+        ? (suggestion?.hours || hoursBetweenHm(rowStart, rowEnd) || eventHours)
+        : roundHoursQuarter(detail.hours),
+      pay_mode: rowFlatPay ? 'flat' : 'hourly',
+      flat_amount: rowFlatPay ? (Number(rowFlatSource) || 0) : null,
+      travel_amount: rowTravelAmount,
       source: suggestion ? suggestion.source : 'calendar',
       shift_id: suggestion?.shift_id || null,
       approved: false,
@@ -12514,7 +12554,7 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
 
   res.status(201).json({
     created: created.map((row) => workAssignmentForRequest(req, row)),
-    existing_count: existing.length,
+    existing_count: ids.length - created.length,
   });
 });
 
