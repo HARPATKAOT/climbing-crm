@@ -17419,6 +17419,8 @@ app.patch('/api/safety/inspections/:id', (req, res) => {
 function wallDocumentsFor(studentId) {
   return wallDocumentsStatus({
     student: studentId ? db.getOne('students', studentId) : null,
+    students: db.get('students') || [],
+    parents: db.get('parents') || [],
     declarations: db.get('health_declarations') || [],
     waivers: db.get('participation_waivers') || [],
     healthHolds: db.get('health_holds') || [],
@@ -17489,6 +17491,8 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
     documents: wallDocumentsFor(studentId),
     punch_block_reason: passPunchBlockReason({
       student,
+      students: db.get('students') || [],
+      parents: db.get('parents') || [],
       declarations: db.get('health_declarations') || [],
       waivers: db.get('participation_waivers') || [],
       healthHolds: db.get('health_holds') || [],

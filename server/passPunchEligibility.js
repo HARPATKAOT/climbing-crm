@@ -95,6 +95,8 @@ function formatDay(iso) {
 export function passPunchBlockReason(
   {
     student,
+    students = [],
+    parents = [],
     declarations = [],
     waivers = [],
     healthHolds = [],
@@ -108,7 +110,12 @@ export function passPunchBlockReason(
       if (table === 'health_declarations') return declarations;
       if (table === 'participation_waivers') return waivers;
       if (table === 'health_holds') return healthHolds;
+      if (table === 'students') return students.length ? students : (student ? [student] : []);
+      if (table === 'parents') return parents;
       return [];
+    },
+    getOne(table, id) {
+      return table === 'students' && String(student?.id) === String(id) ? student : null;
     },
   };
   const eligibility = participationEligibility(documentDb, {
@@ -142,7 +149,7 @@ export function passPunchBlockReason(
  * @returns {{state:'valid'|'expired'|'missing'|'blocked', ok:boolean, label:string}}
  */
 export function wallDocumentsStatus(
-  { student, declarations = [], waivers = [], healthHolds = [] } = {},
+  { student, students = [], parents = [], declarations = [], waivers = [], healthHolds = [] } = {},
   refDate = new Date()
 ) {
   if (!student) return { state: 'missing', ok: false, label: 'אין מתאמן' };
@@ -151,7 +158,12 @@ export function wallDocumentsStatus(
       if (table === 'health_declarations') return declarations;
       if (table === 'participation_waivers') return waivers;
       if (table === 'health_holds') return healthHolds;
+      if (table === 'students') return students.length ? students : (student ? [student] : []);
+      if (table === 'parents') return parents;
       return [];
+    },
+    getOne(table, id) {
+      return table === 'students' && String(student?.id) === String(id) ? student : null;
     },
   };
   const { health, waiver } = participationEligibility(documentDb, {
@@ -159,12 +171,26 @@ export function wallDocumentsStatus(
     scope: 'wall',
     now: refDate,
   });
-  if (health.state === 'blocked') return { state: 'blocked', ok: false, label: 'חסימה רפואית' };
-  if (health.state === 'missing') return { state: 'missing', ok: false, label: 'אין הצהרת בריאות' };
-  if (health.state === 'expired') return { state: 'expired', ok: false, label: 'הצהרת בריאות פגה' };
-  if (waiver.state === 'missing') return { state: 'missing', ok: false, label: 'אין אישור קיר' };
-  if (waiver.state === 'expired') return { state: 'expired', ok: false, label: 'אישור הקיר פג' };
-  return { state: 'valid', ok: true, label: 'תקין' };
+  // The counter needs the verdict and dates, not the signed answers or the
+  // signature image embedded in the underlying records.
+  const details = {
+    health: {
+      state: health.state,
+      signed_at: health.signed_at,
+      expires_at: health.expires_at,
+    },
+    waiver: {
+      state: waiver.state,
+      signed_at: waiver.signed_at,
+      expires_at: waiver.expires_at,
+    },
+  };
+  if (health.state === 'blocked') return { ...details, state: 'blocked', ok: false, label: 'חסימה רפואית' };
+  if (health.state === 'missing') return { ...details, state: 'missing', ok: false, label: 'אין הצהרת בריאות' };
+  if (health.state === 'expired') return { ...details, state: 'expired', ok: false, label: 'הצהרת בריאות פגה' };
+  if (waiver.state === 'missing') return { ...details, state: 'missing', ok: false, label: 'אין טופס השתתפות בקיר' };
+  if (waiver.state === 'expired') return { ...details, state: 'expired', ok: false, label: 'טופס ההשתתפות בקיר פג' };
+  return { ...details, state: 'valid', ok: true, label: 'תקין' };
 }
 
 /**

@@ -179,3 +179,58 @@ test('סטטוס «רשום» אינו נחשב חתימה, וגם לא הצהר
   const sibling = { studentId: 's2', signedDate: '2026-09-01', status: 'approved', signature_url: 'x.png' };
   assert.equal(wallDocumentsStatus({ student, declarations: [sibling], waivers: [validWaiver] }, NOW).ok, false);
 });
+
+test('טופס טיול ישן מספק בריאות, אבל אינו מתחזה לטופס השתתפות בקיר', () => {
+  const tripForm = {
+    studentId: 's1',
+    signedDate: '2026-09-01',
+    status: 'registered',
+    waiverAccepted: true,
+    templateSlug: 'trip',
+  };
+  const badge = wallDocumentsStatus({ student, declarations: [tripForm], waivers: [] }, NOW);
+  assert.equal(badge.health.state, 'valid');
+  assert.equal(badge.waiver.state, 'missing');
+  assert.equal(badge.label, 'אין טופס השתתפות בקיר');
+  assert.equal(badge.ok, false);
+});
+
+test('חותמת הבריאות ההיסטורית בכרטיס המתאמן עדיין מוכרת בקופה', () => {
+  const legacyStudent = { ...student, healthSignedAt: '2026-09-01' };
+  const badge = wallDocumentsStatus({ student: legacyStudent, declarations: [], waivers: [] }, NOW);
+  assert.equal(badge.health.state, 'valid');
+  assert.equal(badge.waiver.state, 'missing');
+  assert.equal(badge.label, 'אין טופס השתתפות בקיר');
+});
+
+test('טופס טיול שנשמר בכרטיס עצמי כפול מזוהה כבריאות של הכרטיס הוותיק', () => {
+  const canonical = {
+    ...student,
+    name: 'אילי אברמוביץ',
+    birthDate: '2008-06-29',
+    phone: '972528820697',
+  };
+  const duplicate = {
+    id: 's-new',
+    name: "אילי אברמוביץ'",
+    birthDate: '2008-06-29',
+    parentId: 'p-self',
+    isAdult: true,
+  };
+  const tripHealth = {
+    studentId: 's-new',
+    signedDate: '2026-08-13',
+    status: 'approved',
+    templateSlug: 'trip',
+  };
+  const badge = wallDocumentsStatus({
+    student: canonical,
+    students: [canonical, duplicate],
+    parents: [{ id: 'p-self', phone: '0528820697' }],
+    declarations: [tripHealth],
+    waivers: [],
+  }, NOW);
+  assert.equal(badge.health.state, 'valid');
+  assert.equal(badge.waiver.state, 'missing');
+  assert.equal(badge.label, 'אין טופס השתתפות בקיר');
+});

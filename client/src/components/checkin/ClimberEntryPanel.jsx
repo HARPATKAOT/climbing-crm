@@ -12,6 +12,26 @@ function waPhone(raw) {
 
 function DocumentsBadge({ documents }) {
   if (!documents) return <span className="badge badge-gray">בודק מסמכים...</span>;
+  const health = documents.health;
+  const waiver = documents.waiver;
+  // Keep the two documents visible independently. A trip form supplies the
+  // global health declaration, but never the wall participation approval.
+  if (health && waiver) {
+    const healthValid = health.state === 'valid';
+    const waiverValid = waiver.state === 'valid';
+    return (
+      <>
+        <span className={`badge ${healthValid ? 'badge-green' : health.state === 'expired' ? 'badge-amber' : 'badge-red'}`}>
+          {healthValid ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+          {healthValid ? 'הצהרת בריאות בתוקף' : health.state === 'expired' ? 'הצהרת בריאות פגה' : health.state === 'blocked' ? 'חסימה רפואית' : 'אין הצהרת בריאות'}
+        </span>
+        <span className={`badge ${waiverValid ? 'badge-green' : waiver.state === 'expired' ? 'badge-amber' : 'badge-red'}`}>
+          {waiverValid ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+          {waiverValid ? 'טופס השתתפות בקיר בתוקף' : waiver.state === 'expired' ? 'טופס ההשתתפות בקיר פג' : 'אין טופס השתתפות בקיר'}
+        </span>
+      </>
+    );
+  }
   if (documents.state === 'valid') return <span className="badge badge-green"><ShieldCheck size={12} /> מסמכים בתוקף</span>;
   if (documents.state === 'expired') return <span className="badge badge-amber"><ShieldAlert size={12} /> {documents.label}</span>;
   return <span className="badge badge-red"><ShieldAlert size={12} /> {documents.label}</span>;
