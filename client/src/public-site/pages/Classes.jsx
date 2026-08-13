@@ -240,9 +240,9 @@ export default function Classes() {
 
           {!!groups.length && (
             <>
+              <Legend />
               <WeekBoard groups={groups} />
               <DayList groups={groups} />
-              <Legend />
             </>
           )}
 
