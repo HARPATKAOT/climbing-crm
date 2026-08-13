@@ -1,5 +1,6 @@
 /** Israel standard VAT rate used by this account. */
 export const VAT_RATE = 0.18;
+export const DEFAULT_PRICE_INCLUDES_VAT = true;
 
 /**
  * The rate to apply, or the standard one when none was given.
@@ -22,7 +23,7 @@ export function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
-export function normalizePriceIncludesVat(value, fallback = false) {
+export function normalizePriceIncludesVat(value, fallback = DEFAULT_PRICE_INCLUDES_VAT) {
   if (value === true || value === 1 || value === '1' || value === 'true') return true;
   if (value === false || value === 0 || value === '0' || value === 'false') return false;
   return !!fallback;
@@ -38,20 +39,20 @@ export function normalizePriceIncludesVat(value, fallback = false) {
  * line sat on the invoice total in icount.js. Nobody hit it because every
  * caller uses the default, which is exactly why it survived this long.
  */
-export function chargeAmount(price, includesVat = false, rate = VAT_RATE) {
+export function chargeAmount(price, includesVat = DEFAULT_PRICE_INCLUDES_VAT, rate = VAT_RATE) {
   const base = roundMoney(Number(price) || 0);
   if (includesVat) return base;
   return roundMoney(base * (1 + resolveRate(rate)));
 }
 
 /** Net amount before VAT. */
-export function netAmount(price, includesVat = false, rate = VAT_RATE) {
+export function netAmount(price, includesVat = DEFAULT_PRICE_INCLUDES_VAT, rate = VAT_RATE) {
   const base = roundMoney(Number(price) || 0);
   if (!includesVat) return base;
   return roundMoney(base / (1 + resolveRate(rate)));
 }
 
-export function vatBreakdown(price, includesVat = false, rate = VAT_RATE) {
+export function vatBreakdown(price, includesVat = DEFAULT_PRICE_INCLUDES_VAT, rate = VAT_RATE) {
   const entered = roundMoney(Number(price) || 0);
   const net = netAmount(entered, includesVat, rate);
   const gross = chargeAmount(entered, includesVat, rate);

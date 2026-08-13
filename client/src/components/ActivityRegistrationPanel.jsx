@@ -8,6 +8,7 @@ import InfoHint from '../utils/InfoHint.jsx';
 import { formatIls, normalizePriceIncludesVat } from '../utils/vat.js';
 import {
   describeEventCharge,
+  displayedHostCharge,
   hostChargeBreakdown,
   normalizeChargeBasis,
   normalizeCount,
@@ -141,6 +142,7 @@ export default function ActivityRegistrationPanel({
   canViewFinance = true,
   hideRegistrationToggle = false,
   templateMode = false,
+  confirmNavigation = null,
 }) {
   const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
@@ -150,6 +152,7 @@ export default function ActivityRegistrationPanel({
   const [hostLinkUrl, setHostLinkUrl] = useState('');
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
+  const [sendFeedback, setSendFeedback] = useState(null);
   const [copied, setCopied] = useState(false);
   const [hostCopied, setHostCopied] = useState(false);
   const [parents, setParents] = useState([]);
@@ -157,6 +160,10 @@ export default function ActivityRegistrationPanel({
   const [customerQuery, setCustomerQuery] = useState('');
   const [hideSuggestions, setHideSuggestions] = useState(false);
   const [customersLoaded, setCustomersLoaded] = useState(false);
+  const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
+  const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
+  const [customerCreateError, setCustomerCreateError] = useState('');
+  const [customerDraft, setCustomerDraft] = useState({ name: '', phone: '', email: '' });
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState({ participant_name: '', participant_type: 'child' });
   const [editBusy, setEditBusy] = useState('');
@@ -179,8 +186,9 @@ export default function ActivityRegistrationPanel({
 
   const openLeadFile = useCallback((openId) => {
     if (!openId) return;
+    if (confirmNavigation && !confirmNavigation()) return;
     navigate(`/leads?open=${encodeURIComponent(openId)}`);
-  }, [navigate]);
+  }, [confirmNavigation, navigate]);
 
   const set = (key, value) => {
     if (readOnly) return;
@@ -314,6 +322,8 @@ export default function ActivityRegistrationPanel({
     });
     setCustomerQuery('');
     setHideSuggestions(true);
+    setCustomerCreateOpen(false);
+    setCustomerCreateError('');
     setMsg('');
   };
 
@@ -329,7 +339,75 @@ export default function ActivityRegistrationPanel({
     });
     setCustomerQuery('');
     setHideSuggestions(false);
+    setCustomerCreateOpen(false);
+    setCustomerCreateError('');
     setMsg('');
+  };
+
+  const openCustomerCreation = () => {
+    const query = customerQuery.trim();
+    const digits = normalizePhoneDigits(query);
+    setCustomerDraft({
+      name: digits.length >= 7 || query.includes('@') ? '' : query,
+      phone: digits.length >= 7 ? query : '',
+      email: query.includes('@') ? query : '',
+    });
+    setCustomerCreateError('');
+    setCustomerCreateOpen(true);
+    setHideSuggestions(true);
+  };
+
+  const saveHostCustomer = async () => {
+    if (!activityId) {
+      setCustomerCreateError('יש לשמור את האירוע לפני יצירת לקוח');
+      return;
+    }
+    if (!customerDraft.name.trim()) {
+      setCustomerCreateError('יש להזין את שם הלקוח');
+      return;
+    }
+    if (normalizePhoneDigits(customerDraft.phone).length < 9) {
+      setCustomerCreateError('יש להזין מספר טלפון תקין');
+      return;
+    }
+
+    setCustomerCreateBusy(true);
+    setCustomerCreateError('');
+    try {
+      const res = await fetch(`/api/activities/${encodeURIComponent(activityId)}/host-customer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customerDraft),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.customer) {
+        setCustomerCreateError(data.error || 'שמירת הלקוח נכשלה');
+        return;
+      }
+
+      const customer = data.customer;
+      setParents((current) => {
+        const withoutCustomer = current.filter((row) => String(row.id) !== String(customer.id));
+        return [...withoutCustomer, customer];
+      });
+      selectCustomer({
+        id: customer.id,
+        name: customer.name || customerDraft.name,
+        phone: customer.phone || customerDraft.phone,
+        email: customer.email || customerDraft.email,
+      });
+      const messages = {
+        imported: 'הלקוח יובא מ-iCount וקושר לאירוע',
+        linked: 'הלקוח הקיים קושר לתיק iCount ולאירוע',
+        synced: 'הלקוח הקיים סונכרן עם iCount וקושר לאירוע',
+        created: 'הלקוח נוצר ב-CRM וב-iCount וקושר לאירוע',
+      };
+      setMsg(messages[data.resolution] || 'הלקוח נשמר וקושר לאירוע');
+    } catch {
+      setCustomerCreateError('שגיאת רשת. לא נוצר לקוח חדש.');
+    } finally {
+      setCustomerCreateBusy(false);
+    }
   };
 
   const ensureLink = async ({ regenerate = false } = {}) => {
@@ -403,17 +481,11 @@ export default function ActivityRegistrationPanel({
     }
   };
 
-  const sendToHost = async (linkType = 'auto') => {
+  const sendToHost = async (linkType = 'auto', phoneOverride = '') => {
     if (!activityId) {
-      setMsg('שמרו את האירוע קודם');
-      return;
-    }
-    if (!form.host_parent_id) {
-      setMsg('יש לבחור מזמין מתוך לקוחות המערכת');
-      return;
-    }
-    if (!form.host_phone && !selectedParent?.phone) {
-      setMsg('ללקוח שנבחר אין מספר טלפון');
+      const message = 'שמרו את האירוע קודם';
+      setMsg(message);
+      setSendFeedback({ type: 'error', linkType, message });
       return;
     }
     const isHostPays =
@@ -421,55 +493,94 @@ export default function ActivityRegistrationPanel({
     const resolvedType = linkType === 'auto'
       ? (isHostPays ? 'host' : 'participant')
       : linkType;
+    const typedPhone = normalizePhoneDigits(customerQuery).length >= 9 ? customerQuery : '';
+    const targetPhone = phoneOverride || form.host_phone || selectedParent?.phone || typedPhone || '';
+    const manualRecipient = resolvedType === 'host'
+      && !form.host_parent_id
+      && !!(phoneOverride || typedPhone);
+    if (!form.host_parent_id && resolvedType !== 'host') {
+      const message = 'יש לבחור מזמין מתוך לקוחות המערכת';
+      setMsg(message);
+      setSendFeedback({ type: 'error', linkType: resolvedType, message });
+      return;
+    }
+    if (normalizePhoneDigits(targetPhone).length < 9) {
+      const message = 'יש להזין מספר טלפון תקין';
+      setMsg(message);
+      setSendFeedback({ type: 'error', linkType: resolvedType, message });
+      return;
+    }
     setBusy(resolvedType === 'participant' ? 'send-participants' : 'send');
     setMsg('');
+    setSendFeedback({ type: 'pending', linkType: resolvedType, message: `שולח ל־${targetPhone}…` });
     try {
       if (!form.registration_enabled) {
         set('registration_enabled', true);
       }
-      await ensureLink();
       const res = await fetch(`/api/activities/${encodeURIComponent(activityId)}/send-registration-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           host_parent_id: form.host_parent_id,
           email: form.host_email,
-          phone: form.host_phone || selectedParent?.phone,
+          phone: targetPhone,
+          manual_recipient: manualRecipient,
           via: 'whatsapp',
           link_type: resolvedType,
+          charge: resolvedType === 'host' ? {
+            charge_basis: form.charge_basis,
+            price: form.price,
+            price_includes_vat: form.price_includes_vat,
+            min_participants: form.min_participants,
+            extra_participant_price: form.extra_participant_price,
+            max_charge: form.max_charge,
+            host_charge_participants: form.host_charge_participants,
+          } : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMsg(data.error || 'שליחה נכשלה');
+        const message = data.error || `השליחה נכשלה (${res.status})`;
+        setMsg(message);
+        setSendFeedback({ type: 'error', linkType: resolvedType, message });
         return;
       }
       if (resolvedType === 'participant' && data.url) setLinkUrl(data.url);
       if (resolvedType === 'host' && data.url) setHostLinkUrl(data.url);
-      if (data.host_name) {
+      if (data.host_name || data.host_phone) {
         setMany({
-          host_name: data.host_name,
-          host_phone: data.host_phone || form.host_phone,
+          host_name: data.host_name || form.host_name || '',
+          host_phone: data.host_phone || targetPhone,
           host_parent_id: data.host_parent_id || form.host_parent_id,
         });
       }
       if (data.whatsappSent) {
+        let message = '';
         if (data.whatsappViaTemplate) {
-          setMsg(resolvedType === 'participant'
+          message = resolvedType === 'participant'
             ? 'קישור המשתתפים נשלח למזמין בתבנית מאושרת'
-            : 'קישור התשלום נשלח למזמין בתבנית מאושרת');
+            : (data.requires_customer_details
+              ? 'טופס הפרטים והתשלום נשלח למספר בוואטסאפ'
+              : 'קישור התשלום נשלח למזמין בתבנית מאושרת');
         } else {
-          setMsg(resolvedType === 'participant'
+          message = resolvedType === 'participant'
             ? 'קישור המשתתפים נשלח למזמין בוואטסאפ'
-            : 'קישור התשלום נשלח למזמין בוואטסאפ');
+            : 'קישור התשלום נשלח למזמין בוואטסאפ';
         }
+        setMsg(message);
+        setSendFeedback({ type: 'success', linkType: resolvedType, message });
       } else if (data.whatsappError) {
         setMsg(data.whatsappError);
+        setSendFeedback({ type: 'error', linkType: resolvedType, message: data.whatsappError });
       } else {
-        setMsg('הקישור מוכן');
+        const message = 'הקישור מוכן, אך לא התקבל אישור שהוא נשלח בוואטסאפ';
+        setMsg(message);
+        setSendFeedback({ type: 'error', linkType: resolvedType, message });
       }
-    } catch {
-      setMsg('שגיאת רשת');
+    } catch (error) {
+      const message = error?.message ? `שגיאת רשת: ${error.message}` : 'שגיאת רשת בשליחת הקישור';
+      setMsg(message);
+      setSendFeedback({ type: 'error', linkType: resolvedType, message });
     } finally {
       setBusy('');
     }
@@ -870,12 +981,9 @@ export default function ActivityRegistrationPanel({
       : flooredByMinimum
         ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
         : '';
-  const hostEnteredAmountLabel = formatIls(
-    hostPayment?.entered_amount ?? chargeBreakdown.entered ?? hostPayment?.amount ?? 0
-  );
-  const hostChargeAmountLabel = formatIls(
-    hostPayment?.amount ?? chargeBreakdown.gross
-  );
+  const displayedCharge = displayedHostCharge(chargeBreakdown, hostPayment, hostPayStatus);
+  const hostEnteredAmountLabel = formatIls(displayedCharge.entered);
+  const hostChargeAmountLabel = formatIls(displayedCharge.gross);
   const canDownloadCharge = !!(hostPayment?.icount_doc_url || hostPayment?.icount_doc_number || hostPayment?.icount_doc_id);
   const canDownloadRefund = !!(hostPayment?.refund_doc_url || hostPayment?.refund_doc_number);
 
@@ -1059,8 +1167,33 @@ export default function ActivityRegistrationPanel({
                 }}
               >
                 {customerSuggestions.length === 0 ? (
-                  <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-3)' }}>
-                    לא נמצא לקוח מתאים
+                  <div style={{ padding: '10px 12px', display: 'grid', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                      לא נמצא לקוח מתאים ב-CRM
+                    </span>
+                    {isHostPays && normalizePhoneDigits(customerQuery).length >= 9 && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ justifyContent: 'center', gap: 6 }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => sendToHost('host', customerQuery)}
+                        disabled={!!busy}
+                      >
+                        {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+                        שליחת טופס פרטים ותשלום
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ justifyContent: 'center', gap: 6 }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={openCustomerCreation}
+                    >
+                      <UserPlus size={14} />
+                      איתור ב-iCount או יצירה ידנית
+                    </button>
                   </div>
                 ) : (
                   customerSuggestions.map((hit) => (
@@ -1089,6 +1222,77 @@ export default function ActivityRegistrationPanel({
                     </button>
                   ))
                 )}
+              </div>
+            )}
+            {customerCreateOpen && (
+              <div style={{
+                marginTop: 8,
+                padding: 12,
+                display: 'grid',
+                gap: 10,
+                border: '1px solid rgba(96, 165, 250, 0.35)',
+                borderRadius: 10,
+                background: 'rgba(37, 99, 235, 0.08)',
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>
+                  פרטי המזמין
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 8,
+                }}>
+                  <input
+                    className="input"
+                    placeholder="שם מלא *"
+                    value={customerDraft.name}
+                    onChange={(e) => setCustomerDraft((current) => ({ ...current, name: e.target.value }))}
+                    autoFocus
+                  />
+                  <input
+                    className="input"
+                    placeholder="טלפון *"
+                    value={customerDraft.phone}
+                    onChange={(e) => setCustomerDraft((current) => ({ ...current, phone: e.target.value }))}
+                    dir="ltr"
+                  />
+                  <input
+                    className="input"
+                    placeholder="אימייל (רשות)"
+                    value={customerDraft.email}
+                    onChange={(e) => setCustomerDraft((current) => ({ ...current, email: e.target.value }))}
+                    dir="ltr"
+                  />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  קודם נבדקת התאמה מדויקת ב-iCount. רק אם אין התאמה נוצר לקוח חדש בשתי המערכות.
+                </div>
+                {customerCreateError && (
+                  <div style={{ fontSize: 12, color: '#FCA5A5' }}>{customerCreateError}</div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={saveHostCustomer}
+                    disabled={customerCreateBusy}
+                  >
+                    {customerCreateBusy ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />}
+                    {customerCreateBusy ? 'בודק ושומר...' : 'שמירה ובחירה'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setCustomerCreateOpen(false);
+                      setCustomerCreateError('');
+                      setHideSuggestions(false);
+                    }}
+                    disabled={customerCreateBusy}
+                  >
+                    ביטול
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1195,7 +1399,7 @@ export default function ActivityRegistrationPanel({
                   disabled={!!busy || readOnly}
                 >
                   {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
-                  שליחה
+                  {busy === 'send' ? 'שולח…' : 'שליחה'}
                 </button>
                 <div className="registration-link-value" title={hostLinkUrl || undefined}>
                   <span>{hostLinkUrl || 'אין קישור עדיין'}</span>
@@ -1210,6 +1414,15 @@ export default function ActivityRegistrationPanel({
                   {hostCopied ? 'הועתק' : 'העתקה'}
                 </button>
               </div>
+              {sendFeedback?.linkType === 'host' && (
+                <div
+                  className={`registration-send-feedback registration-send-feedback--${sendFeedback.type}`}
+                  role={sendFeedback.type === 'error' ? 'alert' : 'status'}
+                  aria-live="polite"
+                >
+                  {sendFeedback.message}
+                </div>
+              )}
 
               <div className="registration-host-payment-card">
                 <div className="registration-host-payment-title-row">
@@ -1396,7 +1609,7 @@ export default function ActivityRegistrationPanel({
                 disabled={!!busy || readOnly}
               >
                 {busy === 'send-participants' ? <Loader2 size={14} className="spin" /> : <Users size={14} />}
-                שליחה
+                {busy === 'send-participants' ? 'שולח…' : 'שליחה'}
               </button>
               <div className="registration-link-value" title={linkUrl || undefined}>
                 <span>{linkUrl || 'אין קישור עדיין'}</span>
@@ -1411,6 +1624,15 @@ export default function ActivityRegistrationPanel({
                 {copied ? 'הועתק' : 'העתקה'}
               </button>
             </div>
+            {sendFeedback?.linkType === 'participant' && (
+              <div
+                className={`registration-send-feedback registration-send-feedback--${sendFeedback.type}`}
+                role={sendFeedback.type === 'error' ? 'alert' : 'status'}
+                aria-live="polite"
+              >
+                {sendFeedback.message}
+              </div>
+            )}
           </div>
         </div>
       )}

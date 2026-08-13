@@ -124,7 +124,7 @@ test('summarizeHostPayment exposes invoice fields for paid host', () => {
   assert.equal(summary.icount_doc_url, 'https://example.com/doc/555');
   assert.equal(summary.amount, 450);
   assert.equal(summary.entered_amount, 450);
-  assert.equal(summary.price_includes_vat, false);
+  assert.equal(summary.price_includes_vat, true);
 });
 
 test('summarizeHostPayment charges VAT when price is before tax', () => {
@@ -139,6 +139,36 @@ test('summarizeHostPayment charges VAT when price is before tax', () => {
   assert.equal(summary.amount, 118);
   assert.equal(summary.entered_amount, 100);
   assert.equal(summary.price_includes_vat, false);
+});
+
+test('summarizeHostPayment multiplies a host charge by billable participants', () => {
+  const db = makeDb({ payments: [], activity_registrations: [] });
+  const summary = summarizeHostPayment(db, {
+    id: 'a3',
+    name: 'אירוע פרטי',
+    charge_basis: 'per_participant',
+    price: 45,
+    price_includes_vat: true,
+    host_charge_participants: 15,
+    payment_status: 'unpaid',
+  });
+  assert.equal(summary.entered_amount, 675);
+  assert.equal(summary.amount, 675);
+});
+
+test('summarizeHostPayment derives the entered amount from a frozen gross charge', () => {
+  const db = makeDb({ payments: [], activity_registrations: [] });
+  const summary = summarizeHostPayment(db, {
+    id: 'a4',
+    charge_basis: 'per_participant',
+    price: 45,
+    price_includes_vat: false,
+    host_charge_participants: 15,
+    host_charge_amount: 796.5,
+    payment_status: 'unpaid',
+  });
+  assert.equal(summary.entered_amount, 675);
+  assert.equal(summary.amount, 796.5);
 });
 
 test('applyHostRefundMarks sets activity payment_status to refunded', async () => {

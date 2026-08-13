@@ -15,6 +15,7 @@ import { enrichGroupsWithBotMeta } from './groupMetadata.js';
 import {
   canPlaceInRestrictedGroup,
   currentSeason,
+  eligibilityAppliesToGroup,
   eligibilityForStudent,
   evaluateProgramCandidate,
   isRestrictedGroup,
@@ -1831,7 +1832,6 @@ export function buildCustomerTools({
       const student = matches[0];
       const level = latestLevelTest(db, student.id);
       const existing = eligibilityForStudent(db, student.id, { season: currentSeason() });
-      const sharedDirect = existing.find((row) => ['returning', 'approved'].includes(String(row.status || '')));
       const groups = selectGroups({ grade, band, includeSquads: true })
         .filter(isRestrictedGroup)
         .map((group) => {
@@ -1841,8 +1841,8 @@ export function buildCustomerTools({
             gradeOrBand: grade || band || group.ageCategory,
             level: level.level,
           });
-          const saved = sharedDirect || existing.find((row) => row.program === evaluation.program);
-          const direct = Boolean(sharedDirect);
+          const saved = existing.find((row) => eligibilityAppliesToGroup(row, group));
+          const direct = Boolean(saved && ['returning', 'approved'].includes(String(saved.status || '')));
           return {
             מזהה_קבוצה: group.id,
             קבוצה: describeGroup(group),
@@ -1861,7 +1861,7 @@ export function buildCustomerTools({
         רמת_מבחן_אחרונה: level.level || 'לא ידועה',
         אפשרויות: groups,
         הערה: groups.some((row) => row.זכאי_לשיבוץ_ישיר)
-          ? 'למתאמן קיימת זכאות משותפת לכל קבוצות המתקדמים והנבחרות. אין לבקש אישור צוות נוסף; אחרי בחירת הקבוצה המתאימה יש להמשיך לשיבוץ ולהרשמה.'
+          ? 'למתאמן קיימת זכאות לקבוצה שמסומנת בכלי. אין לבקש אישור צוות נוסף עבורה; יש להמשיך לשיבוץ ולהרשמה רק לאחת הקבוצות שבהן זכאות_לשיבוץ_ישיר היא אמת.'
           : groups.some((row) => row.מועמד)
             ? 'מועמד חדש אינו משובץ לפני אישור צוות, גם ברמת 6A ומעלה.'
           : 'אין להציע מתקדמים או נבחרת בלי התאמה בכלי. אפשר להציע קבוצות רגילות.',

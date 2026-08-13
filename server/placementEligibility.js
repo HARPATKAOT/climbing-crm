@@ -109,6 +109,27 @@ export function eligibilityForStudent(db, studentId, { season = currentSeason() 
   ));
 }
 
+export function eligibilityGroupIds(row = {}) {
+  const ids = Array.isArray(row.group_ids) ? row.group_ids : [];
+  return [...new Set([
+    ...ids,
+    ...(row.group_id ? [row.group_id] : []),
+  ].map((id) => String(id || '').trim()).filter(Boolean))];
+}
+
+/**
+ * New eligibility rows are always tied to concrete groups. Older rows did not
+ * have that field, so they remain valid only for their original programme
+ * (and the old shared flag remains a backwards-compatible all-groups grant)
+ * until a staff member edits the card and saves explicit groups.
+ */
+export function eligibilityAppliesToGroup(row, group) {
+  const explicit = eligibilityGroupIds(row);
+  if (explicit.length) return explicit.includes(String(group?.id || ''));
+  if (String(row?.program || '') === PROGRAMS.SHARED) return true;
+  return String(row?.program || '') === String(programForGroup(group) || '');
+}
+
 /**
  * Advanced and squad eligibility is one shared permission. The program saved
  * on older rows records where the permission originally came from; it does not
@@ -129,49 +150,85 @@ export async function setSharedProgramEligibility(db, persist, {
   season = currentSeason(),
   actor = 'crm',
 } = {}) {
+  const groupIds = eligible
+    ? (db?.get?.('groups') || []).filter(isRestrictedGroup).map((group) => group.id)
+    : [];
+  return setProgramGroupEligibility(db, persist, { studentId, groupIds, season, actor });
+}
+
+export async function setProgramGroupEligibility(db, persist, {
+  studentId,
+  groupIds = [],
+  season = currentSeason(),
+  actor = 'crm',
+} = {}) {
   const student = db?.getOne?.('students', studentId);
   if (!student) return { ok: false, status: 404, error: 'student_not_found' };
   const now = new Date().toISOString();
-  const rows = sharedRestrictedEligibility(db, studentId, { season });
+  const requestedIds = [...new Set((Array.isArray(groupIds) ? groupIds : [])
+    .map((id) => String(id || '').trim()).filter(Boolean))];
+  const restrictedGroups = (db?.get?.('groups') || []).filter(isRestrictedGroup);
+  const allowedById = new Map(restrictedGroups.map((group) => [String(group.id), group]));
+  const invalidGroupIds = requestedIds.filter((id) => !allowedById.has(id));
+  if (invalidGroupIds.length) {
+    return { ok: false, status: 400, error: 'invalid_or_unrestricted_group', invalidGroupIds };
+  }
 
-  if (eligible) {
-    const active = rows.find((row) => ['returning', 'approved'].includes(String(row.status || '')));
-    if (active) return { ok: true, eligible: true, rows: sharedRestrictedEligibility(db, studentId, { season }) };
-    const id = `pe-${season}-${studentId}-${PROGRAMS.SHARED}`;
+  const previousRows = sharedRestrictedEligibility(db, studentId, { season });
+  const savedRows = [];
+  for (const groupId of requestedIds) {
+    const group = allowedById.get(groupId);
+    const id = `pe-${season}-${studentId}-group-${groupId}`;
     const existing = db.getOne(ELIGIBILITY_COLLECTION, id);
+    const previous = previousRows.find((row) => (
+      eligibilityAppliesToGroup(row, group)
+      && ['returning', 'approved'].includes(String(row.status || ''))
+    ));
     const payload = {
       id,
       student_id: studentId,
       parent_id: student.parentId || null,
-      program: PROGRAMS.SHARED,
+      group_id: groupId,
+      group_ids: [groupId],
+      program: programForGroup(group),
       season,
-      status: 'approved',
-      source: 'manual',
-      requestedAt: existing?.requestedAt || now,
+      status: previous?.status === 'returning' ? 'returning' : 'approved',
+      source: previous?.source || existing?.source || 'manual',
+      requestedAt: previous?.requestedAt || existing?.requestedAt || now,
       reviewedAt: now,
       reviewedBy: actor || 'crm',
-      note: existing?.note || '',
+      note: previous?.note || existing?.note || '',
       updated_at: now,
     };
     const saved = existing
       ? db.update(ELIGIBILITY_COLLECTION, id, payload)
       : db.insert(ELIGIBILITY_COLLECTION, payload);
     if (saved && typeof persist === 'function') await persist(ELIGIBILITY_COLLECTION, saved);
-  } else {
-    for (const row of rows.filter((item) => ['returning', 'approved', 'pending'].includes(String(item.status || '')))) {
-      const updated = db.update(ELIGIBILITY_COLLECTION, row.id, {
-        status: 'rejected',
-        reviewedAt: now,
-        reviewedBy: actor || 'crm',
-        updated_at: now,
-      });
-      if (updated && typeof persist === 'function') await persist(ELIGIBILITY_COLLECTION, updated);
-    }
-    for (const request of placementRequestRows(db).filter((row) => (
-      String(row.student_id) === String(studentId)
-      && String(row.season) === String(season)
-      && String(row.status) === 'pending'
-    ))) {
+    if (saved) savedRows.push(saved);
+  }
+
+  const canonicalIds = new Set(savedRows.map((row) => String(row.id)));
+  for (const row of previousRows.filter((item) => (
+    ['returning', 'approved', 'pending'].includes(String(item.status || ''))
+    && !canonicalIds.has(String(item.id))
+  ))) {
+    // A legacy all-programme row must be retired after explicit group choices
+    // are saved; otherwise it would silently keep granting every other group.
+    const updated = db.update(ELIGIBILITY_COLLECTION, row.id, {
+      status: 'rejected',
+      reviewedAt: now,
+      reviewedBy: actor || 'crm',
+      updated_at: now,
+    });
+    if (updated && typeof persist === 'function') await persist(ELIGIBILITY_COLLECTION, updated);
+  }
+
+  for (const request of placementRequestRows(db).filter((row) => (
+    String(row.student_id) === String(studentId)
+    && String(row.season) === String(season)
+    && String(row.status) === 'pending'
+    && !requestedIds.includes(String(row.group_id || ''))
+  ))) {
       const updated = db.update(PLACEMENT_REQUEST_COLLECTION, request.id, {
         status: 'rejected',
         reviewed_at: now,
@@ -180,13 +237,13 @@ export async function setSharedProgramEligibility(db, persist, {
         updated_at: now,
       });
       if (updated && typeof persist === 'function') await persist(PLACEMENT_REQUEST_COLLECTION, updated);
-    }
   }
 
   const resultRows = sharedRestrictedEligibility(db, studentId, { season });
   return {
     ok: true,
-    eligible: resultRows.some((row) => ['returning', 'approved'].includes(String(row.status || ''))),
+    eligible: requestedIds.length > 0,
+    group_ids: requestedIds,
     rows: resultRows,
   };
 }
@@ -253,7 +310,7 @@ export function capacityAfterReturningPriority(db, group, { now = new Date(), se
   const priorityOpen = Boolean(enriched.returningPriorityUntil)
     && String(enriched.returningPriorityUntil) >= new Date(now).toISOString().slice(0, 10);
   const returningIds = new Set(eligibilityRows(db)
-    .filter((row) => row.season === season && row.program === programForGroup(group) && row.status === 'returning')
+    .filter((row) => row.season === season && row.status === 'returning' && eligibilityAppliesToGroup(row, group))
     .map((row) => String(row.student_id)));
   const enrolledIds = new Set((db?.get?.('enrollments') || [])
     .filter((row) => String(row.group_id) === String(group?.id) && !row.end_date)
@@ -284,13 +341,14 @@ export async function requestProgramApproval(db, persist, {
   if (!evaluation.candidate) return { ok: false, evaluation, error: evaluation.reason };
 
   const program = evaluation.program;
-  const sharedEligibility = sharedRestrictedEligibility(db, student.id, { season })
-    .find((row) => ['returning', 'approved'].includes(String(row.status || '')));
-  if (sharedEligibility) {
-    return { ok: true, duplicate: true, eligibility: sharedEligibility, evaluation };
+  const directEligibility = sharedRestrictedEligibility(db, student.id, { season })
+    .find((row) => eligibilityAppliesToGroup(row, group)
+      && ['returning', 'approved'].includes(String(row.status || '')));
+  if (directEligibility) {
+    return { ok: true, duplicate: true, eligibility: directEligibility, evaluation };
   }
-  const id = `pe-${season}-${student.id}-${program}`;
-  const requestId = `pr-${season}-${student.id}-${program}`;
+  const id = `pe-${season}-${student.id}-group-${group.id}`;
+  const requestId = `pr-${season}-${student.id}-group-${group.id}`;
   const existingEligibility = db.getOne(ELIGIBILITY_COLLECTION, id);
   if (existingEligibility?.status === 'approved' || existingEligibility?.status === 'returning') {
     return { ok: true, duplicate: true, eligibility: existingEligibility, evaluation };
@@ -301,6 +359,7 @@ export async function requestProgramApproval(db, persist, {
     student_id: student.id,
     parent_id: parent?.id || student.parentId || null,
     group_id: group.id,
+    group_ids: [group.id],
     program,
     season,
     status: 'pending',
@@ -396,13 +455,11 @@ export async function reviewProgramApproval(db, persist, requestId, {
 export function canPlaceInRestrictedGroup(db, student, group, { season = currentSeason() } = {}) {
   const program = programForGroup(group);
   if (!program) return { allowed: true, reason: 'regular_group' };
-  // Eligibility is intentionally shared by every advanced and squad group.
-  // `program` remains on the row only as provenance for existing data and for
-  // the original approval request; the concrete group is a placement choice.
   const row = sharedRestrictedEligibility(db, student?.id, { season })
-    .find((item) => ['returning', 'approved'].includes(String(item.status || '')))
+    .find((item) => eligibilityAppliesToGroup(item, group)
+      && ['returning', 'approved'].includes(String(item.status || '')))
     || sharedRestrictedEligibility(db, student?.id, { season })
-      .find((item) => item.program === program && item.status === 'pending');
+      .find((item) => eligibilityAppliesToGroup(item, group) && item.status === 'pending');
   if (!row || !['returning', 'approved'].includes(row.status)) {
     return { allowed: false, reason: 'staff_approval_required', eligibility: row || null };
   }

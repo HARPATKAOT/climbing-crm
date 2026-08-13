@@ -4,10 +4,12 @@ import {
   CheckCircle2, CircleDollarSign, CloudCog, FileSearch, Landmark, PackageSearch,
   Plus, ReceiptText, RefreshCw, Scale, TrendingUp, WalletCards, X, CreditCard,
   Mail, FileUp, Send, ShieldCheck, Sparkles, Building2, Link2,
+  CalendarDays, CalendarRange, LayoutList, ShoppingBag, UsersRound,
 } from 'lucide-react';
 
 const TABS = [
   ['overview', 'סקירה', BarChart3],
+  ['sales', 'עסקאות', ShoppingBag],
   ['revenue', 'הכנסות', TrendingUp],
   ['expenses', 'הוצאות וספקים', ReceiptText],
   ['automation', 'קליטה והתאמה', Sparkles],
@@ -21,22 +23,100 @@ const number = new Intl.NumberFormat('he-IL');
 const today = () => new Date().toISOString().slice(0, 10);
 const yearStart = () => `${today().slice(0, 4)}-01-01`;
 const sourceLabel = (source) => ({ notion: 'Notion · ארכיון', icount: 'iCount', manual: 'הזנה ישירה' }[source] || source || 'ידני');
+const formatDate = (value) => value ? new Intl.DateTimeFormat('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${value}T12:00:00`)) : '—';
 
-function Metric({ label, value, note, icon: Icon, color = '#38BDF8' }) {
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  const contentType = response.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await response.json() : null;
+  if (!response.ok) throw new Error(body?.error || 'טעינת נתוני הדוחות נכשלה');
+  if (!body) throw new Error('שרת הדוחות החזיר תשובה לא תקינה. יש לרענן את העמוד ולנסות שוב.');
+  return body;
+}
+
+function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false }) {
   return <article className="finance-metric" style={{ '--metric': color }}>
     <span className="finance-metric-icon"><Icon size={18} /></span><span className="finance-metric-label">{label}</span>
-    <strong>{money.format(value || 0)}</strong>{note && <small>{note}</small>}
+    <strong>{plain ? number.format(value || 0) : money.format(value || 0)}</strong>{note && <small>{note}</small>}
   </article>;
 }
 
 function PeriodButtons({ onChange }) {
   const presets = [
+    ['היום', () => [today(), today()]],
     ['החודש', () => [`${today().slice(0, 7)}-01`, today()]],
     ['השנה', () => [yearStart(), today()]],
     ['12 חודשים', () => { const date = new Date(); date.setFullYear(date.getFullYear() - 1); return [date.toISOString().slice(0, 10), today()]; }],
     ['כל ההיסטוריה', () => ['2010-01-01', today()]],
   ];
   return <div className="finance-presets">{presets.map(([label, range]) => <button key={label} className="btn btn-ghost btn-sm" onClick={() => onChange(...range())}>{label}</button>)}</div>;
+}
+
+const SALES_VIEWS = [
+  ['deals', 'פירוט עסקאות', LayoutList],
+  ['daily', 'לפי יום', CalendarDays],
+  ['events', 'לפי אירוע', CalendarRange],
+  ['products', 'לפי מוצר', ShoppingBag],
+  ['insights', 'אמצעי תשלום ולקוחות', UsersRound],
+];
+
+function SalesTable({ rows, columns, empty = 'אין עסקאות בתקופה שנבחרה' }) {
+  return <div className="table-wrap finance-table-wrap"><table className="crm-table finance-table finance-sales-table">
+    <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
+    <tbody>{rows.map((row, index) => <tr key={row.id || row.date || row.name || `${row.method}-${index}`}>
+      {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key]}</td>)}
+    </tr>)}{!rows.length && <tr><td colSpan={columns.length} className="finance-empty">{empty}</td></tr>}</tbody>
+  </table></div>;
+}
+
+function SalesViews({ data, view, onViewChange }) {
+  const summary = data?.summary || {};
+  const amountCell = (row) => <strong className={row.revenue < 0 || row.amount < 0 ? 'finance-negative' : 'finance-positive'}>{moneyPrecise.format(row.revenue ?? row.amount ?? 0)}</strong>;
+  const commonColumns = [
+    { key: 'deals', label: 'עסקאות' },
+    { key: 'customers', label: 'לקוחות' },
+    { key: 'revenue', label: 'הכנסה נטו מזיכויים', render: amountCell },
+    { key: 'refunds', label: 'זיכויים', render: (row) => moneyPrecise.format(row.refunds || 0) },
+  ];
+  return <div className="finance-sales-view">
+    <section className="finance-metrics finance-sales-metrics">
+      <Metric label="עסקאות בתקופה" value={summary.deals} note={`${number.format(summary.customers || 0)} לקוחות`} icon={ShoppingBag} color="#A78BFA" plain />
+      <Metric label="מחזור כולל" value={summary.revenue} note="כולל מע״מ ולאחר זיכויים" icon={BadgeDollarSign} color="#38BDF8" />
+      <Metric label="זיכויים" value={summary.refunds} note="מוצגים בנפרד" icon={ReceiptText} color="#FB7185" />
+      <Metric label="מקושרות לאירוע" value={summary.linked_to_event} note="שיוך ודאי לפי התשלום" icon={CalendarRange} color="#2DD4BF" plain />
+    </section>
+    <section className="card finance-panel finance-sales-panel">
+      <header><div><h2>חתכי עסקאות</h2><p>אותו טווח תאריכים, בכמה זוויות ניהוליות</p></div><div className="finance-sales-switcher">{SALES_VIEWS.map(([key, label, Icon]) => <button key={key} className={`btn btn-sm ${view === key ? 'btn-primary' : 'btn-ghost'}`} onClick={() => onViewChange(key)}><Icon size={15} />{label}</button>)}</div></header>
+      {view === 'deals' && <SalesTable rows={data?.deals || []} columns={[
+        { key: 'date', label: 'תאריך', render: (row) => formatDate(row.date) },
+        { key: 'document_number', label: 'מסמך', render: (row) => <strong>{row.document_number || '—'}</strong> },
+        { key: 'customer_name', label: 'לקוח' },
+        { key: 'events', label: 'אירוע', render: (row) => row.events?.join(', ') || <span className="finance-muted">ללא שיוך</span> },
+        { key: 'products', label: 'מוצר / שירות', render: (row) => row.products?.slice(0, 2).join(', ') || <span className="finance-muted">ללא פירוט</span> },
+        { key: 'payment_methods', label: 'תשלום', render: (row) => row.payment_methods?.join(', ') || '—' },
+        { key: 'amount', label: 'סכום', render: amountCell },
+        { key: 'source', label: '', render: (row) => row.source_url ? <a className="btn btn-ghost btn-sm" href={row.source_url} target="_blank" rel="noreferrer">מסמך</a> : null },
+      ]} />}
+      {view === 'daily' && <SalesTable rows={data?.daily || []} columns={[
+        { key: 'date', label: 'יום', render: (row) => <strong>{formatDate(row.date)}</strong> }, ...commonColumns,
+      ]} />}
+      {view === 'events' && <SalesTable rows={data?.events || []} empty="אין עסקאות שמקושרות לאירוע בטווח הזה" columns={[
+        { key: 'name', label: 'אירוע', render: (row) => <><strong>{row.name}</strong><small>{row.event_date ? formatDate(row.event_date) : 'ללא תאריך אירוע'}</small></> }, ...commonColumns,
+      ]} />}
+      {view === 'products' && <SalesTable rows={data?.products || []} empty="אין פירוט מוצרים במסמכים שבטווח הזה" columns={[
+        { key: 'name', label: 'מוצר / שירות', render: (row) => <strong>{row.name}</strong> },
+        { key: 'quantity', label: 'כמות' }, ...commonColumns,
+      ]} />}
+      {view === 'insights' && <div className="finance-insights-grid">
+        <div><h3>אמצעי תשלום</h3><SalesTable rows={data?.payment_methods || []} columns={[
+          { key: 'method', label: 'אמצעי' }, ...commonColumns,
+        ]} /></div>
+        <div><h3>לקוחות מובילים</h3><SalesTable rows={data?.customers || []} columns={[
+          { key: 'name', label: 'לקוח' }, ...commonColumns,
+        ]} /></div>
+      </div>}
+    </section>
+  </div>;
 }
 
 function TrendChart({ rows = [] }) {
@@ -80,11 +160,15 @@ function MatchBadge({ match }) {
 }
 
 export default function FinancialReports() {
-  const [tab, setTab] = useState('overview');
+  const requestedTab = new URLSearchParams(window.location.search).get('tab');
+  const requestedSalesView = new URLSearchParams(window.location.search).get('view');
+  const [tab, setTab] = useState(TABS.some(([key]) => key === requestedTab) ? requestedTab : 'overview');
   const [from, setFrom] = useState(yearStart());
   const [to, setTo] = useState(today());
   const [dashboard, setDashboard] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [salesBreakdown, setSalesBreakdown] = useState({ summary: {}, deals: [], daily: [], events: [], products: [], payment_methods: [], customers: [] });
+  const [salesView, setSalesView] = useState(SALES_VIEWS.some(([key]) => key === requestedSalesView) ? requestedSalesView : 'deals');
   const [reconciliation, setReconciliation] = useState({ rows: [], counts: {} });
   const [syncStatus, setSyncStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -102,13 +186,15 @@ export default function FinancialReports() {
     setLoading(true); setError('');
     try {
       const query = new URLSearchParams({ from, to, pageSize: '500' });
-      const responses = await Promise.all([
-        fetch(`/api/finance/dashboard?${query}`), fetch(`/api/finance/transactions?${query}`),
-        fetch('/api/finance/reconciliation'), fetch('/api/finance/sync-status'), fetch('/api/finance/automation'),
+      const [dashboardBody, transactionBody, salesBody, reconciliationBody, statusBody, automationBody] = await Promise.all([
+        fetchJson(`/api/finance/dashboard?${query}`),
+        fetchJson(`/api/finance/transactions?${query}`),
+        fetchJson(`/api/finance/sales-breakdown?${query}`),
+        fetchJson('/api/finance/reconciliation'),
+        fetchJson('/api/finance/sync-status'),
+        fetchJson('/api/finance/automation'),
       ]);
-      if (!responses.every((response) => response.ok)) throw new Error('לא ניתן לטעון את נתוני הדוחות');
-      const [dashboardBody, transactionBody, reconciliationBody, statusBody, automationBody] = await Promise.all(responses.map((response) => response.json()));
-      setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
+      setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setSalesBreakdown(salesBody); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
     } catch (loadError) { setError(loadError.message); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -258,6 +344,7 @@ export default function FinancialReports() {
       {(tab === 'overview' || tab === 'revenue') && <><section className="finance-metrics">
         <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" />
       </section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>{tab === 'revenue' && <article className="card finance-panel"><header><div><h2>מסמכי הכנסה</h2><p>הצעות וחשבונות עסקה אינם הכנסה</p></div></header><TransactionsTable rows={transactions} kind="document" /></article>}</>}
+      {tab === 'sales' && <SalesViews data={salesBreakdown} view={salesView} onViewChange={setSalesView} />}
       {tab === 'expenses' && <><section className="finance-metrics"><Metric label="הוצאות לפני מע״מ" value={kpi.expenses_net} note="הזנה ישירה + iCount + ארכיון Notion" icon={ReceiptText} color="#FB7185" /><Metric label="הוצאות כולל מע״מ" value={kpi.expenses_gross} note={`${number.format(counts.expenses || 0)} רשומות שמורות`} icon={Banknote} color="#F97316" /></section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הוצאות לפי סיווג</h2><p>חלוקה ניהולית מכל מקורות ההוצאות</p></div></header><div className="finance-category-list">{expenseCategories.map(([category, amount]) => <div key={category}><span>{category}</span><div><i style={{ width: `${Math.max(4, amount / Math.max(1, expenseCategories[0]?.[1]) * 100)}%` }} /></div><strong>{money.format(amount)}</strong></div>)}</div></article><article className="card finance-panel finance-source-card"><header><div><h2>מקורות הנתונים</h2><p>הזנה שוטפת כאן; Notion נשאר ארכיון</p></div></header><div><span className="finance-source is-manual">הזנה ישירה</span><p>הוצאות חדשות נשמרות במערכת הזו.</p></div><div><span className="finance-source is-icount">iCount</span><p>מקור חשבונאי לסכומים, מע״מ וסטטוס.</p></div><div><span className="finance-source is-notion">Notion · ארכיון</span><p>היסטוריה שיובאה פעם אחת; ללא סנכרון שוטף.</p></div></article></section><article className="card finance-panel"><header><div><h2>פירוט הוצאות</h2><p>כל ההוצאות השמורות במערכת</p></div></header><TransactionsTable rows={transactions} kind="expense" /></article></>}
       {tab === 'automation' && <div className="finance-automation">
         <section className="card finance-automation-hero"><div><span className="finance-eyebrow"><Sparkles size={15} /> מנוע הוצאות חכם</span><h2>מחשבונית לתנועה — ומשם לרואה החשבון</h2><p>המערכת שומרת את המסמך, מתאימה אותו לתנועת בנק או אשראי, ומעבירה רק התאמות ודאיות. כל ספק נשאר גלוי לבדיקה.</p></div><button className="btn btn-primary" onClick={runMatching} disabled={automationBusy}><Link2 size={16} />{automationBusy ? 'מעבד…' : 'הרצת התאמה'}</button></section>

@@ -26,6 +26,10 @@ export const useGroups = () => usePublicData('/api/public/groups', 'groups');
 
 export const WHATSAPP_NUMBER = '972515862878';
 export const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}`;
+export function whatsappUrl(message = '') {
+  const text = String(message || '').trim();
+  return text ? `${WHATSAPP_URL}?text=${encodeURIComponent(text)}` : WHATSAPP_URL;
+}
 export const FACEBOOK_URL = 'https://www.facebook.com/kirboaz';
 export const INSTAGRAM_URL = 'https://www.instagram.com/kir_boaz/';
 export const ADDRESS = 'השקד 1, תל מונד';

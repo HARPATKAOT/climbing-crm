@@ -1725,6 +1725,7 @@ export default function PublicOnboardingForm() {
   // „ימים מסוימים” בלי אף יום מסומן אינו מצב שאפשר לשלם עליו.
   const daysIncomplete = canPickDays && partialDays && pickedDays.length === 0;
   const eventPolicy = activity?.cancellation_policy || null;
+  const customerCancellationDisabled = activity?.cancellation_policy_disabled === true;
 
   const goNextFromParent = async () => {
     setError('');
@@ -4060,10 +4061,19 @@ export default function PublicOnboardingForm() {
 
                 {/* התנאים והאישור עליהם באותו מסך שבו משלמים — אישור שניתן
                     לפני שידעו מה הסכום אינו אישור על העסקה הזאת. */}
-                {paidEvent && eventPolicy && (
+                {paidEvent && (eventPolicy || customerCancellationDisabled) && (
                   <div className="event-policy" style={{ marginTop: 16 }}>
                     <h3><CalendarClock size={15} aria-hidden="true" />תנאי ביטול</h3>
-                    {(eventPolicy.rules || []).map((rule) => {
+                    {customerCancellationDisabled && (
+                      <div className="event-policy-row">
+                        <span className="event-policy-dot is-bad" aria-hidden="true" />
+                        <div>
+                          <div className="event-policy-when">ביטול מצד המשתתף</div>
+                          <div className="event-policy-what is-bad">ללא אפשרות ביטול או החזר</div>
+                        </div>
+                      </div>
+                    )}
+                    {(eventPolicy?.rules || []).map((rule) => {
                       const { period, outcome, tone } = cancellationRuleParts(rule);
                       return (
                         <div key={rule.id} className="event-policy-row">
@@ -4075,20 +4085,29 @@ export default function PublicOnboardingForm() {
                         </div>
                       );
                     })}
-                    {eventPolicy.free_text && (
+                    {eventPolicy?.free_text && (
                       <p className="event-policy-note">{eventPolicy.free_text}</p>
                     )}
-                    <label className="event-check">
-                      <input
-                        type="checkbox"
-                        checked={policyAccepted}
-                        onChange={(e) => {
-                          recordTick('cancellation_policy_accepted', e.target.checked);
-                          setPolicyAccepted(e.target.checked);
-                        }}
-                      />
-                      <span>{g('קראתי ואני מאשר', 'קראתי ואני מאשרת', 'קראתי ואני מאשר/ת')} את תנאי הביטול</span>
-                    </label>
+                    <div className="event-policy-row">
+                      <span className="event-policy-dot is-good" aria-hidden="true" />
+                      <div>
+                        <div className="event-policy-when">ביטול מצד המארגנים</div>
+                        <div className="event-policy-what is-good">החזר מלא</div>
+                      </div>
+                    </div>
+                    {eventPolicy && (
+                      <label className="event-check">
+                        <input
+                          type="checkbox"
+                          checked={policyAccepted}
+                          onChange={(e) => {
+                            recordTick('cancellation_policy_accepted', e.target.checked);
+                            setPolicyAccepted(e.target.checked);
+                          }}
+                        />
+                        <span>{g('קראתי ואני מאשר', 'קראתי ואני מאשרת', 'קראתי ואני מאשר/ת')} את תנאי הביטול</span>
+                      </label>
+                    )}
                   </div>
                 )}
                 {!paidEvent && (

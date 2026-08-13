@@ -4,6 +4,7 @@ import {
   summarizeActivityCancellation,
   registrationsToRelease,
   activityIsCancelled,
+  activityCanBeArchived,
 } from './activityCancellation.js';
 
 function makeDb(store) {
@@ -120,6 +121,18 @@ test('refunded registrations still block deletion — the rows would be orphaned
   assert.equal(summary.history_only, true);
   assert.equal(summary.deletable, false);
   assert.equal(summary.already_cancelled, true);
+  assert.equal(activityCanBeArchived(summary), true);
+});
+
+test('an active registration cannot be hidden in the archive', () => {
+  const db = makeDb({
+    activity_registrations: [
+      { id: 'r1', activity_id: 'a1', status: 'confirmed', payment_status: 'pending' },
+    ],
+    payments: [],
+  });
+  const summary = summarizeActivityCancellation(db, activity);
+  assert.equal(activityCanBeArchived(summary), false);
 });
 
 test('activityIsCancelled reads both the flag and the two spellings', () => {

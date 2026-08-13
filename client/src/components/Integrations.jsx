@@ -12,6 +12,7 @@ import {
   Bot,
   Settings2,
   ArrowRight,
+  MapPin,
 } from 'lucide-react';
 import ChannelConnections from './ChannelConnections';
 
@@ -98,6 +99,19 @@ function GoogleContactsMark() {
         <rect x="2.6" y="5" width="1.6" height="3" rx="0.8" fill="#FBBC05" />
         <rect x="2.6" y="10.5" width="1.6" height="3" rx="0.8" fill="#EA4335" />
         <rect x="2.6" y="16" width="1.6" height="3" rx="0.8" fill="#4285F4" />
+      </svg>
+    </BrandMark>
+  );
+}
+
+function GoogleBusinessMark() {
+  return (
+    <BrandMark bg="#fff">
+      <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.19-2.06H12v3.9h5.38a4.6 4.6 0 0 1-2 3.02v2.53h3.24c1.9-1.75 2.98-4.33 2.98-7.39Z" />
+        <path fill="#34A853" d="M12 22c2.7 0 4.98-.9 6.64-2.38l-3.24-2.53c-.9.6-2.05.96-3.4.96-2.61 0-4.82-1.76-5.61-4.13H3.04v2.61A10 10 0 0 0 12 22Z" />
+        <path fill="#FBBC05" d="M6.39 13.92A6 6 0 0 1 6.08 12c0-.67.12-1.32.31-1.92V7.47H3.04A10 10 0 0 0 2 12c0 1.61.39 3.14 1.04 4.53l3.35-2.61Z" />
+        <path fill="#EA4335" d="M12 5.95c1.47 0 2.79.5 3.83 1.5l2.88-2.88A9.68 9.68 0 0 0 12 2a10 10 0 0 0-8.96 5.47l3.35 2.61C7.18 7.71 9.39 5.95 12 5.95Z" />
       </svg>
     </BrandMark>
   );
@@ -325,6 +339,162 @@ function GoogleCalendarCard() {
               סנכרון עכשיו
             </button>
           )}
+        </>
+      )}
+      {msg && <span style={{ color: 'var(--text-3)', fontSize: 13 }}>{msg}</span>}
+    </IntegrationCard>
+  );
+}
+
+function GoogleBusinessProfileCard() {
+  const { data, loading, reload } = useStatus('/api/google-business-profile/status');
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('googleBusiness') === 'error' ? (params.get('msg') || 'החיבור לגוגל נכשל') : '';
+  });
+
+  if (loading) return <LoadingCard title="פרופיל העסק בגוגל" icon={MapPin} />;
+
+  const connect = async () => {
+    setBusy('connect');
+    setMsg('');
+    try {
+      const res = await fetch('/api/google-business-profile/auth-url');
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.url) throw new Error(body.error || 'קבלת קישור החיבור נכשלה');
+      window.location.href = body.url;
+    } catch (err) {
+      setMsg(err.message);
+      setBusy('');
+    }
+  };
+
+  const sync = async () => {
+    setBusy('sync');
+    setMsg('');
+    try {
+      const res = await fetch('/api/google-business-profile/sync', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'סנכרון שעות הפתיחה נכשל');
+      setMsg(`עודכנו שעות הפתיחה עד ${body.endDate || 'שבועיים קדימה'}`);
+      await reload();
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const chooseLocation = async (event) => {
+    const locationName = event.target.value;
+    if (!locationName) return;
+    setBusy('location');
+    setMsg('');
+    try {
+      const res = await fetch('/api/google-business-profile/location', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationName }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'בחירת העסק נכשלה');
+      setMsg('העסק נבחר ושעות הפתיחה סונכרנו');
+      await reload();
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const disconnect = async () => {
+    if (!window.confirm('לנתק את סנכרון שעות הפתיחה עם גוגל?')) return;
+    setBusy('disconnect');
+    setMsg('');
+    try {
+      const res = await fetch('/api/google-business-profile/disconnect', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'ניתוק החיבור נכשל');
+      setMsg('החיבור נותק');
+      await reload();
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const locations = Array.isArray(data?.locations) ? data.locations : [];
+  const expiryAlert = expiryHint(data);
+  const selectionAlert = data?.connected && !data?.ready
+    ? (locations.length > 1 ? 'יש לבחור איזה פרופיל עסק לסנכרן.' : 'לא נמצא פרופיל עסק זמין בחשבון שנבחר.')
+    : null;
+  const alert = expiryAlert || selectionAlert;
+  const state = !data?.configured
+    ? 'off'
+    : data?.ready
+      ? (alert ? 'warn' : 'ok')
+      : data?.connected ? 'warn' : 'off';
+
+  return (
+    <IntegrationCard
+      mark={<GoogleBusinessMark />}
+      onOpen={data?.ready ? () => window.open('https://business.google.com/locations', '_blank', 'noopener') : connect}
+      title="פרופיל העסק בגוגל"
+      state={state}
+      stateLabel={!data?.configured ? 'לא מוגדר' : data?.ready ? 'מסונכרן' : data?.connected ? 'נדרשת בחירה' : 'לא מחובר'}
+      description="שעות הפתיחה המפורסמות ביומן מתעדכנות אוטומטית ב־Google Search וב־Google Maps לשבועיים הקרובים."
+      alert={alert}
+      rows={data?.connected ? [
+        ['חשבון', data.connectedEmail || '—'],
+        ...(data.locationTitle ? [['עסק', data.locationTitle]] : []),
+        ...(data.locationAddress ? [['כתובת', data.locationAddress]] : []),
+        ['סנכרון אחרון', formatDateTime(data.lastSyncAt)],
+      ] : []}
+    >
+      {!data?.configured ? (
+        <span style={{ color: 'var(--text-3)', fontSize: 13 }}>חסרים מפתחות גוגל בשרת</span>
+      ) : !data?.connected ? (
+        <button type="button" className="btn btn-primary" onClick={connect} disabled={!!busy}>
+          {busy === 'connect' ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
+          חיבור לפרופיל העסק
+        </button>
+      ) : (
+        <>
+          {!data?.ready && locations.length > 0 && (
+            <select
+              className="input"
+              value=""
+              onChange={chooseLocation}
+              disabled={!!busy}
+              aria-label="בחירת פרופיל עסק בגוגל"
+              style={{ minWidth: 220 }}
+            >
+              <option value="">בחירת עסק...</option>
+              {locations.map((location) => (
+                <option key={location.name} value={location.name}>
+                  {location.title}{location.address ? ` — ${location.address}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {data?.ready && (
+            <button type="button" className="btn btn-ghost" onClick={sync} disabled={!!busy}>
+              {busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+              סנכרון עכשיו
+            </button>
+          )}
+          {expiryAlert && (
+            <button type="button" className="btn btn-primary" onClick={connect} disabled={!!busy}>
+              {busy === 'connect' ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
+              חיבור מחדש
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost" onClick={disconnect} disabled={!!busy}>
+            {busy === 'disconnect' ? <Loader2 size={14} className="spin" /> : <Unlink size={14} />}
+            ניתוק
+          </button>
         </>
       )}
       {msg && <span style={{ color: 'var(--text-3)', fontSize: 13 }}>{msg}</span>}
@@ -647,6 +817,7 @@ export default function Integrations() {
 
   return (
     <div className="business-settings-grid">
+      <GoogleBusinessProfileCard />
       <GoogleContactsCard />
       <GoogleCalendarCard />
       <WhatsappCard onOpen={() => setOpenChannel('whatsapp')} />

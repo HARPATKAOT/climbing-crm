@@ -1,5 +1,6 @@
-import { normalizeHostPaymentStatus } from './activityRegistration.js';
-import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
+import { activeRegistrations, normalizeHostPaymentStatus } from './activityRegistration.js';
+import { hostChargeBreakdown } from './activityPricing.js';
+import { netAmount, normalizePriceIncludesVat } from './vat.js';
 
 export function summarizeHostPayment(db, activity) {
   if (!activity) return null;
@@ -18,10 +19,18 @@ export function summarizeHostPayment(db, activity) {
   const includesVat = normalizePriceIncludesVat(
     payment?.price_includes_vat ?? activity.price_includes_vat
   );
-  const entered = Number(activity.price) || 0;
-  const amount = Number(payment?.amount) > 0
+  const breakdown = hostChargeBreakdown(activity, {
+    registeredCount: activeRegistrations(db, activity.id).length,
+  });
+  const recordedAmount = Number(payment?.amount) > 0
     ? Number(payment.amount)
-    : chargeAmount(entered, includesVat);
+    : (Number(activity.host_charge_amount) > 0 ? Number(activity.host_charge_amount) : null);
+  const amount = recordedAmount ?? breakdown.gross;
+  // A paid/frozen amount is already gross. Convert it back only for the
+  // "entered amount" row; otherwise use the live per-participant breakdown.
+  const entered = recordedAmount == null
+    ? breakdown.entered
+    : (includesVat ? recordedAmount : netAmount(recordedAmount, true));
   const docnum = payment?.icount_doc_number || null;
   const doctype = payment?.icount_doctype || null;
   const docId = payment?.icount_doc_id || null;

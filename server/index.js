@@ -54,6 +54,7 @@ import {
   PLACEMENT_REQUEST_COLLECTION,
   eligibilityForStudent,
   reviewProgramApproval,
+  setProgramGroupEligibility,
   setSharedProgramEligibility,
   sharedRestrictedEligibility,
 } from './placementEligibility.js';
@@ -114,7 +115,13 @@ import {
   businessDisplayName,
 } from './campaignRunner.js';
 import { icount } from './icount.js';
+import {
+  matchEventHostParent,
+  normalizeEventHostProfile,
+  resolveEventHostRecipient,
+} from './eventHostProfile.js';
 import { apiAuth, requireOwner } from './auth.js';
+import { financeRouter } from './financeRoutes.js';
 import {
   accessAtLeast,
   createAccessRole,
@@ -132,6 +139,7 @@ import {
 } from './userAccess.js';
 import { googleCalendarService } from './googleCalendar.js';
 import { googleContactsService } from './googleContacts.js';
+import { googleBusinessProfileService } from './googleBusinessProfile.js';
 import {
   sendActivityRegistrationConfirmation,
   sendHostRegistrationLink,
@@ -243,6 +251,8 @@ import {
   summarizeActivityCancellation,
   registrationsToRelease,
   activityIsCancelled,
+  activityIsArchived,
+  activityCanBeArchived,
 } from './activityCancellation.js';
 import {
   paymentOwner,
@@ -909,6 +919,7 @@ app.get('/api/g/:groupId/:phone', redirectGroupIntake);
 app.get('/api/g/:groupId', redirectGroupIntake);
 
 app.use('/api', apiAuth);
+app.use('/api/finance', financeRouter);
 
 app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
@@ -5050,11 +5061,18 @@ app.get('/api/students/:id/program-eligibility', (req, res) => {
 app.put('/api/students/:id/program-eligibility', async (req, res) => {
   const wasEligible = sharedRestrictedEligibility(db, req.params.id)
     .some((row) => ['returning', 'approved'].includes(String(row.status || '')));
-  const result = await setSharedProgramEligibility(db, persistCore, {
-    studentId: req.params.id,
-    eligible: req.body?.eligible === true,
-    actor: req.crmUser?.email || req.crmUser?.id || 'crm',
-  });
+  const hasExplicitGroups = Array.isArray(req.body?.group_ids);
+  const result = hasExplicitGroups
+    ? await setProgramGroupEligibility(db, persistCore, {
+      studentId: req.params.id,
+      groupIds: req.body.group_ids,
+      actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+    })
+    : await setSharedProgramEligibility(db, persistCore, {
+      studentId: req.params.id,
+      eligible: req.body?.eligible === true,
+      actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+    });
   if (!result.ok) return res.status(result.status || 400).json(result);
 
   // The tick was a decision that stayed with us — the family heard nothing
@@ -5225,7 +5243,9 @@ function normalizeActivityPayload(body = {}) {
     // scratch on every save, so a field missing from it is not merely ignored —
     // it is erased. That is why an activity saved as published came back
     // private, however it had been set: the flag never survived the next save.
-    show_on_site: !isOps && !!body.registration_enabled && !!body.show_on_site,
+    show_on_site: type === 'opening_hours'
+      ? (body.status || 'open') !== 'draft'
+      : (!isOps && !!body.registration_enabled && !!body.show_on_site),
     // רעיון: פעילות שאוספת מתעניינים. בלי תאריך היא עדיין חוקית — זו כל
     // הנקודה, ולכן גם הבדיקה של „חסר תאריך” מוותרת עליה.
     collect_interest: !isOps && body.collect_interest === true,
@@ -5349,6 +5369,9 @@ function ensureActivityRegistrationSlug(activity) {
 }
 
 async function syncActivityToGoogle(record, { deleted = false } = {}) {
+  if (record?.type === 'opening_hours') {
+    googleBusinessProfileService.scheduleSync(() => db.get('activities') || []);
+  }
   try {
     const result = await googleCalendarService.pushActivity(record, { deleted });
     if (deleted || result?.skipped) return record;
@@ -5365,8 +5388,8 @@ async function syncActivityToGoogle(record, { deleted = false } = {}) {
   return record;
 }
 
-function applyGooglePull(dbRef) {
-  return googleCalendarService.pullChanges({
+async function applyGooglePull(dbRef) {
+  const result = await googleCalendarService.pullChanges({
     getActivities: () => dbRef.get('activities') || [],
     upsertFromGoogle: (local, fields, crmId) => {
       if (local) {
@@ -5409,6 +5432,10 @@ function applyGooglePull(dbRef) {
       }
     },
   });
+  if ((result?.created || 0) + (result?.updated || 0) + (result?.deleted || 0) > 0) {
+    googleBusinessProfileService.scheduleSync(() => dbRef.get('activities') || []);
+  }
+  return result;
 }
 
 const ACTIVITY_FINANCE_FIELDS = new Set([
@@ -5451,13 +5478,17 @@ function rejectActivitySensitiveChanges(req, body = {}, existing = {}) {
 }
 
 app.get('/api/activities', async (req, res) => {
+  const includeArchived = String(req.query?.include_archived || '') === '1';
+  const visibleRows = (rows) => includeArchived
+    ? rows
+    : rows.filter((row) => !activityIsArchived(row));
   try {
     const rows = await readTable('activities');
-    return res.json(rows.map((row) => activityForRequest(req, row)));
+    return res.json(visibleRows(rows).map((row) => activityForRequest(req, row)));
   } catch (err) {
     console.error('activities read failed:', err.message);
   }
-  res.json((db.get('activities') || []).map((row) => activityForRequest(req, row)));
+  res.json(visibleRows(db.get('activities') || []).map((row) => activityForRequest(req, row)));
 });
 
 app.post('/api/activities', async (req, res) => {
@@ -5553,6 +5584,9 @@ app.put('/api/activities/:id', async (req, res) => {
   syncActivityToGoogle(updated).catch((err) =>
     console.error('Background Google push failed:', err.message)
   );
+  if (existing.type === 'opening_hours' && updated.type !== 'opening_hours') {
+    googleBusinessProfileService.scheduleSync(() => db.get('activities') || []);
+  }
   applyVacationAttendanceForActivities(existing, updated).catch((err) =>
     console.error('Vacation attendance sync failed:', err.message)
   );
@@ -5595,6 +5629,50 @@ app.delete('/api/activities/:id', async (req, res) => {
   applyVacationAttendanceForActivities(existing).catch((err) =>
     console.error('Vacation attendance sync failed:', err.message)
   );
+});
+
+// A historical registration must keep its parent activity, but that does not
+// mean the old event has to stay on the operational calendar. Archiving keeps
+// the audit trail intact and closes every public entry point.
+app.post('/api/activities/:id/archive', async (req, res) => {
+  try {
+    const existing = db.getOne('activities', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Activity not found' });
+    await refreshCancellationTables();
+    const fresh = db.getOne('activities', req.params.id) || existing;
+    const summary = summarizeActivityCancellation(db, fresh, organizerCancelReview(fresh));
+    if (!activityCanBeArchived(summary)) {
+      return res.status(409).json({
+        error: 'יש לבטל תחילה את ההרשמות הפעילות והזיכויים של האירוע',
+        code: 'activity_has_active_registrations',
+        summary,
+      });
+    }
+
+    const archived = db.update('activities', fresh.id, {
+      status: 'archived',
+      registration_enabled: false,
+      show_on_site: false,
+      updated_at: new Date().toISOString(),
+    });
+    if (!archived) return res.status(404).json({ error: 'Activity not found' });
+    const durable = await persistCore('activities', archived);
+    if (durable?.ok === false) {
+      console.error('activity archive persist failed:', durable.error);
+      return res.status(503).json({ error: durable.error || 'שמירת האירוע בארכיון נכשלה' });
+    }
+
+    res.json({ success: true, activity: activityForRequest(req, archived) });
+    if (archived.type === 'opening_hours') {
+      googleBusinessProfileService.scheduleSync(() => db.get('activities') || []);
+    }
+    applyVacationAttendanceForActivities(fresh, archived).catch((err) =>
+      console.error('Vacation attendance sync failed:', err.message)
+    );
+  } catch (err) {
+    console.error('activity archive error:', err.message);
+    res.status(500).json({ error: err.message || 'העברת האירוע לארכיון נכשלה' });
+  }
 });
 
 app.get('/api/activities/unpaid-open', (req, res) => {
@@ -6963,6 +7041,137 @@ app.get('/api/activities/:id/host-payment/invoice', async (req, res) => {
   }
 });
 
+function icountCustomerDisplayName(client) {
+  return String(
+    client?.client_name ||
+    client?.company_name ||
+    [client?.fname, client?.lname].filter(Boolean).join(' ') ||
+    ''
+  ).trim();
+}
+
+/**
+ * Resolve an event payer into one CRM card and one iCount client.
+ * Matching happens before any write, so retrying cannot create a duplicate.
+ */
+app.post('/api/activities/:id/host-customer', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount אינו מוגדר ולכן לא ניתן לקשר לקוח בבטחה' });
+    }
+
+    const suppliedName = String(req.body?.name || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (phoneDigits.length < 9) {
+      return res.status(400).json({ error: 'יש להזין מספר טלפון תקין' });
+    }
+
+    await readTable('parents');
+    const parents = db.get('parents') || [];
+    const existingByPhone = parents.find((parent) => parentPhonesMatch(parent.phone, phone)) || null;
+
+    const icountMatches = await icount.findClientsByContact({ phone, email });
+    if (icountMatches.length > 1) {
+      return res.status(409).json({
+        error: 'נמצאו כמה לקוחות תואמים ב-iCount. יש לעדכן שם את הטלפון או המייל ולנסות שוב.',
+      });
+    }
+
+    const icountMatch = icountMatches[0] || null;
+    const linkedParent = icountMatch
+      ? parents.find((parent) => (
+        String(parent.icount_client_id || '') === String(icountMatch.client_id) ||
+        String(parent.id) === String(icountMatch.custom_client_id || '')
+      )) || null
+      : null;
+
+    if (linkedParent && existingByPhone && linkedParent.id !== existingByPhone.id) {
+      return res.status(409).json({
+        error: 'הטלפון ותיק iCount מקושרים לשני לקוחות שונים. יש למזג את הכרטיסים לפני השליחה.',
+      });
+    }
+
+    const matchedParent = linkedParent || existingByPhone;
+    if (
+      icountMatch &&
+      matchedParent?.icount_client_id &&
+      String(matchedParent.icount_client_id) !== String(icountMatch.client_id)
+    ) {
+      return res.status(409).json({
+        error: 'כרטיס הלקוח כבר מקושר לתיק iCount אחר. לא בוצע שינוי בקישור.',
+      });
+    }
+
+    const resolvedName = suppliedName || icountCustomerDisplayName(icountMatch);
+    if (!resolvedName) {
+      return res.status(400).json({ error: 'יש להזין את שם הלקוח' });
+    }
+
+    let parent = matchedParent;
+    const existedInCrm = !!parent;
+    if (parent) {
+      parent = db.update('parents', parent.id, {
+        name: parent.name || resolvedName,
+        phone,
+        email: parent.email || email || String(icountMatch?.email || '').trim(),
+        source: parent.source || (icountMatch ? 'icount' : 'event'),
+      }) || parent;
+    } else {
+      parent = db.upsertParentByPhone(
+        resolvedName,
+        phone,
+        email || String(icountMatch?.email || '').trim(),
+        { source: icountMatch ? 'icount' : 'event', channel: 'event', status: 'lead_new' }
+      );
+    }
+
+    if (icountMatch) {
+      const matchedClientId = String(icountMatch.client_id);
+      parent = db.update('parents', parent.id, { icount_client_id: matchedClientId }) || {
+        ...parent,
+        icount_client_id: matchedClientId,
+      };
+    }
+
+    const synced = await syncParentToIcount(parent);
+    parent = synced.parent;
+    const durableParent = await persistCore('parents', parent);
+    if (durableParent?.ok === false) {
+      return res.status(503).json({ error: durableParent.error || 'שמירת הלקוח נכשלה' });
+    }
+
+    const updatedActivity = db.update('activities', activity.id, {
+      host_parent_id: parent.id,
+      host_name: parent.name || resolvedName,
+      host_phone: parent.phone || phone,
+      host_email: parent.email || email,
+      contact_name: parent.name || resolvedName,
+      contact_phone: parent.phone || phone,
+    });
+    const durableActivity = await persistCore('activities', updatedActivity);
+    if (durableActivity?.ok === false) {
+      return res.status(503).json({ error: durableActivity.error || 'קישור הלקוח לאירוע נכשל' });
+    }
+
+    return res.status(existedInCrm ? 200 : 201).json({
+      customer: parent,
+      activity: updatedActivity,
+      resolution: icountMatch
+        ? (existedInCrm ? 'linked' : 'imported')
+        : (existedInCrm ? 'synced' : 'created'),
+    });
+  } catch (error) {
+    console.error('POST activity host-customer failed:', error.message);
+    return res.status(502).json({
+      error: 'בדיקת הלקוח מול iCount נכשלה. לא בוצעה יצירה נוספת כדי למנוע כפילות.',
+    });
+  }
+});
+
 app.post('/api/activities/:id/registration-link', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
@@ -7012,38 +7221,46 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
     let activity = db.getOne('activities', req.params.id);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
-    const hostParentId = req.body?.host_parent_id || activity.host_parent_id || null;
-    if (!hostParentId) {
+    const sendHostPayment = activity.registration_mode === 'host_pays'
+      && req.body?.link_type !== 'participant';
+    const manualRecipient = req.body?.manual_recipient === true;
+    const recipient = resolveEventHostRecipient({
+      parents: db.get('parents') || [],
+      activity,
+      requestedParentId: req.body?.host_parent_id,
+      requestedPhone: req.body?.phone,
+      manualRecipient,
+    });
+    const hostParentId = recipient.parentId;
+    if (!hostParentId && !sendHostPayment) {
       return res.status(400).json({
         error: 'יש לבחור מזמין מתוך לקוחות המערכת לפני השליחה',
       });
     }
 
-    const parent = (db.get('parents') || []).find(
-      (p) => String(p.id) === String(hostParentId)
-    );
-    if (!parent) {
+    const parent = recipient.parent;
+    if (hostParentId && !parent) {
       return res.status(400).json({ error: 'המזמין שנבחר לא נמצא ברשימת הלקוחות' });
     }
 
-    const hostPhone = normalizePhone(parent.phone || req.body?.phone || activity.host_phone);
+    const hostPhone = normalizePhone(recipient.phone);
     if (!hostPhone) {
-      return res.status(400).json({ error: 'ללקוח שנבחר אין מספר טלפון לשליחה בוואטסאפ' });
+      return res.status(400).json({ error: 'יש להזין מספר טלפון לשליחה בוואטסאפ' });
     }
 
-    const hostName = parent.name || activity.host_name || activity.contact_name || '';
+    const hostName = parent?.name || String(req.body?.name || '').trim() || activity.host_name || activity.contact_name || '';
     const hostEmail = String(
-      req.body?.email || parent.email || activity.host_email || ''
+      req.body?.email || parent?.email || activity.host_email || ''
     ).trim();
 
     // Keep snapshot fields in sync with the CRM customer
     activity = db.update('activities', activity.id, {
-      host_parent_id: parent.id,
+      host_parent_id: parent?.id || null,
       host_name: hostName,
-      host_phone: parent.phone || activity.host_phone || '',
+      host_phone: parent?.phone || hostPhone,
       host_email: hostEmail || activity.host_email || '',
       contact_name: hostName,
-      contact_phone: parent.phone || activity.contact_phone || '',
+      contact_phone: parent?.phone || hostPhone,
     }) || activity;
 
     if (!activity.registration_enabled && req.body?.enable !== false) {
@@ -7062,9 +7279,28 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       req,
       activity.participant_registration_slug || activity.registration_slug
     );
-    const sendHostPayment = activity.registration_mode === 'host_pays'
-      && req.body?.link_type !== 'participant';
     if (sendHostPayment) {
+      // The send button lives inside the edit form, so the number and pricing
+      // visible on screen may not have been saved with "Apply" yet. Persist the
+      // billing snapshot supplied by that same screen before freezing the link.
+      const charge = req.body?.charge && typeof req.body.charge === 'object'
+        ? req.body.charge
+        : null;
+      if (charge) {
+        const nonNegativeMoney = (value, fallback) => {
+          const number = Number(value);
+          return Number.isFinite(number) && number >= 0 ? number : fallback;
+        };
+        activity = db.update('activities', activity.id, {
+          charge_basis: normalizeChargeBasis(charge.charge_basis),
+          price: nonNegativeMoney(charge.price, Number(activity.price) || 0),
+          price_includes_vat: normalizePriceIncludesVat(charge.price_includes_vat),
+          min_participants: normalizeCount(charge.min_participants),
+          extra_participant_price: normalizeMoney(charge.extra_participant_price),
+          max_charge: normalizeMoney(charge.max_charge),
+          host_charge_participants: normalizeCount(charge.host_charge_participants),
+        }) || activity;
+      }
       if (!activity.host_payment_token) {
         activity = db.update('activities', activity.id, {
           host_payment_token: makePrivatePaymentToken(),
@@ -7114,7 +7350,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
     let whatsappError = null;
     let whatsappViaTemplate = false;
     if (req.body?.via !== 'email') {
-      const inWindow = canSendFreeform(parent, 'whatsapp');
+      const inWindow = parent ? canSendFreeform(parent, 'whatsapp') : false;
       const preferredMetaName = sendHostPayment
         ? EVENT_HOST_PAYMENT_TEMPLATE
         : EVENT_PARTICIPANT_LINK_TEMPLATE;
@@ -7123,7 +7359,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       const freeformMsg = sendHostPayment
         ? (
           `שלום${hostName ? ` ${hostName}` : ''}!\n` +
-          `קישור פרטי לתשלום עבור "${activity.name}":\n${url}`
+          `קישור פרטי למילוי פרטים ולתשלום עבור "${activity.name}":\n${url}`
         )
         : (
           `שלום${hostName ? ` ${hostName}` : ''}!\n` +
@@ -7143,7 +7379,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
             [hostName || 'לקוח', activity.name || 'אירוע'],
             {
               fallbackName: hostName,
-              parentId: parent.id,
+              parentId: parent?.id || null,
               buttonUrlParam: buttonParam,
             }
           );
@@ -7163,7 +7399,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       if (!whatsappSent && inWindow) {
         const waResult = await whatsappService.sendTextMessage(hostPhone, freeformMsg, false, {
           clip: false,
-          parentId: parent.id,
+          parentId: parent?.id || null,
           source: 'activity_registration',
         });
         if (waResult?.success) {
@@ -7203,9 +7439,10 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       whatsappSent,
       whatsappViaTemplate,
       whatsappError: whatsappSent ? null : whatsappError,
-      host_parent_id: parent.id,
+      host_parent_id: parent?.id || null,
       host_name: hostName,
-      host_phone: parent.phone || '',
+      host_phone: parent?.phone || hostPhone,
+      requires_customer_details: !parent,
     });
   } catch (err) {
     console.error('send-registration-link error:', err.message);
@@ -7365,6 +7602,13 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
+    if (activityIsArchived(activity)) {
+      return res.status(410).json({ error: 'האירוע הועבר לארכיון וקישור התשלום אינו פעיל' });
+    }
+    await readTable('parents');
+    const hostParent = activity.host_parent_id
+      ? (db.get('parents') || []).find((parent) => String(parent.id) === String(activity.host_parent_id)) || null
+      : null;
     const theme = normalizeActivityTheme(
       activity.registration_theme || activity.theme || {}
     );
@@ -7376,6 +7620,8 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       start_time: activity.start_time,
       location: activity.location || '',
       host_name: activity.host_name || activity.contact_name || '',
+      host_phone: activity.host_phone || activity.contact_phone || '',
+      requires_customer_details: !hostParent,
       price: Number(activity.price) || 0,
       price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
       // הסכום לתשלום נקבע כאן ולא בדפדפן: המזמין צריך לראות בדיוק את מה שיחויב,
@@ -7399,6 +7645,136 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
   }
 });
 
+app.post('/api/public/host-payments/:token/customer', publicFormRateLimit, async (req, res) => {
+  try {
+    const { activity, storeAvailable } = await findActivityByHostPaymentToken(req.params.token);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    if (!activity) return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    if (activityIsArchived(activity)) {
+      return res.status(410).json({ error: 'האירוע הועבר לארכיון וקישור התשלום אינו פעיל' });
+    }
+    if (activity.payment_status === 'paid') {
+      return res.json({ success: true, alreadyPaid: true, requires_customer_details: false });
+    }
+
+    const lockedPhone = activity.host_phone || activity.contact_phone || '';
+    const profile = normalizeEventHostProfile(req.body || {}, lockedPhone);
+    await readTable('parents');
+    const parents = db.get('parents') || [];
+    let parent = matchEventHostParent(parents, profile);
+
+    const icountMatches = await icount.findClientsByContact({
+      phone: profile.phone,
+      email: profile.email,
+    });
+    if (icountMatches.length > 1) {
+      return res.status(409).json({
+        error: 'נמצאו כמה לקוחות תואמים ב-iCount. יש לפנות לצוות לפני התשלום.',
+      });
+    }
+    const icountMatch = icountMatches[0] || null;
+    const linkedParent = icountMatch
+      ? parents.find((row) => (
+        String(row.icount_client_id || '') === String(icountMatch.client_id) ||
+        String(row.id) === String(icountMatch.custom_client_id || '')
+      )) || null
+      : null;
+    if (parent && linkedParent && String(parent.id) !== String(linkedParent.id)) {
+      return res.status(409).json({
+        error: 'הפרטים משויכים לשני כרטיסי לקוח שונים. יש לפנות לצוות לפני התשלום.',
+      });
+    }
+    parent = parent || linkedParent;
+    if (
+      parent?.icount_client_id &&
+      icountMatch?.client_id &&
+      String(parent.icount_client_id) !== String(icountMatch.client_id)
+    ) {
+      return res.status(409).json({
+        error: 'כרטיס הלקוח כבר מקושר לתיק iCount אחר. יש לפנות לצוות לפני התשלום.',
+      });
+    }
+
+    const existedInCrm = !!parent;
+    if (parent) {
+      parent = db.update('parents', parent.id, {
+        name: profile.name,
+        lastName: profile.lastName,
+        idNumber: profile.idNumber,
+        phone: profile.phone,
+        email: profile.email,
+        city: profile.city,
+        gender: profile.gender,
+        birthDate: profile.birthDate,
+        relation: parent.relation || profile.relation,
+        source: parent.source || (icountMatch ? 'icount' : 'event'),
+      }) || parent;
+    } else {
+      parent = db.upsertParentByPhone(profile.name, profile.phone, profile.email, {
+        lastName: profile.lastName,
+        idNumber: profile.idNumber,
+        city: profile.city,
+        gender: profile.gender,
+        source: icountMatch ? 'icount' : 'event',
+        channel: 'event',
+        status: 'lead_new',
+      });
+      parent = db.update('parents', parent.id, {
+        birthDate: profile.birthDate,
+        relation: profile.relation,
+      }) || parent;
+    }
+
+    if (icountMatch) {
+      parent = db.update('parents', parent.id, {
+        icount_client_id: String(icountMatch.client_id),
+      }) || parent;
+    } else {
+      const synced = await syncParentToIcount(parent);
+      parent = synced.parent;
+    }
+    const durableParent = await persistCore('parents', parent);
+    if (durableParent?.ok === false) {
+      return res.status(503).json({ error: durableParent.error || 'שמירת פרטי הלקוח נכשלה' });
+    }
+
+    const updatedActivity = db.update('activities', activity.id, {
+      host_parent_id: parent.id,
+      host_name: parent.name,
+      host_phone: parent.phone,
+      host_email: parent.email,
+      contact_name: parent.name,
+      contact_phone: parent.phone,
+    }) || activity;
+    const durableActivity = await persistCore('activities', updatedActivity);
+    if (durableActivity?.ok === false) {
+      return res.status(503).json({ error: durableActivity.error || 'קישור הלקוח לאירוע נכשל' });
+    }
+
+    return res.status(existedInCrm ? 200 : 201).json({
+      success: true,
+      customer: {
+        id: parent.id,
+        name: parent.name,
+        phone: parent.phone,
+        email: parent.email,
+      },
+      requires_customer_details: false,
+      resolution: icountMatch
+        ? (existedInCrm ? 'linked' : 'imported')
+        : (existedInCrm ? 'updated' : 'created'),
+    });
+  } catch (err) {
+    console.error('public host customer save error:', err.message);
+    res.status(err.status || 503).json({
+      error: err.status ? err.message : 'שמירת פרטי הלקוח נכשלה. לא נוצרה כפילות.',
+    });
+  }
+});
+
 app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req, res) => {
   try {
     const { activity, storeAvailable } = await findActivityByHostPaymentToken(req.params.token);
@@ -7408,6 +7784,9 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     }
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    }
+    if (activityIsArchived(activity)) {
+      return res.status(410).json({ error: 'האירוע הועבר לארכיון וקישור התשלום אינו פעיל' });
     }
     if (activity.payment_status === 'paid') {
       return res.json({ success: true, alreadyPaid: true });
@@ -8604,7 +8983,7 @@ app.post('/api/google-calendar/sync', async (req, res) => {
     let pushFailed = 0;
     const pushErrors = [];
     for (const activity of activities) {
-      if (activity.status === 'cancelled') continue;
+      if (['cancelled', 'archived'].includes(String(activity.status || '').toLowerCase())) continue;
       try {
         const updated = await syncActivityToGoogle(activity);
         if (updated?.google_event_id) pushed += 1;
@@ -8745,6 +9124,68 @@ app.post('/api/google-calendar/sync-due', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Google Business Profile — public opening hours on Search/Maps ───────────
+app.get('/api/google-business-profile/status', requireOwner, async (_req, res) => {
+  try {
+    res.json(await googleBusinessProfileService.getStatus());
+  } catch (err) {
+    res.status(500).json({ configured: false, connected: false, ready: false, error: err.message });
+  }
+});
+
+app.get('/api/google-business-profile/auth-url', requireOwner, (_req, res) => {
+  try {
+    res.json({ url: googleBusinessProfileService.getAuthUrl() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-business-profile/oauth/callback', async (req, res) => {
+  const base = googleBusinessProfileService.frontendBase();
+  try {
+    const code = String(req.query.code || '');
+    if (!code) throw new Error('לא התקבל אישור מגוגל');
+    const status = await googleBusinessProfileService.completeOAuth(code);
+    if (status.ready) {
+      await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    }
+    res.redirect(googleBusinessProfileService.oauthCallbackRedirectUrl());
+  } catch (err) {
+    console.error('Google Business Profile OAuth callback failed:', err.message);
+    res.redirect(
+      `${base}/business-settings?tab=integrations&googleBusiness=error&msg=${encodeURIComponent(err.message)}`
+    );
+  }
+});
+
+app.put('/api/google-business-profile/location', requireOwner, async (req, res) => {
+  try {
+    const status = await googleBusinessProfileService.selectLocation(req.body?.locationName);
+    const sync = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    res.json({ ...status, sync });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-business-profile/sync', requireOwner, async (_req, res) => {
+  try {
+    const result = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/google-business-profile/disconnect', requireOwner, async (_req, res) => {
+  try {
+    res.json(await googleBusinessProfileService.disconnect());
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
@@ -12275,17 +12716,31 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
     activity_id,
     employee_ids,
     employee_roles: employeeRoles,
+    employee_assignments: employeeAssignments,
     role: roleOverride,
     pay_mode: payModeOverride,
     flat_amount: flatAmountOverride,
     start_time: startOverride,
     end_time: endOverride,
   } = req.body || {};
+  const assignmentDetails = employeeAssignments
+    && typeof employeeAssignments === 'object'
+    && !Array.isArray(employeeAssignments)
+    ? employeeAssignments
+    : {};
   try {
     rejectWorkPayOverride(req, {
       pay_mode: payModeOverride,
       flat_amount: flatAmountOverride,
     });
+    for (const detail of Object.values(assignmentDetails)) {
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
+      rejectWorkPayOverride(req, {
+        pay_mode: detail.pay_mode,
+        flat_amount: detail.flat_amount,
+        travel_amount: detail.travel_amount,
+      });
+    }
   } catch (error) {
     return res.status(error.statusCode || 403).json({ error: error.message });
   }
@@ -12345,20 +12800,46 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
 
   for (const employeeId of ids) {
     if (alreadyAssigned(employeeId)) continue;
-    const suggestion = explicitTimes
+    const detail = assignmentDetails[employeeId]
+      && typeof assignmentDetails[employeeId] === 'object'
+      && !Array.isArray(assignmentDetails[employeeId])
+      ? assignmentDetails[employeeId]
+      : {};
+    const rowStart = hm(detail.start_time) || eventStart;
+    const rowEnd = hm(detail.end_time) || eventEnd;
+    const rowHasExplicitTimes = !!(
+      (hm(detail.start_time) && hm(detail.end_time)) || explicitTimes
+    );
+    const suggestion = rowHasExplicitTimes
       ? null
-      : suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
+      : suggestHoursFromClock(employeeId, activity.date, rowStart, rowEnd);
+    const rowFlatPay = detail.pay_mode
+      ? detail.pay_mode === 'flat'
+      : flatPay;
+    const rowFlatSource = Object.hasOwn(detail, 'flat_amount')
+      ? detail.flat_amount
+      : flatAmount;
+    const rowTravelAmount = Object.hasOwn(detail, 'travel_amount')
+      ? (detail.travel_amount === '' || detail.travel_amount === null
+        ? null
+        : Math.max(0, Number(detail.travel_amount) || 0))
+      : null;
     const row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id,
       date: activity.date,
       work_type: workType,
-      role: (employeeRoles && employeeRoles[employeeId]) || defaultRole,
-      start_time: suggestion?.start_time || eventStart,
-      end_time: suggestion?.end_time || eventEnd,
-      hours: suggestion?.hours || eventHours,
-      pay_mode: flatPay ? 'flat' : 'hourly',
-      flat_amount: flatAmount,
+      role: Object.hasOwn(detail, 'role')
+        ? (detail.role || null)
+        : ((employeeRoles && employeeRoles[employeeId]) || defaultRole),
+      start_time: suggestion?.start_time || rowStart,
+      end_time: suggestion?.end_time || rowEnd,
+      hours: detail.hours === undefined || detail.hours === null || detail.hours === ''
+        ? (suggestion?.hours || hoursBetweenHm(rowStart, rowEnd) || eventHours)
+        : roundHoursQuarter(detail.hours),
+      pay_mode: rowFlatPay ? 'flat' : 'hourly',
+      flat_amount: rowFlatPay ? (Number(rowFlatSource) || 0) : null,
+      travel_amount: rowTravelAmount,
       source: suggestion ? suggestion.source : 'calendar',
       shift_id: suggestion?.shift_id || null,
       approved: false,
@@ -12374,7 +12855,7 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
 
   res.status(201).json({
     created: created.map((row) => workAssignmentForRequest(req, row)),
-    existing_count: existing.length,
+    existing_count: ids.length - created.length,
   });
 });
 
@@ -19157,6 +19638,26 @@ app.listen(PORT, () => {
     setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
   } else {
     console.log('📅 Google Calendar background sync disabled on this process (local/dev)');
+  }
+
+  // The rolling two-week window advances every day even when nobody edits the
+  // calendar, so refresh Google Maps/Search periodically as a safety net.
+  const runBusinessHoursSyncIfConnected = async () => {
+    try {
+      if (!googleBusinessProfileService.backgroundSyncEnabled()) return;
+      const status = await googleBusinessProfileService.getStatus();
+      if (!status.ready) return;
+      const result = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+      if (result?.success) {
+        console.log(`🕒 Google Business Profile hours sync: ${result.startDate}–${result.endDate}`);
+      }
+    } catch (err) {
+      console.error('Periodic Google Business Profile sync failed:', err.message);
+    }
+  };
+  if (googleBusinessProfileService.backgroundSyncEnabled()) {
+    setTimeout(() => { runBusinessHoursSyncIfConnected(); }, 120_000);
+    setInterval(() => { runBusinessHoursSyncIfConnected(); }, 6 * 60 * 60 * 1000);
   }
 
   // Meta WhatsApp template statuses (PENDING → APPROVED/REJECTED)

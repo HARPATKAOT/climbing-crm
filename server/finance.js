@@ -183,3 +183,217 @@ export function buildDashboard({ documents = [], expenses = [], payments = [], f
     },
   };
 }
+
+const paymentMethodLabel = (method) => ({
+  credit_card: 'אשראי',
+  card: 'אשראי',
+  cc: 'אשראי',
+  online: 'אשראי אונליין',
+  emv: 'אשראי בקופה',
+  cash: 'מזומן',
+  bank_transfer: 'העברה בנקאית',
+  banktransfer: 'העברה בנקאית',
+  cheque: 'המחאה',
+  paypal: 'PayPal',
+  barter: 'ברטר',
+}[String(method || '').toLowerCase()] || String(method || 'לא ידוע'));
+
+function addAggregate(map, key, base, amount, customerId) {
+  const current = map.get(key) || { ...base, deals: 0, revenue: 0, refunds: 0, customers: new Set() };
+  current.deals += 1;
+  current.revenue += amount;
+  if (amount < 0) current.refunds += Math.abs(amount);
+  if (customerId) current.customers.add(String(customerId));
+  map.set(key, current);
+}
+
+function finalizeAggregate(map, sort = 'revenue') {
+  return [...map.values()]
+    .map((row) => ({
+      ...row,
+      revenue: roundFinance(row.revenue),
+      refunds: roundFinance(row.refunds),
+      customers: row.customers.size,
+    }))
+    .sort((a, b) => sort === 'date'
+      ? String(b.date).localeCompare(String(a.date))
+      : Math.abs(b.revenue) - Math.abs(a.revenue));
+}
+
+/**
+ * Build operational sales views from the accounting documents and the CRM
+ * links that already connect a receipt to a POS sale or event registration.
+ * No fuzzy matching is used here: an event is shown only when its payment is
+ * explicitly linked, so the financial report never invents attribution.
+ */
+export function buildSalesBreakdown({
+  documents = [],
+  lines = [],
+  paymentEvents = [],
+  payments = [],
+  posSales = [],
+  registrations = [],
+  activities = [],
+  from,
+  to,
+} = {}) {
+  const linesByDocument = new Map();
+  for (const line of lines) {
+    const rows = linesByDocument.get(line.document_id) || [];
+    rows.push(line);
+    linesByDocument.set(line.document_id, rows);
+  }
+  const paymentEventsByDocument = new Map();
+  for (const payment of paymentEvents) {
+    const rows = paymentEventsByDocument.get(payment.document_id) || [];
+    rows.push(payment);
+    paymentEventsByDocument.set(payment.document_id, rows);
+  }
+  const paymentsByDocnum = new Map(payments
+    .filter((row) => row.icount_doc_number)
+    .map((row) => [String(row.icount_doc_number), row]));
+  const salesByPayment = new Map(posSales.filter((row) => row.payment_id).map((row) => [String(row.payment_id), row]));
+  const salesByDocnum = new Map(posSales.filter((row) => row.icount_doc_number).map((row) => [String(row.icount_doc_number), row]));
+  const registrationsByPayment = new Map();
+  for (const registration of registrations) {
+    if (!registration.payment_id) continue;
+    const rows = registrationsByPayment.get(String(registration.payment_id)) || [];
+    rows.push(registration);
+    registrationsByPayment.set(String(registration.payment_id), rows);
+  }
+  const activityById = new Map(activities.map((row) => [String(row.id), row]));
+  const activityByHostPayment = new Map(activities
+    .filter((row) => row.host_payment_id)
+    .map((row) => [String(row.host_payment_id), row]));
+
+  const daily = new Map();
+  const events = new Map();
+  const products = new Map();
+  const methods = new Map();
+  const customers = new Map();
+  const deals = [];
+
+  for (const document of documents) {
+    if (!dateInRange(document.document_date, from, to)) continue;
+    const classification = classifyDocument(document.doctype, {
+      isStorno: document.is_storno,
+      total: document.total_gross,
+    });
+    if (!classification.recognized) continue;
+    const amount = roundFinance(Math.abs(Number(document.total_gross) || 0) * classification.sign);
+    const linkedPayment = paymentsByDocnum.get(String(document.docnum || '')) || null;
+    const sale = (linkedPayment && salesByPayment.get(String(linkedPayment.id)))
+      || salesByDocnum.get(String(document.docnum || ''))
+      || null;
+    const registrationsForPayment = linkedPayment
+      ? registrationsByPayment.get(String(linkedPayment.id)) || []
+      : [];
+    const linkedActivities = [...new Map([
+      ...(linkedPayment && activityByHostPayment.get(String(linkedPayment.id))
+        ? [activityByHostPayment.get(String(linkedPayment.id))]
+        : []),
+      ...registrationsForPayment.map((row) => activityById.get(String(row.activity_id))).filter(Boolean),
+    ].map((row) => [String(row.id), row])).values()];
+    const documentLines = linesByDocument.get(document.id) || [];
+    const eventLabels = linkedActivities.map((row) => row.name || 'אירוע ללא שם');
+    const itemLabels = (sale?.items || documentLines)
+      .map((row) => row.name || row.description)
+      .filter(Boolean);
+    const paymentMethods = paymentEventsByDocument.get(document.id) || [];
+    const fallbackMethod = linkedPayment?.payment_method || sale?.payment_method || '';
+
+    const deal = {
+      id: document.id,
+      date: document.document_date,
+      document_number: document.docnum || '',
+      doctype: document.doctype,
+      customer_id: document.client_id || linkedPayment?.parent_id || null,
+      customer_name: document.client_name || sale?.customer_name || 'לקוח ללא שם',
+      amount,
+      event_ids: linkedActivities.map((row) => row.id),
+      events: eventLabels,
+      products: itemLabels,
+      payment_methods: paymentMethods.length
+        ? [...new Set(paymentMethods.map((row) => paymentMethodLabel(row.method)))]
+        : [paymentMethodLabel(fallbackMethod)],
+      source_url: document.source_url || sale?.icount_doc_url || linkedPayment?.icount_doc_url || null,
+      kind: linkedActivities.length ? 'event' : (sale || documentLines.length ? 'product' : 'general'),
+    };
+    deals.push(deal);
+
+    addAggregate(daily, document.document_date, { date: document.document_date, label: document.document_date }, amount, deal.customer_id);
+    const customerKey = String(deal.customer_id || deal.customer_name);
+    addAggregate(customers, customerKey, { id: deal.customer_id, name: deal.customer_name }, amount, deal.customer_id || deal.customer_name);
+
+    if (linkedActivities.length) {
+      const share = amount / linkedActivities.length;
+      linkedActivities.forEach((activity) => addAggregate(events, String(activity.id), {
+        id: activity.id,
+        name: activity.name || 'אירוע ללא שם',
+        event_date: activity.date || null,
+        event_type: activity.event_kind || activity.type || '',
+      }, share, deal.customer_id));
+    }
+
+    const rawItems = sale?.items?.length ? sale.items.map((item) => ({
+      id: item.pricelist_id || item.name,
+      name: item.name || item.description || 'מוצר ללא שם',
+      quantity: Number(item.quantity) || 1,
+      amount: (Number(item.unitprice) || 0) * (Number(item.quantity) || 1),
+    })) : documentLines
+      .filter((line) => Number(line.line_gross) > 0 && !/^הנחה\s*:/i.test(String(line.description || '')))
+      .map((line) => ({
+        id: line.item_id || line.sku || line.description,
+        name: line.description || 'מוצר ללא שם',
+        quantity: Number(line.quantity) || 1,
+        amount: Number(line.line_gross) || 0,
+      }));
+    const itemTotal = rawItems.reduce((sum, row) => sum + Math.abs(row.amount), 0);
+    rawItems.forEach((item) => {
+      const itemAmount = itemTotal ? amount * Math.abs(item.amount) / itemTotal : amount / Math.max(1, rawItems.length);
+      const key = String(item.id || item.name);
+      const current = products.get(key) || { id: item.id || null, name: item.name, quantity: 0, deals: 0, revenue: 0, refunds: 0, customers: new Set() };
+      current.quantity += amount < 0 ? -Math.abs(item.quantity) : Math.abs(item.quantity);
+      current.deals += 1;
+      current.revenue += itemAmount;
+      if (itemAmount < 0) current.refunds += Math.abs(itemAmount);
+      if (deal.customer_id) current.customers.add(String(deal.customer_id));
+      products.set(key, current);
+    });
+
+    if (paymentMethods.length) {
+      const totalPayments = paymentMethods.reduce((sum, row) => sum + Math.abs(Number(row.amount) || 0), 0);
+      paymentMethods.forEach((payment) => {
+        const methodAmount = totalPayments ? amount * Math.abs(Number(payment.amount) || 0) / totalPayments : amount / paymentMethods.length;
+        const key = paymentMethodLabel(payment.method);
+        addAggregate(methods, key, { method: key }, methodAmount, deal.customer_id);
+      });
+    } else {
+      const key = paymentMethodLabel(fallbackMethod);
+      addAggregate(methods, key, { method: key }, amount, deal.customer_id);
+    }
+  }
+
+  return {
+    summary: {
+      deals: deals.length,
+      revenue: roundFinance(deals.reduce((sum, row) => sum + row.amount, 0)),
+      refunds: roundFinance(deals.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0)),
+      customers: new Set(deals.map((row) => row.customer_id || row.customer_name).filter(Boolean)).size,
+      linked_to_event: deals.filter((row) => row.events.length).length,
+      with_product_detail: deals.filter((row) => row.products.length).length,
+    },
+    deals: deals.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.document_number).localeCompare(String(a.document_number))),
+    daily: finalizeAggregate(daily, 'date'),
+    events: finalizeAggregate(events),
+    products: [...products.values()].map((row) => ({
+      ...row,
+      quantity: roundFinance(row.quantity),
+      revenue: roundFinance(row.revenue),
+      refunds: roundFinance(row.refunds),
+      customers: row.customers.size,
+    })).sort((a, b) => Math.abs(b.revenue) - Math.abs(a.revenue)),
+    payment_methods: finalizeAggregate(methods),
+    customers: finalizeAggregate(customers).slice(0, 20),
+  };
+}

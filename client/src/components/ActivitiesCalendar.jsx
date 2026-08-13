@@ -43,6 +43,10 @@ import {
 } from '../utils/calendarDisplayFields.js';
 import AppSelect from './AppSelect.jsx';
 import { normalizeParticipationScope } from '../utils/participationDocuments.js';
+import {
+  participationTemplateForActivity,
+  participationTemplateScope,
+} from '../utils/activityParticipationForm.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -193,6 +197,7 @@ const SOURCE_LABELS = {
 
 
 const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+const HEB_WEEKDAYS_FULL = ['יום ראשון', 'יום שני', 'יום שלישי', 'יום רביעי', 'יום חמישי', 'יום שישי', 'יום שבת'];
 const HEB_MONTHS = [
   'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
@@ -383,15 +388,23 @@ function formatListDateRange(activity) {
   const startLabel = (() => {
     const d = parseDateStr(start);
     if (!d) return start;
-    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+    return `${HEB_WEEKDAYS_FULL[d.getDay()]} · ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
   })();
   if (!end || end === start) return startLabel;
   const endLabel = (() => {
     const d = parseDateStr(end);
     if (!d) return end;
-    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+    return `${HEB_WEEKDAYS_FULL[d.getDay()]} · ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
   })();
   return `${startLabel} ← ${endLabel}`;
+}
+
+function formatListTimeRange(activity) {
+  if (activity?.all_day) return 'יום שלם';
+  const start = activity?.start_time ? String(activity.start_time).slice(0, 5) : '';
+  const end = activity?.end_time ? String(activity.end_time).slice(0, 5) : '';
+  if (start && end) return `${start}–${end}`;
+  return start || end || '—';
 }
 
 function emptyForm(dateStr = '', opts = {}) {
@@ -438,6 +451,9 @@ function emptyForm(dateStr = '', opts = {}) {
     registration_page_title: '',
     registration_page_body: '',
     registration_closes_at: '',
+    form_template_id: null,
+    form_template_slug: '',
+    participation_scope: '',
     registration_theme: {},
     price: '',
     max_participants: '',
@@ -571,20 +587,39 @@ function WorkAssignmentsBlock({
   // Before the event exists there is nothing to attach a row to, so the picked
   // employees wait on the form and become real rows the moment it is saved.
   const draftIds = draftMode ? (draft.employeeIds || []) : [];
+  const draftDetails = draftMode ? (draft.details || {}) : {};
   const draftRows = draftMode
-    ? draftIds.map((employeeId) => ({
-      id: `draft-${employeeId}`,
-      employee_id: employeeId,
-      work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
-      // ההערכה משקפת את הגדרת התשלום של האירוע — תפקיד או סכום גלובלי.
-      role: staffPay?.role || null,
-      start_time: shiftStart,
-      end_time: shiftEnd,
-      hours: hoursFromTimes(shiftStart, shiftEnd) ?? 2,
-      pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
-      flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
-    }))
+    ? draftIds.map((employeeId) => {
+      const detail = draftDetails[employeeId] || {};
+      const startTime = detail.start_time || shiftStart;
+      const endTime = detail.end_time || shiftEnd;
+      return {
+        id: `draft-${employeeId}`,
+        employee_id: employeeId,
+        work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
+        // לכל עובד נשמרת טיוטה משלו. ברירת המחדל מגיעה מהאירוע, אבל שינוי
+        // תפקיד, סכום או נסיעות בשורה אחת אינו משנה את שאר העובדים.
+        role: Object.hasOwn(detail, 'role') ? detail.role : (staffPay?.role || null),
+        start_time: startTime,
+        end_time: endTime,
+        hours: detail.hours ?? hoursFromTimes(startTime, endTime) ?? 2,
+        pay_mode: detail.pay_mode || (staffPay?.mode === 'flat' ? 'flat' : 'hourly'),
+        flat_amount: Object.hasOwn(detail, 'flat_amount')
+          ? detail.flat_amount
+          : (staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : ''),
+        travel_amount: Object.hasOwn(detail, 'travel_amount') ? detail.travel_amount : '',
+      };
+    })
     : [];
+
+  const removeDraftAssignment = (employeeId) => {
+    draft.setEmployeeIds(draftIds.filter((id) => id !== employeeId));
+    draft.setDetails?.((prev) => {
+      const next = { ...(prev || {}) };
+      delete next[employeeId];
+      return next;
+    });
+  };
 
   const addFromPlan = async () => {
     if (!selectedIds.length) {
@@ -592,7 +627,25 @@ function WorkAssignmentsBlock({
       return;
     }
     if (draftMode) {
-      draft.setEmployeeIds([...draftIds, ...selectedIds.filter((id) => !draftIds.includes(id))]);
+      const newIds = selectedIds.filter((id) => !draftIds.includes(id));
+      draft.setEmployeeIds([...draftIds, ...newIds]);
+      draft.setDetails?.((prev) => {
+        const next = { ...(prev || {}) };
+        for (const employeeId of newIds) {
+          next[employeeId] = {
+            role: staffPay?.role || null,
+            start_time: shiftStart,
+            end_time: shiftEnd,
+            hours: hoursFromTimes(shiftStart, shiftEnd) ?? 2,
+            ...(canViewHr ? {
+              pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
+              flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
+              travel_amount: '',
+            } : {}),
+          };
+        }
+        return next;
+      });
       // השעות שנבחרו נוסעות עם הטופס, כדי שהשורות שייווצרו בשמירה יהיו אותן שעות.
       draft.setTimes?.(partialHours ? { start: shiftStart, end: shiftEnd } : null);
       setSelectedIds([]);
@@ -687,6 +740,21 @@ function WorkAssignmentsBlock({
   };
 
   const patchLocal = (id, patch) => {
+    if (draftMode) {
+      const employeeId = draftRows.find((row) => row.id === id)?.employee_id;
+      if (!employeeId) return;
+      draft.setDetails?.((prev) => {
+        const current = { ...(prev?.[employeeId] || {}) };
+        const next = { ...current, ...patch };
+        if ('start_time' in patch || 'end_time' in patch) {
+          const computed = hoursFromTimes(next.start_time, next.end_time);
+          if (computed != null) next.hours = computed;
+        }
+        if (patch.pay_mode === 'hourly') next.flat_amount = '';
+        return { ...(prev || {}), [employeeId]: next };
+      });
+      return;
+    }
     setRows((prev) => prev.map((r) => {
       if (r.id !== id) return r;
       const next = { ...r, ...patch };
@@ -779,8 +847,8 @@ function WorkAssignmentsBlock({
 
         {draftMode && canViewHr && (
           <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
-            אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה, והשיבוץ עצמו
-            ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
+            אפשר לבחור עובדים כבר עכשיו ולערוך לכל אחד תפקיד, תשלום ונסיעות.
+            השיבוץ ייווצר יחד עם שמירת האירוע.
           </div>
         )}
 
@@ -1015,7 +1083,7 @@ function WorkAssignmentsBlock({
                   title="הסר"
                   disabled={busy}
                   onClick={() => draftMode
-                    ? draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))
+                    ? removeDraftAssignment(row.employee_id)
                     : deleteRow(row.id)}
                 ><Trash2 size={13} /></button>
               </div>
@@ -1023,59 +1091,9 @@ function WorkAssignmentsBlock({
           ))}
           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נתוני שכר ותעריפים מוסתרים לפי ההרשאות שלך.</div>
         </div>
-      ) : draftMode ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {draftRows.map((row) => {
-            const agreement = agreementFor(row.employee_id);
-            const rate = rateForRow(agreement, row);
-            const amount = payAmountForAssignment(row, agreement);
-            return (
-              <div
-                key={row.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  padding: '6px 8px',
-                  borderRadius: 8,
-                  border: '1px dashed var(--border)',
-                  background: 'rgba(255,255,255,0.02)',
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <EntityLink kind="employee" id={row.employee_id} title="מעבר לתיק העובד">
-                      {empName(row.employee_id)}
-                    </EntityLink>
-                    {empPaymentMethod(row.employee_id) && (
-                      <PaymentMethodBadge method={empPaymentMethod(row.employee_id)} compact />
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                    {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
-                    {row.pay_mode === 'flat'
-                      ? 'סכום מיוחד ליום הזה'
-                      : rateLabelForRow(agreement, row, payableRoles)} · הערכה ₪{amount}
-                    {' '}{amountBasisLabel(empPaymentMethod(row.employee_id))}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() => draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))}
-                  aria-label="הסרת עובד"
-                  title="הסרה"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map((row) => {
+          {shownRows.map((row) => {
             const agreement = agreementFor(row.employee_id);
             const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
             const rate = rateForRow(agreement, row);
@@ -1108,7 +1126,7 @@ function WorkAssignmentsBlock({
                       </EntityLink>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                      {SOURCE_LABELS[row.source] || row.source}
+                      {draftMode ? 'טיוטה — יישמר עם האירוע' : (SOURCE_LABELS[row.source] || row.source)}
                       {row.approved ? ' · מאושר' : ''}
                     </div>
                   </div>
@@ -1203,21 +1221,23 @@ function WorkAssignmentsBlock({
                         <CalendarClock size={12} />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-xs"
-                      title="שמור"
-                      disabled={busy}
-                      onClick={() => saveRow(row)}
-                    >
-                      <Save size={12} />
-                    </button>
+                    {!draftMode && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        title="שמור"
+                        disabled={busy}
+                        onClick={() => saveRow(row)}
+                      >
+                        <Save size={12} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon btn-xs"
                       title="מחק"
                       disabled={busy}
-                      onClick={() => deleteRow(row.id)}
+                      onClick={() => draftMode ? removeDraftAssignment(row.employee_id) : deleteRow(row.id)}
                       style={{ color: '#F87171' }}
                     >
                       <Trash2 size={12} />
@@ -1456,6 +1476,7 @@ function RegularActivityModal({
   canViewFinance,
   canViewHr,
   onStaffChanged = null,
+  confirmNavigation = null,
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
   const isTemplateCreate = isTemplateEdit && !initial?._template_id;
@@ -1480,6 +1501,8 @@ function RegularActivityModal({
   const [templateTarget, setTemplateTarget] = useState('');
   const [templateLoading, setTemplateLoading] = useState(false);
   const templateMenuRef = useRef(null);
+  const [participationTemplates, setParticipationTemplates] = useState([]);
+  const [participationTemplatesLoading, setParticipationTemplatesLoading] = useState(false);
 
   useEffect(() => {
     if (!templateMenuOpen) return undefined;
@@ -1508,6 +1531,35 @@ function RegularActivityModal({
       .finally(() => { if (active) setTemplateLoading(false); });
     return () => { active = false; };
   }, [needTemplates, templateOptions.length]);
+
+  useEffect(() => {
+    if (isOps || isTemplateEdit) return undefined;
+    let active = true;
+    setParticipationTemplatesLoading(true);
+    fetch('/api/form-templates')
+      .then(async (response) => {
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error('טעינת טופסי ההשתתפות נכשלה');
+        if (active) setParticipationTemplates(
+          (Array.isArray(body) ? body : []).filter((item) => item.isActive !== false)
+        );
+      })
+      .catch(() => { if (active) setParticipationTemplates([]); })
+      .finally(() => { if (active) setParticipationTemplatesLoading(false); });
+    return () => { active = false; };
+  }, [isOps, isTemplateEdit]);
+
+  const selectedParticipationTemplate = participationTemplateForActivity(form, participationTemplates);
+
+  const selectParticipationTemplate = (template) => {
+    if (readOnly || !template) return;
+    setForm((prev) => ({
+      ...prev,
+      form_template_id: template.id || null,
+      form_template_slug: template.slug || '',
+      participation_scope: participationTemplateScope(template),
+    }));
+  };
 
   const saveAsTemplate = (event, action) => {
     setTemplateMenuOpen(false);
@@ -1605,6 +1657,56 @@ function RegularActivityModal({
           )}
 
           <div className="activity-modal-operations">
+            {isOps && (
+              <section className="activity-settings-card" style={{ '--card-accent': 'var(--blue)' }}>
+                <div className="activity-settings-card-title">
+                  <SlidersHorizontal aria-hidden="true" />
+                  פרטי הפעילות
+                </div>
+                <label>
+                  <span className="activity-settings-label">כותרת</span>
+                  <input
+                    className={`input${showError && !String(form.name || '').trim() ? ' input-error' : ''}`}
+                    value={form.name || ''}
+                    onChange={(event) => set('name', event.target.value)}
+                    placeholder="למשל: שעות פתיחה"
+                    required
+                    autoFocus={!readOnly}
+                    disabled={readOnly}
+                  />
+                </label>
+                {form.type === 'opening_hours' && (
+                  <div>
+                    <span className="activity-settings-label">פרסום שעות הפתיחה</span>
+                    <div className="choice-row" style={{ marginTop: 4 }}>
+                      <button
+                        type="button"
+                        className={`choice-pill ${form.status === 'draft' ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#FBBF24' }}
+                        disabled={readOnly}
+                        onClick={() => set('status', 'draft')}
+                      >
+                        <Clock3 size={13} /> אירוע בהכנה
+                      </button>
+                      <button
+                        type="button"
+                        className={`choice-pill ${form.status !== 'draft' ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#34D399' }}
+                        disabled={readOnly}
+                        onClick={() => set('status', 'open')}
+                      >
+                        <Globe size={13} /> מפורסם באתר ובבוט
+                      </button>
+                    </div>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                      {form.status === 'draft'
+                        ? 'נשמר ביומן הפנימי בלבד — לא מופיע באתר ולא זמין לתשובות הבוט.'
+                        : 'השעות מוצגות באתר וזמינות לבוט כשהוא עונה ללקוחות.'}
+                    </span>
+                  </div>
+                )}
+              </section>
+            )}
             {(isTemplateEdit || !isOps) && (
             <section className="activity-settings-card" style={{ '--card-accent': 'var(--blue)' }}>
               <div className="activity-settings-card-title">
@@ -1738,7 +1840,7 @@ function RegularActivityModal({
                 {!isOps && (
                   <div>
                     <span className="activity-settings-label">מי יכול להירשם</span>
-                    <div className="choice-row" style={{ marginTop: 4 }}>
+                    <div className="choice-row choice-row--visibility" style={{ marginTop: 4 }}>
                       {VISIBILITY_CHOICES.map(({ value, label, icon: Icon, accent }) => (
                         <button
                           key={value}
@@ -1748,7 +1850,7 @@ function RegularActivityModal({
                           disabled={readOnly}
                           onClick={() => setForm((prev) => ({ ...prev, ...visibilityFields(value) }))}
                         >
-                          <Icon size={14} /> {label}
+                          <Icon size={13} /> {label}
                         </button>
                       ))}
                     </div>
@@ -1758,10 +1860,49 @@ function RegularActivityModal({
                   </div>
                 )}
               </div>
-              {/* בורר ההצהרה הוסר: סוג הפעילות כבר קובע על מה חותמים.
-                  `declarationSlugForActivity` בשרת בוחר את ההצהרה לפי הסוג,
-                  וטיול מחתים על הצהרת הטיול בלי שאיש יבחר. שדה שהתשובה שלו
-                  תמיד „לפי סוג הפעילות” הוא שאלה מיותרת. */}
+              {!isTemplateEdit && !isOps && (
+                <div className="activity-participation-form-field">
+                  <div className="activity-settings-label activity-participation-form-label">
+                    <span><FileStack size={14} /> אישור השתתפות נדרש</span>
+                    {selectedParticipationTemplate && (
+                      <strong>{templateKind(selectedParticipationTemplate).label}</strong>
+                    )}
+                  </div>
+                  <div className="activity-participation-form-options" role="radiogroup" aria-label="אישור השתתפות נדרש">
+                    {participationTemplates.map((template) => {
+                      const kind = templateKind(template);
+                      const KindIcon = kind.Icon || GENERIC_KIND.Icon;
+                      const selected = String(selectedParticipationTemplate?.id || '') === String(template.id || '');
+                      return (
+                        <button
+                          key={template.id || template.slug}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          className={selected ? 'is-selected' : ''}
+                          disabled={readOnly}
+                          onClick={() => selectParticipationTemplate(template)}
+                          style={{ '--participation-form-color': kind.color }}
+                        >
+                          <span className="activity-participation-form-icon"><KindIcon size={18} /></span>
+                          <span className="activity-participation-form-copy">
+                            <strong>{kind.key === GENERIC_KIND.key ? template.title : kind.label}</strong>
+                          </span>
+                          <span className="activity-participation-form-check" aria-hidden="true">
+                            {selected ? <Check size={14} /> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {participationTemplatesLoading && (
+                    <span className="activity-participation-form-status"><Loader2 size={12} className="spin" /> טוען טפסים…</span>
+                  )}
+                  {!participationTemplatesLoading && !participationTemplates.length && (
+                    <span className="activity-participation-form-status is-error">לא נמצאו טופסי השתתפות פעילים</span>
+                  )}
+                </div>
+              )}
             </section>
             )}
 
@@ -2096,6 +2237,7 @@ function RegularActivityModal({
                 canViewFinance={canViewFinance}
                 hideRegistrationToggle
                 templateMode={isTemplateEdit}
+                confirmNavigation={confirmNavigation}
               />
             )}
 
@@ -2131,6 +2273,13 @@ function RegularActivityModal({
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
                   setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                  details: form._pending_staff_details || {},
+                  setDetails: (updater) => setForm((prev) => ({
+                    ...prev,
+                    _pending_staff_details: typeof updater === 'function'
+                      ? updater(prev._pending_staff_details || {})
+                      : updater,
+                  })),
                   setTimes: (times) => setForm((prev) => ({ ...prev, _pending_staff_times: times })),
                   activityType: form.type,
                   startTime: form.start_time,
@@ -2289,8 +2438,8 @@ function visibilityFields(value) {
 
 /** Grey is off, blue is a link you hand out, green is out in the world. */
 const VISIBILITY_CHOICES = [
+  { value: 'closed', label: 'אירוע בהכנה', icon: Lock, accent: 'var(--text-3)' },
   { value: 'idea', label: 'רעיון', icon: Lightbulb, accent: '#FBBF24' },
-  { value: 'closed', label: 'סגור', icon: Lock, accent: 'var(--text-3)' },
   { value: 'link', label: 'קישור פרטי', icon: Link2, accent: '#A78BFA' },
   { value: 'public', label: 'מפורסם', icon: Globe, accent: '#34D399' },
 ];
@@ -2301,6 +2450,31 @@ const VISIBILITY_HINTS = {
   link: 'הקישור עובד ומי שקיבל אותו יכול להירשם, אבל הפעילות לא מפורסמת והבוט לא מזכיר אותה. כך נשאר אירוע פרטי.',
   public: 'הפעילות מופיעה באתר, והבוט מציע אותה ללקוחות ששואלים על טיולים ואירועים.',
 };
+
+const UNSAVED_ACTIVITY_IGNORED_FIELDS = new Set([
+  // These fields may be refreshed from the server while the editor is open.
+  // They are not unsaved form work and must not create a false exit warning.
+  'payment_status',
+  'host_paid_at',
+  'created_at',
+  'updated_at',
+  'synced_at',
+]);
+
+function stableActivityDraft(value) {
+  if (Array.isArray(value)) return value.map(stableActivityDraft);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .filter((key) => !UNSAVED_ACTIVITY_IGNORED_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableActivityDraft(value[key])])
+  );
+}
+
+function activityDraftSnapshot(form) {
+  return JSON.stringify(stableActivityDraft(form));
+}
 
 function ActivityFormModal({
   initial,
@@ -2372,8 +2546,10 @@ function ActivityFormModal({
     staff_flat_amount: initial?.staff_flat_amount ?? '',
   }));
   const [localError, setLocalError] = useState('');
+  const savedDraftRef = useRef(activityDraftSnapshot(form));
   const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
+  const hasUnsavedChanges = !readOnly && activityDraftSnapshot(form) !== savedDraftRef.current;
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
   const selectedCalendarName = isOverlay
     ? (externalCalendars.find((c) => c.id === form.calendar_id)?.name || initial?.calendar_name || '')
@@ -2384,6 +2560,39 @@ function ActivityFormModal({
     setLocalError('');
     setForm((prev) => ({ ...prev, [key]: value }));
   };
+
+  const confirmDiscard = useCallback(() => (
+    !hasUnsavedChanges || window.confirm('יש שינויים באירוע שלא נשמרו. לצאת בלי לשמור?')
+  ), [hasUnsavedChanges]);
+
+  const requestClose = useCallback(() => {
+    if (saving || !confirmDiscard()) return;
+    onClose();
+  }, [confirmDiscard, onClose, saving]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const guardLinkNavigation = (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+      if (confirmDiscard()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener('click', guardLinkNavigation, true);
+    return () => document.removeEventListener('click', guardLinkNavigation, true);
+  }, [confirmDiscard, hasUnsavedChanges]);
 
   const permittedPayload = (payload) => {
     const next = { ...payload };
@@ -2402,7 +2611,7 @@ function ActivityFormModal({
     return next;
   };
 
-  const submit = (e, options = {}) => {
+  const submit = async (e, options = {}) => {
     e.preventDefault();
     if (readOnly) return;
     if (!String(form.name || '').trim()) {
@@ -2442,7 +2651,7 @@ function ActivityFormModal({
     const closeAfter = options.closeAfter !== false;
 
     if (isTemplateEdit) {
-      onSave(permittedPayload({
+      await onSave(permittedPayload({
         _editing_template: true,
         _template_id: initial._template_id,
         name: String(form.name).trim(),
@@ -2492,7 +2701,7 @@ function ActivityFormModal({
         setLocalError('בחרו יומן יעד');
         return;
       }
-      onSave({
+      const saved = await onSave({
         ...form,
         end_date: endDateNorm || null,
         overlay: true,
@@ -2501,9 +2710,10 @@ function ActivityFormModal({
         google_event_id: initial.google_event_id || '',
         closeAfter,
       });
+      if (saved !== false && !closeAfter) savedDraftRef.current = activityDraftSnapshot(form);
       return;
     }
-    onSave(permittedPayload({
+    const saved = await onSave(permittedPayload({
       ...form,
       end_date: endDateNorm || null,
       staff_role: form.staff_role || null,
@@ -2520,6 +2730,9 @@ function ActivityFormModal({
       _save_as_template: options.saveAsTemplate || null,
       closeAfter,
     }));
+    if (saved !== false && !closeAfter && !options.saveAsTemplate) {
+      savedDraftRef.current = activityDraftSnapshot(form);
+    }
   };
 
   const title = readOnly
@@ -2546,7 +2759,7 @@ function ActivityFormModal({
         initial={initial}
         onDelete={onDelete}
         onDuplicate={onDuplicate}
-        onClose={onClose}
+        onClose={requestClose}
         saving={saving}
         showError={showError}
         submit={submit}
@@ -2554,6 +2767,7 @@ function ActivityFormModal({
         canViewFinance={canViewFinance}
         canViewHr={canViewHr}
         onStaffChanged={onStaffChanged}
+        confirmNavigation={confirmDiscard}
       />
     );
   }
@@ -2565,7 +2779,7 @@ function ActivityFormModal({
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 200, padding: 16,
       }}
-      onClick={onClose}
+      onClick={requestClose}
     >
       <form
         onClick={(e) => e.stopPropagation()}
@@ -2599,7 +2813,7 @@ function ActivityFormModal({
               </div>
             )}
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="סגור">
+          <button type="button" className="icon-btn" onClick={requestClose} aria-label="סגור">
             <X size={16} />
           </button>
         </div>
@@ -2838,6 +3052,7 @@ function ActivityFormModal({
               canViewFinance={canViewFinance}
               // The same decision is made once, above, by "מי יכול להירשם".
               hideRegistrationToggle
+              confirmNavigation={confirmDiscard}
             />
           )}
 
@@ -2855,6 +3070,13 @@ function ActivityFormModal({
               draft={isEdit ? null : {
                 employeeIds: form._pending_employee_ids || [],
                 setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                details: form._pending_staff_details || {},
+                setDetails: (updater) => setForm((prev) => ({
+                  ...prev,
+                  _pending_staff_details: typeof updater === 'function'
+                    ? updater(prev._pending_staff_details || {})
+                    : updater,
+                })),
                 activityType: form.type,
                 startTime: form.start_time,
                 endTime: form.end_time,
@@ -2899,7 +3121,7 @@ function ActivityFormModal({
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, marginInlineStart: 'auto' }}>
-            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
+            <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={saving}>
               {readOnly ? 'סגור' : 'ביטול'}
             </button>
             {!readOnly && (
@@ -2981,6 +3203,25 @@ function PaymentStatusIcon({ status, size = 12, perParticipant = false }) {
   );
 }
 
+function PublicationStatusIcon({ activity, size = 12 }) {
+  const published = activity.type === 'opening_hours'
+    ? activity.status !== 'draft'
+    : !!activity.show_on_site;
+  const Icon = published ? Globe : Clock3;
+  const label = published ? 'מפורסם באתר ובבוט' : 'לא מפורסם';
+  const color = published ? '#34D399' : '#FBBF24';
+
+  return (
+    <span
+      title={`סטטוס פרסום: ${label}`}
+      aria-label={`סטטוס פרסום: ${label}`}
+      style={{ display: 'inline-flex', color, flexShrink: 0 }}
+    >
+      <Icon size={size} strokeWidth={2.4} aria-hidden="true" />
+    </span>
+  );
+}
+
 function EventChip({ activity, onClick, draggable = true }) {
   const meta = activityTypeMeta(activity.type);
   const TypeIcon = activityIcon(activity);
@@ -3048,6 +3289,7 @@ function EventChip({ activity, onClick, draggable = true }) {
           style={{ flexShrink: 0, color: staffIconColor(activity) }}
           aria-hidden="true"
         />
+        <PublicationStatusIcon activity={activity} />
         <PaymentStatusIcon
           status={activity.payment_status}
           perParticipant={isPaidPerParticipant(activity)}
@@ -3294,6 +3536,7 @@ function WeekTimedEvent({
                 aria-hidden="true"
               />
             )}
+            {!isOverlay && <PublicationStatusIcon activity={event} size={11} />}
             {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -3344,6 +3587,7 @@ function WeekTimedEvent({
                 aria-hidden="true"
               />
           )}
+          {!isOverlay && <PublicationStatusIcon activity={event} size={11} />}
           {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -4947,7 +5191,7 @@ export default function ActivitiesCalendar({
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'שמירת התבנית נכשלה');
         setBanner(replacing ? 'התבנית הקיימת הוחלפה בפרטי האירוע' : 'האירוע נשמר כתבנית חדשה');
-        return;
+        return true;
       }
 
       if (payload._editing_template) {
@@ -4974,7 +5218,7 @@ export default function ActivitiesCalendar({
         }
         setModal(null);
         setBanner(isCreate ? 'התבנית נוצרה' : 'התבנית נשמרה');
-        return;
+        return true;
       }
 
       if (payload.overlay && !payload.google_event_id) {
@@ -4997,7 +5241,7 @@ export default function ActivitiesCalendar({
         }
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner(closeAfter ? 'האירוע נוצר ביומן החיצוני' : 'האירוע נוצר — ממשיכים לערוך');
-        return;
+        return true;
       }
 
       if (payload.overlay) {
@@ -5023,7 +5267,7 @@ export default function ActivitiesCalendar({
         }
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner(closeAfter ? 'האירוע נשמר' : 'השינויים הוחלו');
-        return;
+        return true;
       }
 
       const isEdit = !!payload.id;
@@ -5034,6 +5278,8 @@ export default function ActivitiesCalendar({
         _pending_employee_ids: pendingEmployeeIds = [],
         // שעות חלקיות שנבחרו למשמרת לפני שהאירוע נשמר.
         _pending_staff_times: pendingStaffTimes = null,
+        // פרטי שכר ונסיעות שנערכו לכל עובד עוד לפני שלאירוע היה מזהה.
+        _pending_staff_details: pendingStaffDetails = {},
         ...body
       } = payload;
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
@@ -5062,6 +5308,7 @@ export default function ActivitiesCalendar({
             body: JSON.stringify({
               activity_id: data.id,
               employee_ids: pendingEmployeeIds,
+              employee_assignments: pendingStaffDetails,
               start_time: pendingStaffTimes?.start || undefined,
               end_time: pendingStaffTimes?.end || undefined,
             }),
@@ -5087,10 +5334,12 @@ export default function ActivitiesCalendar({
         setModal(data?.id ? data : { ...body, ...(data || {}) });
         setBanner(assignmentWarning ? `השינויים הוחלו · ${assignmentWarning}` : 'השינויים הוחלו');
       }
+      return true;
     } catch (err) {
       const msg = err.message || 'שמירה נכשלה';
       setFormError(msg);
       setBanner(msg);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -5701,7 +5950,7 @@ export default function ActivitiesCalendar({
             fontWeight: 700,
             color: 'var(--text-3)',
           }}>
-            <div>תאריכים</div>
+            <div>תאריך ושעה</div>
             <div>שם</div>
             {showStaffColumn && <div>צוות</div>}
             <div>הערות</div>
@@ -5742,12 +5991,21 @@ export default function ActivitiesCalendar({
                   onClick={() => openEdit(item)}
                 >
                   <div style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: meta.color,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3,
                     fontVariantNumeric: 'tabular-nums',
                   }}>
-                    {formatListDateRange(item)}
+                    <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>
+                      {formatListDateRange(item)}
+                    </span>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      fontSize: 11, fontWeight: 600, color: 'var(--text-2)',
+                    }}>
+                      <Clock3 size={12} aria-hidden="true" />
+                      {formatListTimeRange(item)}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <RowIcon
@@ -5756,6 +6014,7 @@ export default function ActivitiesCalendar({
                       style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
                       aria-hidden="true"
                     />
+                    <PublicationStatusIcon activity={item} size={14} />
                     <span style={{
                       fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -6043,6 +6302,13 @@ export default function ActivitiesCalendar({
                 ? `האירוע בוטל · ${result.failed.length} זיכויים נכשלו`
                 : `האירוע בוטל · ${result.refunded_amount || 0} ₪ זוכו`
             );
+          }}
+          onArchived={async () => {
+            setModal(null);
+            setCancelDialog(null);
+            await loadActivities();
+            refreshStaffNames();
+            setBanner('האירוע הועבר לארכיון והוסר מהיומן');
           }}
         />
       )}

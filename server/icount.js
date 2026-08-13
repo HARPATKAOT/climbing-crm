@@ -4,7 +4,7 @@
  * Body: application/x-www-form-urlencoded (not JSON)
  */
 
-import { VAT_RATE, chargeAmount, roundMoney } from './vat.js';
+import { VAT_RATE, chargeAmount, icountVatType, roundMoney } from './vat.js';
 
 const BASE_URL = 'https://api.icount.co.il/api/v3.php';
 
@@ -155,9 +155,61 @@ function toYyyymmdd(dateStr) {
 }
 
 /** כל תיקי הלקוחות ב-iCount, כמפה של client_id → תיק. */
-export async function listClients() {
-  const data = await icountPost('client/get_list');
+export async function listClients(filters = {}) {
+  const data = await icountPost('client/get_list', filters);
   return data.clients || {};
+}
+
+function normalizeContactPhone(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (digits.startsWith('9720')) digits = `972${digits.slice(4)}`;
+  if (digits.startsWith('0') && digits.length >= 9) digits = `972${digits.slice(1)}`;
+  return digits;
+}
+
+export function icountPhoneSearchVariants(value) {
+  const raw = String(value || '').replace(/[^\d+]/g, '');
+  const normalized = normalizeContactPhone(raw);
+  if (!normalized) return [];
+  const local = normalized.startsWith('972') ? `0${normalized.slice(3)}` : '';
+  return [...new Set([raw.replace(/^\+/, ''), normalized, local].filter(Boolean))];
+}
+
+export function exactIcountContactMatches(clients, { phone = '', email = '' } = {}) {
+  const wantedPhone = normalizeContactPhone(phone);
+  const wantedEmail = String(email || '').trim().toLowerCase();
+  const byId = new Map();
+
+  for (const client of clients || []) {
+    if (!client?.client_id) continue;
+    const phones = [client.phone, client.mobile].map(normalizeContactPhone).filter(Boolean);
+    const clientEmail = String(client.email || '').trim().toLowerCase();
+    const phoneMatches = wantedPhone && phones.includes(wantedPhone);
+    const emailMatches = wantedEmail && clientEmail === wantedEmail;
+    if (phoneMatches || emailMatches) byId.set(String(client.client_id), client);
+  }
+
+  return [...byId.values()];
+}
+
+/** Exact, targeted iCount lookup so an event host can be linked without importing the whole ledger. */
+export async function findClientsByContact({ phone = '', email = '' } = {}) {
+  const searches = [];
+  for (const variant of icountPhoneSearchVariants(phone)) {
+    searches.push({ phone: variant });
+    searches.push({ mobile: variant });
+  }
+  if (String(email || '').trim()) searches.push({ email: String(email).trim() });
+  if (!searches.length) return [];
+
+  const responses = await Promise.all(searches.map((filter) => listClients({
+    ...filter,
+    detail_level: 2,
+    list_type: 'array',
+    limit: 25,
+  })));
+  const candidates = responses.flatMap((rows) => Object.values(rows || {}));
+  return exactIcountContactMatches(candidates, { phone, email });
 }
 
 /** פרטי תיק לקוח יחיד — get_list מחזיר שם ומייל בלבד, בלי טלפון. */
@@ -264,7 +316,7 @@ export async function createInvRec({
   comment,
   emailTo,
   paymentMethod = 'cash',
-  vattype = 1,
+  vattype = icountVatType(),
   vatRate = DEFAULT_VAT_RATE,
 }) {
   const fields = {
@@ -322,7 +374,7 @@ export async function createOffer({
   items,
   comment,
   emailTo,
-  vattype = 1,
+  vattype = icountVatType(),
 }) {
   const fields = {
     doctype: 'offer',
@@ -763,6 +815,7 @@ export const icount = {
   clientCardUrl,
   docAppUrl,
   ensureClient,
+  findClientsByContact,
   createInvRec,
   createOffer,
   searchDocs,

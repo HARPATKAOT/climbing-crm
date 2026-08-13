@@ -31,3 +31,13 @@ archive/
 client/harness*.html
 client/vite.harness*.config.js
 client/src/harness*.jsx
+
+# Local deployment worktrees, recovery snapshots, and preview harnesses
+.codex-deploy-*/
+.deleted-charge-*.json
+.merge-backup-*.json
+client/vite.finance.config.js
+scratch/finance-preview-server.cjs
+
+# Local finance/import exports may contain customer or accounting data
+server/data/

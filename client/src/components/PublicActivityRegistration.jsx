@@ -6,6 +6,7 @@ import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import { cancellationRuleParts } from '../utils/cancellationText.js';
 import { EventShell, EventStyles } from './publicFormKit.jsx';
+import { templateKind } from '../utils/declarationKinds.js';
 
 /**
  * The event's own page: what the outing is, when, what it costs and how many
@@ -99,8 +100,11 @@ export default function PublicActivityRegistration() {
   const cover = activity.cover_image || activity.theme?.cover_image || '';
   const coverPosition = activity.cover_position || activity.theme?.cover_position || '50% 50%';
   const policy = activity.cancellation_policy;
+  const customerCancellationDisabled = activity.cancellation_policy_disabled === true;
   const full = activity.remaining != null && activity.remaining <= 0;
   const closed = full || activity.registration_open === false;
+  const participationKind = templateKind(activity.form_template || {});
+  const ParticipationIcon = participationKind.Icon;
 
   return (
     <div className="event-page">
@@ -161,13 +165,40 @@ export default function PublicActivityRegistration() {
           </section>
         )}
 
+        {activity.form_template && (
+          <section style={{ marginTop: 6 }}>
+            <p className="event-detail-block event-participation-requirement">
+              <strong>
+                <ParticipationIcon size={16} style={{ color: participationKind.color }} aria-hidden="true" />
+                אישור השתתפות נדרש
+              </strong>
+              <span>
+                {participationKind.key === 'trip'
+                  ? 'ההרשמה כוללת טופס מותאם ליציאה / טיול והסרת אחריות לפעילות זו.'
+                  : participationKind.key === 'wall'
+                    ? 'ההרשמה כוללת טופס מותאם לפעילות בקיר והסרת אחריות לפעילות זו.'
+                    : `ההרשמה כוללת את הטופס „${activity.form_template.title}” והסרת אחריות לפעילות זו.`}
+              </span>
+            </p>
+          </section>
+        )}
+
         {/* התנאים נקראים כאן, לפני שמתחילים למלא. האישור עצמו ניתן בטופס,
             במסך התשלום — שם הוא תנאי לחיוב. */}
-        {paidMode && policy && (
+        {paidMode && (policy || customerCancellationDisabled) && (
           <section style={{ marginTop: 20 }}>
             <div className="event-policy">
               <h3><CalendarClock size={15} aria-hidden="true" />תנאי ביטול</h3>
-              {(policy.rules || []).map((rule) => {
+              {customerCancellationDisabled && (
+                <div className="event-policy-row">
+                  <span className="event-policy-dot is-bad" aria-hidden="true" />
+                  <div>
+                    <div className="event-policy-when">ביטול מצד המשתתף</div>
+                    <div className="event-policy-what is-bad">ללא אפשרות ביטול או החזר</div>
+                  </div>
+                </div>
+              )}
+              {(policy?.rules || []).map((rule) => {
                 const { period, outcome, tone } = cancellationRuleParts(rule);
                 return (
                   <div key={rule.id} className="event-policy-row">
@@ -179,9 +210,16 @@ export default function PublicActivityRegistration() {
                   </div>
                 );
               })}
-              {policy.free_text && (
+              {policy?.free_text && (
                 <p className="event-policy-note">{policy.free_text}</p>
               )}
+              <div className="event-policy-row">
+                <span className="event-policy-dot is-good" aria-hidden="true" />
+                <div>
+                  <div className="event-policy-when">ביטול מצד המארגנים</div>
+                  <div className="event-policy-what is-good">החזר מלא</div>
+                </div>
+              </div>
             </div>
           </section>
         )}

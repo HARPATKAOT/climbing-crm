@@ -91,7 +91,7 @@ export function remainingCapacity(activity, registrations) {
 
 export function registrationIsOpen(activity) {
   if (!activity?.registration_enabled) return false;
-  if (activity.status === 'cancelled' || activity.status === 'closed') return false;
+  if (['cancelled', 'closed', 'archived'].includes(String(activity.status || '').toLowerCase())) return false;
   if (activity.registration_closes_at) {
     const closes = new Date(activity.registration_closes_at).getTime();
     if (!Number.isNaN(closes) && Date.now() > closes) return false;
@@ -183,6 +183,9 @@ export function publicRegistrationPayload(activity, registrations) {
     included: activity.included || '',
     what_to_bring: activity.what_to_bring || '',
     important_info: activity.important_info || '',
+    // A deliberate "no customer cancellation" choice is still a public term.
+    // Keep it separate from a missing policy so the event page can explain it.
+    cancellation_policy_disabled: activity.cancellation_policy_disabled === true,
     cover_image: safeTheme.cover_image || '',
     cover_position: safeTheme.cover_position || '50% 50%',
     host_name: activity.host_name || activity.contact_name || '',
@@ -780,7 +783,7 @@ export function openUnpaidActivities(db, { fromDate } = {}) {
   const today = fromDate || new Date().toISOString().slice(0, 10);
   return (db.get('activities') || [])
     .filter((a) => {
-      if (a.status === 'cancelled') return false;
+      if (['cancelled', 'archived'].includes(String(a.status || '').toLowerCase())) return false;
       // כשכל משתתף משלם בנפרד אין דמי הזמנה לגבות מהמזמין, והאירוע יישאר
       // „לא שולם” לנצח — לא חוב פתוח.
       if (resolveRegistrationMode(a) === 'paid_per_participant') return false;

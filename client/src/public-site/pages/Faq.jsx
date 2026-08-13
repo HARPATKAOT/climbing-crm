@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { WHATSAPP_URL, ADDRESS } from '../publicData.js';
+import { whatsappUrl, ADDRESS } from '../publicData.js';
 
 const ITEMS = [
   {
@@ -42,37 +42,24 @@ const ITEMS = [
 
 export default function Faq() {
   return (
-    <section className="ks-section">
-      <div className="ks-wrap" style={{ maxWidth: 780 }}>
-        <h1 className="ks-h1">שאלות ותשובות</h1>
-        <p className="ks-lede">מה שהכי שואלים אותנו. לא מצאתם? כתבו בוואטסאפ.</p>
-
-        {ITEMS.map((item) => (
-          <details
-            key={item.q}
-            style={{
-              border: '1px solid var(--ks-line)', borderRadius: 'var(--ks-radius)',
-              padding: '12px 16px', marginBottom: 10, background: '#fff',
-            }}
-          >
-            <summary style={{ fontWeight: 700, fontSize: 17, cursor: 'pointer' }}>{item.q}</summary>
-            <p style={{ margin: '10px 0 0' }}>{item.a}</p>
-            {item.link && (
-              <p style={{ margin: '8px 0 0' }}>
-                {item.link.external
-                  ? <a href={item.link.to}>{item.link.label}</a>
-                  : <Link to={item.link.to}>{item.link.label}</Link>}
-              </p>
-            )}
-          </details>
-        ))}
-
-        <p style={{ marginTop: 22 }}>
-          <a className="ks-btn ks-btn--wa" href={WHATSAPP_URL} target="_blank" rel="noreferrer">
-            לשאלה נוספת — כתבו לנו
-          </a>
-        </p>
-      </div>
-    </section>
+    <>
+      <section className="ks-pagehero" style={{ backgroundImage: "linear-gradient(90deg, rgba(25,24,18,.18), rgba(25,24,18,.82)), url('/gallery/gallery-03.jpg')" }}>
+        <div className="ks-wrap"><span className="ks-eyebrow">לפני שמגיעים</span><h1 className="ks-h1">כל מה שרציתם לדעת.</h1><p className="ks-lede">גיל, ציוד, ניסיון, בטיחות ומזג אוויר — התשובות לשאלות שחוזרות הכי הרבה.</p></div>
+      </section>
+      <section className="ks-section">
+        <div className="ks-wrap" style={{ maxWidth: 820 }}>
+          <div className="ks-faq">
+            {ITEMS.map((item) => (
+              <details key={item.q}>
+                <summary>{item.q}</summary>
+                <p>{item.a}</p>
+                {item.link && <p>{item.link.external ? <a className="ks-seeall" href={item.link.to}>{item.link.label}</a> : <Link className="ks-seeall" to={item.link.to}>{item.link.label}</Link>}</p>}
+              </details>
+            ))}
+          </div>
+          <div className="ks-cta" style={{ marginTop: 34 }}><h2 className="ks-h2">נשארה שאלה?</h2><p>כתבו לנו. תשובה קצרה עכשיו יכולה לחסוך הרבה התלבטות אחר כך.</p><a className="ks-btn ks-btn--light" href={whatsappUrl('שלום, יש לי שאלה לפני שמגיעים לקיר בועז')} target="_blank" rel="noreferrer">שאלה בוואטסאפ</a></div>
+        </div>
+      </section>
+    </>
   );
 }

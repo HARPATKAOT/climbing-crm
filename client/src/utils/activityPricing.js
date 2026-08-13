@@ -98,6 +98,26 @@ export function hostChargeBreakdown(activity = {}, { registeredCount = 0 } = {})
 }
 
 /**
+ * Amounts shown in the host-payment card.
+ *
+ * A legacy payment row can say `status: paid` while the activity is still
+ * authoritatively unpaid. That row arrives after the first render and used to
+ * replace the correct live total with its stale one-person amount. Only the
+ * activity payment status decides when a recorded amount is final.
+ */
+export function displayedHostCharge(breakdown = {}, hostPayment = null, paymentStatus = 'unpaid') {
+  const useRecorded = ['paid', 'partial'].includes(String(paymentStatus || 'unpaid'));
+  return {
+    entered: useRecorded
+      ? (hostPayment?.entered_amount ?? breakdown.entered ?? 0)
+      : (breakdown.entered ?? 0),
+    gross: useRecorded
+      ? (hostPayment?.amount ?? breakdown.gross ?? 0)
+      : (breakdown.gross ?? 0),
+  };
+}
+
+/**
  * שורת ההסבר שמופיעה מתחת לשדות המחיר ובכרטיס התשלום.
  *
  * מי שעורך את האירוע צריך לראות את החשבון עצמו, לא רק את התוצאה — אחרת אי אפשר

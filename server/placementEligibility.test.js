@@ -8,7 +8,7 @@ import {
   programForGroup,
   programMatchesGrade,
   reviewProgramApproval,
-  setSharedProgramEligibility,
+  setProgramGroupEligibility,
 } from './placementEligibility.js';
 
 test('a returning eligibility flag lets the bot continue without staff approval', () => {
@@ -30,7 +30,7 @@ test('a returning eligibility flag lets the bot continue without staff approval'
   assert.equal(result.reason, 'returning');
 });
 
-test('one returning eligibility permits moving between every advanced and squad group', () => {
+test('returning eligibility is limited to its programme when the old row has no group id', () => {
   const student = { id: 'returning-student' };
   const rows = [{
     id: 'returning-row',
@@ -43,11 +43,11 @@ test('one returning eligibility permits moving between every advanced and squad 
   const adultSquad = { id: 'adult', name: 'נבחרת בוגרת', ageCategory: 'תיכון', skillLevel: 'נבחרת' };
   const advanced = { id: 'advanced', name: 'מתקדמים ד-ו', ageCategory: 'ד-ו', skillLevel: 'מתקדמים' };
 
-  assert.equal(canPlaceInRestrictedGroup(db, student, adultSquad, { season: '2026-27' }).allowed, true);
-  assert.equal(canPlaceInRestrictedGroup(db, student, advanced, { season: '2026-27' }).allowed, true);
+  assert.equal(canPlaceInRestrictedGroup(db, student, adultSquad, { season: '2026-27' }).allowed, false);
+  assert.equal(canPlaceInRestrictedGroup(db, student, advanced, { season: '2026-27' }).allowed, false);
 });
 
-test('one approved eligibility permits another restricted programme without a second approval', () => {
+test('approved eligibility for one programme does not permit another programme', () => {
   const student = { id: 'approved-student' };
   const db = {
     get: (table) => (table === 'program_eligibility' ? [{
@@ -58,13 +58,31 @@ test('one approved eligibility permits another restricted programme without a se
   const youngSquad = { id: 'young', name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };
 
   const result = canPlaceInRestrictedGroup(db, student, youngSquad, { season: '2026-27' });
-  assert.equal(result.allowed, true);
-  assert.equal(result.reason, 'approved');
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, 'staff_approval_required');
 });
 
-test('staff can grant and revoke the shared eligibility from the student card', async () => {
+test('explicit eligibility permits only the selected group, even within the same programme', () => {
+  const student = { id: 'selected-student' };
+  const rows = [{
+    id: 'selected-row', student_id: student.id, program: PROGRAMS.YOUNG_SQUAD,
+    group_id: 'young-a', group_ids: ['young-a'], season: '2026-27', status: 'approved',
+  }];
+  const db = { get: (table) => (table === 'program_eligibility' ? rows : []) };
+  const selected = { id: 'young-a', name: 'נבחרת צעירה א', skillLevel: 'נבחרת' };
+  const other = { id: 'young-b', name: 'נבחרת צעירה ב', skillLevel: 'נבחרת' };
+
+  assert.equal(canPlaceInRestrictedGroup(db, student, selected, { season: '2026-27' }).allowed, true);
+  assert.equal(canPlaceInRestrictedGroup(db, student, other, { season: '2026-27' }).allowed, false);
+});
+
+test('staff can grant several concrete groups and revoke them from the student card', async () => {
   const tables = {
     students: [{ id: 'student', parentId: 'parent' }],
+    groups: [
+      { id: 'young', name: 'נבחרת צעירה', skillLevel: 'נבחרת' },
+      { id: 'adult', name: 'נבחרת בוגרת', skillLevel: 'נבחרת' },
+    ],
     program_eligibility: [],
     placement_requests: [{ id: 'pending', student_id: 'student', season: '2026-27', status: 'pending' }],
   };
@@ -80,15 +98,16 @@ test('staff can grant and revoke the shared eligibility from the student card', 
     },
   };
 
-  const granted = await setSharedProgramEligibility(db, async () => {}, {
-    studentId: 'student', eligible: true, season: '2026-27', actor: 'owner',
+  const granted = await setProgramGroupEligibility(db, async () => {}, {
+    studentId: 'student', groupIds: ['young', 'adult'], season: '2026-27', actor: 'owner',
   });
   assert.equal(granted.eligible, true);
-  assert.equal(granted.rows[0].program, PROGRAMS.SHARED);
-  assert.equal(granted.rows[0].status, 'approved');
+  assert.deepEqual(granted.group_ids, ['young', 'adult']);
+  assert.equal(granted.rows.filter((row) => row.status === 'approved').length, 2);
+  assert.deepEqual(granted.rows.filter((row) => row.status === 'approved').map((row) => row.group_id), ['young', 'adult']);
 
-  const revoked = await setSharedProgramEligibility(db, async () => {}, {
-    studentId: 'student', eligible: false, season: '2026-27', actor: 'owner',
+  const revoked = await setProgramGroupEligibility(db, async () => {}, {
+    studentId: 'student', groupIds: [], season: '2026-27', actor: 'owner',
   });
   assert.equal(revoked.eligible, false);
   assert.equal(revoked.rows[0].status, 'rejected');

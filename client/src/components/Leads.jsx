@@ -108,6 +108,48 @@ import { joinParentName, splitParentName } from '../utils/parentName.js';
 /** One shared empty list, so "nothing loaded yet" is a stable identity. */
 const EMPTY_ROWS = Object.freeze([]);
 
+function restrictedProgramForGroup(group = {}) {
+  const text = `${group.skillLevel || ''} ${group.name || ''} ${group.ageCategory || ''}`;
+  if (/נבחרת/.test(text)) return /בוגרת|תיכון/.test(text) ? 'adult_squad' : 'young_squad';
+  if (/מתקדמ/.test(text)) return 'advanced';
+  return '';
+}
+
+function eligibleGroupIdsFromRows(rows = [], groups = []) {
+  const ids = new Set();
+  for (const row of rows) {
+    if (!['returning', 'approved'].includes(String(row.status || ''))) continue;
+    const explicit = [
+      ...(Array.isArray(row.group_ids) ? row.group_ids : []),
+      ...(row.group_id ? [row.group_id] : []),
+    ].map(String);
+    if (explicit.length) {
+      explicit.forEach((id) => ids.add(id));
+      continue;
+    }
+    // Backwards-compatible display for eligibility saved before concrete
+    // groups existed. The next save converts it to explicit group ids.
+    groups.forEach((group) => {
+      const program = restrictedProgramForGroup(group);
+      if (program && (row.program === 'advanced_squads' || row.program === program)) ids.add(String(group.id));
+    });
+  }
+  return [...ids];
+}
+
+function eligibilityGroupLabel(row, groups = []) {
+  const ids = [
+    ...(Array.isArray(row?.group_ids) ? row.group_ids : []),
+    ...(row?.group_id ? [row.group_id] : []),
+  ].map(String);
+  const names = groups.filter((group) => ids.includes(String(group.id))).map((group) => group.name);
+  if (names.length) return names.join(', ');
+  if (row?.program === 'advanced') return 'מתקדמים';
+  if (row?.program === 'young_squad') return 'נבחרת צעירה';
+  if (row?.program === 'adult_squad') return 'נבחרת בוגרת';
+  return 'מתקדמים ונבחרות';
+}
+
 /**
  * The weekday a group meets, in the words the staff uses — "יום שלישי", not the
  * bare index the group record stores. A group that meets twice a week names
@@ -638,7 +680,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editingFollowup, setEditingFollowup] = useState(false);
   const [savingFollowup, setSavingFollowup] = useState(false);
   const [programEligibility, setProgramEligibility] = useState([]);
-  const [editProgramEligible, setEditProgramEligible] = useState(false);
+  const [editEligibleGroupIds, setEditEligibleGroupIds] = useState([]);
   
   // Edit Form Fields (student)
   // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
@@ -725,14 +767,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (!cancelled) {
           const nextRows = Array.isArray(rows) ? rows : [];
           setProgramEligibility(nextRows);
-          setEditProgramEligible(nextRows.some((row) => ['returning', 'approved'].includes(String(row.status || ''))));
+          setEditEligibleGroupIds(eligibleGroupIdsFromRows(nextRows, groups));
         }
       })
       .catch(() => {
         if (!cancelled) setProgramEligibility([]);
       });
     return () => { cancelled = true; };
-  }, [parentOnly, student?.id]);
+  }, [parentOnly, student?.id, groups]);
 
   useEffect(() => {
     {
@@ -748,7 +790,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
     setEditGroupIds(studentGroupIds(student));
-    setEditProgramEligible(programEligibility.some((row) => ['returning', 'approved'].includes(String(row.status || ''))));
+    setEditEligibleGroupIds(eligibleGroupIdsFromRows(programEligibility, groups));
     const nextParentName = parentNameParts(parent);
     setEditParentName(nextParentName.firstName);
     setEditParentLastName(nextParentName.lastName);
@@ -2061,7 +2103,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         const eligibilityRes = await fetch(`/api/students/${student.id}/program-eligibility`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ eligible: editProgramEligible }),
+          body: JSON.stringify({ group_ids: editEligibleGroupIds }),
         });
         const eligibilityBody = await eligibilityRes.json().catch(() => ({}));
         if (!eligibilityRes.ok || !eligibilityBody.ok) {
@@ -2838,12 +2880,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     : climbingLevel?.startsWith('6')
       ? '#16A34A'
       : climbingLevel ? '#F97316' : 'var(--text-3)';
-  const programLabels = {
-    advanced_squads: 'מתקדמים ונבחרות',
-    advanced: 'מתקדמים ונבחרות',
-    young_squad: 'מתקדמים ונבחרות',
-    adult_squad: 'מתקדמים ונבחרות',
-  };
   const eligibilityLabels = {
     returning: 'ממשיך',
     pending: 'ממתין לאישור',
@@ -2856,13 +2892,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     approved: '#34D399',
     rejected: '#F87171',
   };
+  const eligibilityGroupOrder = { adult_squad: 0, young_squad: 1, advanced: 2 };
+  const restrictedEligibilityGroups = groups
+    .filter((group) => group.active !== false && Boolean(restrictedProgramForGroup(group)))
+    .sort((a, b) => (
+      eligibilityGroupOrder[restrictedProgramForGroup(a)]
+      - eligibilityGroupOrder[restrictedProgramForGroup(b)]
+    ));
   const visibleProgramEligibility = programEligibility
     .filter((item) => ['returning', 'approved'].includes(String(item.status || '')))
     .sort((a, b) => {
       const rank = { returning: 2, approved: 1 };
       return (rank[b.status] || 0) - (rank[a.status] || 0);
-    })
-    .slice(0, 1);
+    });
   const safetyTone = SAFETY_TONE[punchSafety.state] || SAFETY_TONE.missing;
   const SafetyStatusIcon = safetyTone.alert ? ShieldAlert : ShieldCheck;
   const absenceStreak = consecutiveAbsences(attendanceHistory);
@@ -3413,6 +3455,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     )
                     : false;
                   const name = tab.student?.name || parentDisplayName(tab.parent);
+                  const cardName = tab.kind === 'student'
+                    ? (splitParentName({
+                        name: tab.student?.name,
+                        lastName: tab.student?.lastName,
+                      }).first || name)
+                    : name;
                   const isParentEntity = tab.kind !== 'student';
                   const isPrimary = !!tab.parent
                     && String(tab.parent.id) === String(primaryGuardianId);
@@ -3464,7 +3512,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           </span>
                         )}
                         <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {name}
+                          {cardName}
                         </span>
                         {/* אצל הילד הסימן יושב על כרטיס המתאמן, אצל ההורה על
                             כרטיס ההורה — ולמבוגר המילים הן גבר / אישה. */}
@@ -3940,7 +3988,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         {visibleProgramEligibility.map((item) => (
                           <span
                             key={item.id || `${item.program}-${item.season}`}
-                            title={`${programLabels[item.program] || item.program}: ${eligibilityLabels[item.status] || item.status}`}
+                            title={`${eligibilityGroupLabel(item, groups)}: ${eligibilityLabels[item.status] || item.status}`}
                             style={{
                               display: 'inline-flex',
                               alignItems: 'center',
@@ -3954,7 +4002,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               fontWeight: 700,
                             }}
                           >
-                            {programLabels[item.program] || item.program} · {eligibilityLabels[item.status] || item.status}
+                            {eligibilityGroupLabel(item, groups)} · {eligibilityLabels[item.status] || item.status}
                           </span>
                         ))}
                       </div>
@@ -6697,29 +6745,45 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     }}
                   />
                 </div>
-                <label
-                  className="form-group"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    padding: '11px 12px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 10,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={editProgramEligible}
-                    onChange={(event) => setEditProgramEligible(event.target.checked)}
-                    style={{ accentColor: 'var(--primary)', width: 17, height: 17 }}
-                  />
-                  <span>
-                    <strong style={{ display: 'block', fontSize: 13 }}>זכאי למתקדמים ולנבחרות</strong>
-                    <span style={{ color: 'var(--text-3)', fontSize: 11 }}>הקבוצה המדויקת נקבעת בנפרד</span>
-                  </span>
-                </label>
+                <div className="form-group">
+                  <label className="form-label">זכאות לקבוצות מתקדמים ונבחרת</label>
+                  <div style={{ display: 'grid', gap: 7 }}>
+                    {restrictedEligibilityGroups.map((group) => {
+                      const groupId = String(group.id);
+                      const checked = editEligibleGroupIds.includes(groupId);
+                      return (
+                        <label
+                          key={groupId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 9,
+                            padding: '9px 11px',
+                            border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
+                            borderRadius: 10,
+                            cursor: 'pointer',
+                            background: checked ? 'rgba(96,165,250,0.08)' : 'transparent',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setEditEligibleGroupIds((previous) => (
+                              checked
+                                ? previous.filter((id) => id !== groupId)
+                                : [...previous, groupId]
+                            ))}
+                            style={{ accentColor: 'var(--primary)', width: 17, height: 17 }}
+                          />
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>{group.name}</span>
+                        </label>
+                      );
+                    })}
+                    {!restrictedEligibilityGroups.length && (
+                      <span style={{ color: 'var(--text-3)', fontSize: 12 }}>לא הוגדרו קבוצות מתקדמים או נבחרת פעילות.</span>
+                    )}
+                  </div>
+                </div>
                 <div className="form-group">
                   <label className="form-label">תאריך מעקב הבא</label>
                   <input type="date" className="input" value={editNextFollowup} onChange={e => setEditNextFollowup(e.target.value)} />

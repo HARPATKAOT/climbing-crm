@@ -3,6 +3,18 @@ import { CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import GenderPicker, { ADULT_GENDER_OPTIONS } from './GenderPicker.jsx';
+
+const EMPTY_CUSTOMER = {
+  firstName: '',
+  lastName: '',
+  idNumber: '',
+  phone: '',
+  birthDate: '',
+  gender: '',
+  email: '',
+  city: '',
+};
 
 export default function PublicHostPayment() {
   const { profile } = useBusinessProfile();
@@ -14,6 +26,8 @@ export default function PublicHostPayment() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerDetails, setCustomerDetails] = useState(EMPTY_CUSTOMER);
   const [cancellationAccepted, setCancellationAccepted] = useState(false);
 
   // If iCount redirects success into the iframe, break out to the top window.
@@ -34,12 +48,16 @@ export default function PublicHostPayment() {
         if (!response.ok) throw new Error(body.error || 'הקישור לא נמצא');
         if (cancelled) return;
         setActivity(body);
+        setCustomerDetails((current) => ({
+          ...current,
+          phone: body.host_phone || current.phone,
+        }));
 
         if (body.payment_status === 'paid' || searchParams.get('paid') === '1') {
           return;
         }
 
-        if (!body.cancellation_policy) {
+        if (!body.requires_customer_details && !body.cancellation_policy) {
           setPaying(true);
           const payResponse = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/pay`, {
             method: 'POST',
@@ -66,6 +84,57 @@ export default function PublicHostPayment() {
     })();
     return () => { cancelled = true; };
   }, [token, searchParams]);
+
+  const saveCustomerAndContinue = async () => {
+    const required = ['firstName', 'lastName', 'idNumber', 'birthDate', 'gender', 'email', 'city'];
+    if (required.some((key) => !String(customerDetails[key] || '').trim())) {
+      setError('יש למלא את כל שדות החובה');
+      return;
+    }
+    setCustomerSaving(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/customer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customerDetails),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שמירת הפרטים נכשלה');
+      if (body.alreadyPaid) {
+        setActivity((current) => ({ ...current, payment_status: 'paid' }));
+        return;
+      }
+
+      const updated = {
+        ...activity,
+        host_name: body.customer?.name || activity?.host_name || '',
+        requires_customer_details: false,
+      };
+      setActivity(updated);
+      if (!updated.cancellation_policy) {
+        setPaying(true);
+        const payResponse = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/pay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cancellationPolicyAccepted: false }),
+        });
+        const payBody = await payResponse.json().catch(() => ({}));
+        if (!payResponse.ok) throw new Error(payBody.error || 'יצירת התשלום נכשלה');
+        if (payBody.alreadyPaid) {
+          setActivity((current) => ({ ...current, payment_status: 'paid' }));
+          return;
+        }
+        setPaymentUrl(payBody.paymentUrl || '');
+        if (payBody.paymentUrl) window.location.assign(payBody.paymentUrl);
+      }
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setCustomerSaving(false);
+      setPaying(false);
+    }
+  };
 
   const startPayment = async () => {
     if (activity?.cancellation_policy && !cancellationAccepted) {
@@ -161,7 +230,9 @@ export default function PublicHostPayment() {
                 <p className="host-payment-kicker">תשלום לאירוע</p>
                 <h1 className="host-payment-title">{activity?.name || 'אירוע'}</h1>
                 <p className="host-payment-sub">
-                  שלום {activity?.host_name || 'מזמין האירוע'}, השלימו כאן את התשלום המלא.
+                  {activity?.requires_customer_details
+                    ? 'לפני התשלום, מלאו את פרטי ההורה המשלם כדי שנוכל להקים אתכם כלקוח במערכת.'
+                    : `שלום ${activity?.host_name || 'מזמין האירוע'}, השלימו כאן את התשלום המלא.`}
                 </p>
                 <div className="host-payment-meta">
                   {dateLabel && <span>{dateLabel}</span>}
@@ -179,7 +250,98 @@ export default function PublicHostPayment() {
           </div>
         </header>
 
-        {!paid && !loading && activity && (
+        {!paid && !loading && activity?.requires_customer_details && (
+          <section className="host-customer-card">
+            <div className="host-customer-heading">
+              <p className="host-payment-kicker">שלב 1 מתוך 2</p>
+              <h2>פרטי ההורה המשלם</h2>
+              <p>הפרטים יישמרו בכרטיס הלקוח וישמשו להפקת מסמכי התשלום.</p>
+            </div>
+            <form onSubmit={(event) => { event.preventDefault(); saveCustomerAndContinue(); }}>
+              <div className="host-customer-grid">
+                <label className="host-customer-field">
+                  <span>שם פרטי *</span>
+                  <input
+                    type="text"
+                    autoComplete="given-name"
+                    value={customerDetails.firstName}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, firstName: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label className="host-customer-field">
+                  <span>שם משפחה *</span>
+                  <input
+                    type="text"
+                    autoComplete="family-name"
+                    value={customerDetails.lastName}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, lastName: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label className="host-customer-field">
+                  <span>תעודת זהות *</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={customerDetails.idNumber}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, idNumber: event.target.value.replace(/\D/g, '').slice(0, 9) }))}
+                    required
+                  />
+                </label>
+                <label className="host-customer-field">
+                  <span>תאריך לידה *</span>
+                  <input
+                    type="date"
+                    value={customerDetails.birthDate}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, birthDate: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label className="host-customer-field host-customer-field--wide">
+                  <span>טלפון שאליו נשלח הקישור</span>
+                  <input type="tel" value={customerDetails.phone} readOnly />
+                </label>
+                <div className="host-customer-field host-customer-field--wide">
+                  <span>מין *</span>
+                  <GenderPicker
+                    value={customerDetails.gender}
+                    onChange={(gender) => setCustomerDetails((current) => ({ ...current, gender }))}
+                    options={ADULT_GENDER_OPTIONS}
+                  />
+                </div>
+                <label className="host-customer-field">
+                  <span>אימייל *</span>
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    value={customerDetails.email}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, email: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label className="host-customer-field">
+                  <span>מקום מגורים *</span>
+                  <input
+                    type="text"
+                    autoComplete="address-level2"
+                    value={customerDetails.city}
+                    onChange={(event) => setCustomerDetails((current) => ({ ...current, city: event.target.value }))}
+                    required
+                  />
+                </label>
+              </div>
+              {error && <div className="host-payment-error" role="alert">{error}</div>}
+              <button type="submit" className="host-customer-submit" disabled={customerSaving || paying}>
+                {customerSaving || paying ? <Loader2 className="spin" size={18} /> : <CreditCard size={18} />}
+                {customerSaving ? 'שומר את הפרטים...' : paying ? 'מכין תשלום...' : 'שמירת הפרטים והמשך לתשלום'}
+              </button>
+            </form>
+          </section>
+        )}
+
+        {!paid && !loading && activity && !activity.requires_customer_details && (
           <section className="host-payment-info">
             {activity.description && <p>{activity.description}</p>}
             {[['קהל יעד', activity.audience], ['מה כלול', activity.included], ['מה להביא', activity.what_to_bring], ['מידע חשוב', activity.important_info]]
@@ -220,7 +382,7 @@ export default function PublicHostPayment() {
           </section>
         )}
 
-        {!paid && !loading && activity && (
+        {!paid && !loading && activity && !activity.requires_customer_details && (
           <section className="host-payment-embed">
             {error && <div className="host-payment-error" role="alert">{error}</div>}
             {paying && !paymentUrl && (
@@ -337,6 +499,32 @@ export default function PublicHostPayment() {
           padding:20px 24px;border-top:1px solid rgba(148,163,184,.16);
           color:#cbd5e1;line-height:1.65;
         }
+        .host-customer-card{
+          padding:24px;
+          border:1px solid rgba(255,255,255,.12);
+          border-radius:22px;
+          background:rgba(15,23,42,.96);
+          box-shadow:0 24px 70px rgba(0,0,0,.35);
+        }
+        .host-customer-heading h2{margin:5px 0 6px;font-size:24px;color:#fff}
+        .host-customer-heading p{margin:0 0 18px;color:#94a3b8;line-height:1.55}
+        .host-customer-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+        .host-customer-field{display:grid;gap:7px;text-align:right}
+        .host-customer-field--wide{grid-column:1 / -1}
+        .host-customer-field>span{color:#e2e8f0;font-size:14px;font-weight:800}
+        .host-customer-field input{
+          width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid #334155;
+          border-radius:11px;background:#0b1220;color:#f8fafc;font:inherit;outline:none;
+        }
+        .host-customer-field input:focus{border-color:#fb923c;box-shadow:0 0 0 3px rgba(251,146,60,.16)}
+        .host-customer-field input[readonly]{color:#94a3b8;background:#111827;cursor:not-allowed}
+        .host-customer-card .host-payment-error{color:#fecaca;background:rgba(239,68,68,.14);margin:16px 0 0}
+        .host-customer-submit{
+          width:100%;margin-top:18px;display:flex;align-items:center;justify-content:center;gap:8px;
+          padding:14px;border:0;border-radius:12px;background:linear-gradient(135deg,#f97316,#ea580c);
+          color:#fff;font:inherit;font-weight:900;cursor:pointer;
+        }
+        .host-customer-submit:disabled{opacity:.65;cursor:wait}
         .host-payment-detail{display:grid;grid-template-columns:100px 1fr;gap:12px;margin:8px 0}
         .host-payment-detail strong{color:#f8fafc}
         .host-payment-policy{
@@ -411,6 +599,9 @@ export default function PublicHostPayment() {
         @media(max-width:520px){
           .host-payment-cover{height:170px}
           .host-payment-header-body{padding:22px 15px 18px}
+          .host-customer-card{padding:20px 15px}
+          .host-customer-grid{grid-template-columns:1fr}
+          .host-customer-field--wide{grid-column:auto}
         }
       `}</style>
     </div>

@@ -809,7 +809,10 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
         `מתאמן: ${s.name || '—'} | סטטוס: ${visibleStatus} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'} | מגדר: ${s.gender || 'לא ידוע'} | רמת מבחן אחרונה: ${latest.level || 'לא ידועה'}`
       );
       if (eligibility.length) {
-        lines.push(`זכאות מסלולים: ${eligibility.map((row) => `${row.program}=${row.status}`).join(', ')}`);
+        lines.push(`זכאות לקבוצות: ${eligibility.map((row) => {
+          const eligibleGroup = groups.find((item) => String(item.id) === String(row.group_id || ''));
+          return `${eligibleGroup?.name || row.program}=${row.status}`;
+        }).join(', ')}`);
       }
       if (s.status === 'pending_signup' && !group) {
         lines.push('הערת מערכת: אין למתאמן קבוצה, ולכן אסור לומר שהוא משובץ או ממתין להרשמה.');

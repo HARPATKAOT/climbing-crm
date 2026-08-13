@@ -63,6 +63,7 @@ const PUBLIC_API_ROUTES = [
   /^\/google-calendar\/sync-due$/,
   /^\/google-contacts\/oauth\/callback$/,
   /^\/google-contacts\/sync-due$/,
+  /^\/google-business-profile\/oauth\/callback$/,
   /^\/finance\/sync-scheduled$/,
 ];
 
@@ -109,7 +110,7 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment' },
   { methods: WRITE, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment', level: 'edit' },
 
-  { methods: [...READ, ...WRITE], pattern: /^\/activities\/[^/]+\/(host-payment|registration-link|send-registration-link|registrations\/[^/]+\/refund)(\/|$)/, module: 'activity_registrations', level: 'edit', sensitive: 'finance' },
+  { methods: [...READ, ...WRITE], pattern: /^\/activities\/[^/]+\/(host-payment|host-customer|registration-link|send-registration-link|registrations\/[^/]+\/refund)(\/|$)/, module: 'activity_registrations', level: 'edit', sensitive: 'finance' },
   { methods: READ, pattern: /^\/activities\/[^/]+\/(registrations|interested|attendance)(\/|$)/, module: 'activity_registrations' },
   { methods: WRITE, pattern: /^\/activities\/[^/]+\/(registrations|interested|attendance)(\/|$)/, module: 'activity_registrations', level: 'edit' },
   { methods: READ, pattern: /^\/(activities|activity-templates|google-calendar)(\/|$)/, module: 'activities' },

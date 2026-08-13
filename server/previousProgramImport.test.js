@@ -9,6 +9,11 @@ function fakeDb() {
       { id: 's2', name: 'שם כפול', parentId: 'p2' },
       { id: 's3', name: 'שם כפול', parentId: 'p3' },
     ],
+    groups: [
+      { id: 'advanced', name: 'מתקדמים', skillLevel: 'מתקדמים' },
+      { id: 'young', name: 'נבחרת צעירה', skillLevel: 'נבחרת' },
+      { id: 'adult', name: 'נבחרת בוגרת', skillLevel: 'נבחרת', ageCategory: 'תיכון' },
+    ],
     program_eligibility: [],
   };
   return {
@@ -49,11 +54,12 @@ test('apply imports only exact rows as returning and is safe to rerun', async ()
   assert.equal(db.store.program_eligibility.length, 1);
   assert.equal(db.store.program_eligibility[0].status, 'returning');
   assert.equal(db.store.program_eligibility[0].source, 'notion_previous_season');
-  assert.equal(db.store.program_eligibility[0].group_id, undefined);
+  assert.equal(db.store.program_eligibility[0].group_id, 'young');
+  assert.deepEqual(db.store.program_eligibility[0].group_ids, ['young']);
   assert.equal(db.store.program_eligibility[0].previous_group_name, undefined);
 });
 
-test('returning eligibility clears an old approval group without adding placement to new rows', async () => {
+test('returning eligibility is imported for the exact group and retires a stale group permission', async () => {
   const db = fakeDb();
   db.store.program_eligibility.push({
     id: 'pe-2026-27-s1-young_squad',
@@ -69,7 +75,8 @@ test('returning eligibility clears an old approval group without adding placemen
 
   await applyPreviousProgramImport(db, async () => {}, report);
 
-  assert.equal(db.store.program_eligibility.length, 1);
-  assert.equal(db.store.program_eligibility[0].status, 'returning');
-  assert.equal(db.store.program_eligibility[0].group_id, null);
+  assert.equal(db.store.program_eligibility.length, 2);
+  const imported = db.store.program_eligibility.find((row) => row.status === 'returning');
+  assert.equal(imported.group_id, 'young');
+  assert.equal(db.store.program_eligibility.find((row) => row.id === 'pe-2026-27-s1-young_squad').status, 'rejected');
 });
