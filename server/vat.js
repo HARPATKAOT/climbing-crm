@@ -52,9 +52,9 @@ export function netAmount(price, includesVat = DEFAULT_PRICE_INCLUDES_VAT, rate 
   return roundMoney(base / (1 + resolveRate(rate)));
 }
 
-/** iCount vattype: 1 = prices before VAT, 2 = prices include VAT. */
+/** iCount vattype: 1 = prices before VAT, 0 = prices include VAT. */
 export function icountVatType(includesVat = DEFAULT_PRICE_INCLUDES_VAT) {
-  return includesVat ? 2 : 1;
+  return includesVat ? 0 : 1;
 }
 
 export function vatBreakdown(price, includesVat = DEFAULT_PRICE_INCLUDES_VAT, rate = VAT_RATE) {

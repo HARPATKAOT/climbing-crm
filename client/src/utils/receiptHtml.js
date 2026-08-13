@@ -130,7 +130,7 @@ export function buildReceiptHtml({ profile, sale, changeGiven = 0 } = {}) {
       </tr>`;
   }).join('');
 
-  // המחירים בקופה כוללים מע״מ (המכירה נשלחת ל-iCount עם `vattype: 2`), ולכן
+  // המחירים בקופה כוללים מע״מ (המכירה נשלחת ל-iCount עם `vattype: 0`), ולכן
   // הפירוק הוא חילוץ מהסכום ולא הוספה עליו.
   const { net, vat, rate } = vatBreakdown(Number(sale?.total) || 0, true);
 

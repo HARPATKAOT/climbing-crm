@@ -13,7 +13,7 @@ describe('vat helpers', () => {
     assert.equal(normalizePriceIncludesVat(undefined), true);
     assert.equal(chargeAmount(118), 118);
     assert.equal(netAmount(118), 100);
-    assert.equal(icountVatType(), 2);
+    assert.equal(icountVatType(), 0);
     assert.equal(normalizePriceIncludesVat(false), false);
     assert.equal(chargeAmount(100, false), 118);
     assert.equal(netAmount(100, false), 100);
