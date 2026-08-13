@@ -144,6 +144,16 @@ const PAYMENT_SOURCE = {
   icount: 'iCount',
 };
 
+const PAYMENT_STATUS_FILTERS = [
+  ['debt', 'חוב פתוח'],
+  ['paid', PAYMENT_STATUS.paid.label],
+  ['partial_refund', PAYMENT_STATUS.partial_refund.label],
+  ['refunded', PAYMENT_STATUS.refunded.label],
+  ['cancelled', PAYMENT_STATUS.cancelled.label],
+  ['failed', PAYMENT_STATUS.failed.label],
+  ['unknown', PAYMENT_STATUS.unknown.label],
+];
+
 const paymentStatus = (value) => PAYMENT_STATUS[value] || { label: value || 'לא ידוע', cls: 'badge badge-gray' };
 
 async function downloadPaymentDocument(row, kind = 'charge') {
@@ -218,7 +228,8 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const list = rows.filter((row) => {
-      if (status !== 'all' && row.status !== status) return false;
+      if (status === 'debt' && !(row.is_debt && ['pending', 'open'].includes(row.status))) return false;
+      if (status !== 'all' && status !== 'debt' && row.status !== status) return false;
       if (method !== 'all' && row.payment_method_label !== method) return false;
       if (source !== 'all' && row.source !== source) return false;
       if (product !== 'all' && !row.product_names?.includes(product)) return false;
@@ -372,14 +383,14 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
   return <div className="finance-payment-centre">
     <section className="finance-metrics finance-payment-metrics">
       <Metric label="גבייה נטו" value={summary.net_collected} note={`${number.format(summary.paid_count || 0)} תשלומים`} icon={BadgeDollarSign} color="#2DD4BF" />
-      <Metric label="חיובים פתוחים" value={summary.open_amount} note={`${number.format(summary.open_count || 0)} ממתינים`} icon={Clock3} color="#FBBF24" />
+      <Metric label="חובות לגבייה" value={summary.open_amount} note={`${number.format(summary.open_count || 0)} חובות פתוחים`} icon={Clock3} color="#FBBF24" />
       <Metric label="זיכויים" value={summary.refunds} note={`${number.format(summary.refunded_count || 0)} פעולות`} icon={RotateCcw} color="#FB7185" />
       <Metric label="לקוחות בתקופה" value={summary.customers} note={`${number.format(summary.records || 0)} רשומות`} icon={UsersRound} color="#A78BFA" plain />
     </section>
 
     <section className="card finance-payment-workspace">
       <header className="finance-payment-header">
-        <div><h2>כל העסקאות והתשלומים</h2><p>חיובים פתוחים, גבייה, זיכויים ומסמכי iCount במקום אחד</p></div>
+        <div><h2>כל העסקאות והתשלומים</h2><p>חובות אמיתיים לגבייה, תשלומים, זיכויים ומסמכי iCount במקום אחד</p></div>
         <div className="finance-payment-header-actions">
           <a className="btn btn-ghost btn-sm" href={`/api/finance/payments/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={15} />ייצוא CSV</a>
           <button className="btn btn-ghost btn-sm" onClick={onReload}><RefreshCw size={15} />רענון</button>
@@ -388,7 +399,12 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
 
       <div className="finance-payment-filters">
         <label className="finance-payment-search"><span>חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
-        <label><span>סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">כל הסטטוסים</option>{Object.entries(PAYMENT_STATUS).map(([key, meta]) => <option key={key} value={key}>{meta.label}{filters.statuses?.[key] ? ` (${filters.statuses[key]})` : ''}</option>)}</AppSelect></label>
+        <label><span>סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">כל הסטטוסים</option>{PAYMENT_STATUS_FILTERS.map(([key, label]) => {
+          const count = key === 'debt'
+            ? Number(filters.statuses?.pending || 0) + Number(filters.statuses?.open || 0)
+            : Number(filters.statuses?.[key] || 0);
+          return <option key={key} value={key}>{label}{count ? ` (${count})` : ''}</option>;
+        })}</AppSelect></label>
         <label><span>אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}><option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
         <label><span>מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
         <label><span>מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
@@ -416,7 +432,7 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
               <td><span className="finance-payment-source">{PAYMENT_SOURCE[row.source] || row.source}</span><small>{row.sold_by || ''}</small></td>
               <td>{row.payment_method_label}<small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
               <td><strong>{moneyPrecise.format(row.amount)}</strong>{row.open_amount > 0 && <small className="finance-open-amount">פתוח {moneyPrecise.format(row.open_amount)}</small>}{row.refund_amount > 0 && <small className="finance-refund-amount">זוכה {moneyPrecise.format(row.refund_amount)}</small>}</td>
-              <td><span className={meta.cls}>{meta.label}</span></td>
+              <td><span className={meta.cls}>{row.is_debt && ['pending', 'open'].includes(row.status) ? 'חוב פתוח' : meta.label}</span>{row.is_debt && row.debt_reason && <small>{row.debt_reason}</small>}</td>
               <td><button className="btn btn-ghost btn-icon btn-sm" aria-label="פתיחת פירוט" onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? '' : row.id); }}><ChevronDown size={16} style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }} /></button></td>
             </tr>
             {isOpen && <tr className="finance-payment-detail-row"><td colSpan="8"><div className="finance-payment-detail">

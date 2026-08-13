@@ -135,6 +135,80 @@ test('payments report combines open operational payments with accounting-only hi
   assert.equal(report.rows.find((row) => row.accounting_only).payment_method_label, 'מזומן');
 });
 
+test('payments report excludes optional open links but keeps real POS debts', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    payments: [
+      {
+        id: 'equipment-option', parent_id: 'p1', amount: 140, status: 'pending',
+        description: 'ציוד טיפוס', equipment_payment: true, created_at: '2026-08-13T08:00:00.000Z',
+      },
+      {
+        id: 'quote-option', parent_id: 'p1', amount: 400, status: 'pending',
+        description: 'הצעת מחיר', pos_sale_id: 'quote-sale', created_at: '2026-08-13T09:00:00.000Z',
+      },
+      {
+        id: 'wall-debt', parent_id: 'p2', amount: 180, status: 'pending',
+        description: 'כניסה לקיר', pos_sale_id: 'wall-sale', created_at: '2026-08-13T10:00:00.000Z',
+      },
+    ],
+    posSales: [
+      { id: 'quote-sale', parent_id: 'p1', total: 400, status: 'quoted' },
+      { id: 'wall-sale', parent_id: 'p2', total: 180, status: 'pending_payment', payment_method: 'online' },
+    ],
+    parents: [{ id: 'p1', name: 'תהל' }, { id: 'p2', name: 'דנה' }],
+  });
+
+  assert.deepEqual(report.rows.map((row) => row.payment_id), ['wall-debt']);
+  assert.equal(report.summary.open_count, 1);
+  assert.equal(report.summary.open_amount, 180);
+  assert.equal(report.rows[0].debt_reason, 'עסקה שנפתחה בקופה');
+});
+
+test('payments report finds an unpaid hosted event before the host opens its payment page', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-01',
+    to: '2026-08-31',
+    activities: [{
+      id: 'camp-event',
+      name: 'קייטנה של מרכז גל',
+      date: '2026-08-13',
+      status: 'open',
+      registration_mode: 'host_pays',
+      payment_status: 'unpaid',
+      host_parent_id: 'host-1',
+      host_charge_amount: 675,
+    }],
+    parents: [{ id: 'host-1', name: 'גל חן', phone: '0500000000' }],
+  });
+
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.rows[0].id, 'activity-debt:camp-event');
+  assert.equal(report.rows[0].customer_name, 'גל חן');
+  assert.equal(report.rows[0].open_amount, 675);
+  assert.equal(report.summary.open_amount, 675);
+});
+
+test('payments report excludes a pending registration that only becomes confirmed after payment', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    payments: [{
+      id: 'registration-option', amount: 220, status: 'pending', activity_id: 'event-1',
+      activity_registration_order_id: 'order-1', created_at: '2026-08-13T10:00:00.000Z',
+    }],
+    registrations: [{
+      id: 'reg-1', activity_id: 'event-1', payment_id: 'registration-option', status: 'pending_payment',
+    }],
+    activities: [{ id: 'event-1', name: 'פעילות פתוחה', date: '2026-08-20' }],
+  });
+
+  assert.equal(report.rows.length, 0);
+  assert.equal(report.summary.open_count, 0);
+  assert.equal(report.summary.open_amount, 0);
+});
+
 test('payments report never duplicates a linked iCount receipt', () => {
   const report = buildPaymentsReport({
     from: '2026-08-13',

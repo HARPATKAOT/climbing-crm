@@ -1,3 +1,5 @@
+import { hostChargeBreakdown } from './activityPricing.js';
+
 const REVENUE_DOC_TYPES = new Set(['invoice', 'invrec']);
 const PIPELINE_DOC_TYPES = new Set(['deal', 'offer', 'proforma']);
 const CREDIT_DOC_TYPES = new Set(['refund', 'credit', 'creditinvoice', 'credit_invoice']);
@@ -292,6 +294,62 @@ function paymentSource(payment, sale, linkedActivities) {
   }
   if (payment?.pos_sale_id || sale) return 'pos';
   return 'customer';
+}
+
+const OPEN_PAYMENT_STATUSES = new Set(['pending', 'open', 'quoted']);
+
+/**
+ * A live payment link is only a collection task when there is already a
+ * business obligation behind it. Product browsing, quotes and reservations
+ * that become real only after payment must never inflate receivables.
+ */
+function openDebtClassification({ payment = {}, sale = null, registrations = [] } = {}) {
+  if (payment?.activity_host_payment) {
+    return { is_debt: true, debt_reason: 'אירוע בהתחייבות המזמין' };
+  }
+  if (
+    payment?.equipment_checkout_token
+    || payment?.equipment_payment
+    || payment?.equipment_family_payment
+    || payment?.equipment_shoes_upgrade
+  ) {
+    return { is_debt: false, debt_reason: 'קישור רכישת ציוד ללא התחייבות' };
+  }
+  if (String(sale?.status || '').toLowerCase() === 'quoted') {
+    return { is_debt: false, debt_reason: 'הצעת מחיר' };
+  }
+  if (payment?.activity_registration_order_id) {
+    const confirmed = registrations.some((row) => ['confirmed', 'active'].includes(String(row?.status || '').toLowerCase()));
+    return confirmed
+      ? { is_debt: true, debt_reason: 'השתתפות שאושרה' }
+      : { is_debt: false, debt_reason: 'הרשמה שטרם אושרה' };
+  }
+  if (payment?.intro_booking_id || sale?.source === 'intro_booking') {
+    return { is_debt: false, debt_reason: 'שריון אימון שמותנה בתשלום' };
+  }
+  if (sale?.source === 'shop' || payment?.shop_item_id) {
+    return { is_debt: false, debt_reason: 'רכישה שטרם הושלמה' };
+  }
+  if (sale) return { is_debt: true, debt_reason: 'עסקה שנפתחה בקופה' };
+  return { is_debt: true, debt_reason: 'דרישת תשלום יזומה' };
+}
+
+function unpaidHostActivityDebt(activity, registrations = []) {
+  if (activity?.registration_mode !== 'host_pays') return null;
+  if (['paid', 'refunded', 'cancelled'].includes(String(activity.payment_status || '').toLowerCase())) return null;
+  if (['draft', 'cancelled', 'archived'].includes(String(activity.status || '').toLowerCase())) return null;
+  if (!(activity.host_parent_id || activity.host_name || activity.contact_name)) return null;
+
+  const frozen = Number(activity.host_charge_amount);
+  const registeredCount = registrations.filter((row) => (
+    ['confirmed', 'active'].includes(String(row?.status || '').toLowerCase())
+  )).length;
+  const calculated = hostChargeBreakdown(activity, { registeredCount }).gross;
+  const amount = Number.isFinite(frozen) && frozen > 0 ? frozen : calculated;
+  return {
+    amount: roundFinance(amount),
+    registered_count: registeredCount,
+  };
 }
 
 function paymentRowAmounts(status, amount, explicitRefund = 0, { accountingCredit = false, collected = null } = {}) {
@@ -633,7 +691,14 @@ export function buildPaymentsReport({
   const studentById = new Map(students.map((student) => [String(student.id), student]));
   const activityById = new Map(activities.map((activity) => [String(activity.id), activity]));
   const registrationsByPayment = new Map();
+  const registrationsByActivity = new Map();
   for (const registration of registrations) {
+    if (registration.activity_id) {
+      const activityKey = String(registration.activity_id);
+      const activityRows = registrationsByActivity.get(activityKey) || [];
+      activityRows.push(registration);
+      registrationsByActivity.set(activityKey, activityRows);
+    }
     if (!registration.payment_id) continue;
     const key = String(registration.payment_id);
     const rows = registrationsByPayment.get(key) || [];
@@ -734,6 +799,14 @@ export function buildPaymentsReport({
     const customerId = payment.parent_id || sale?.parent_id || document?.client_id || null;
     const paymentMethod = operationalPaymentMethod(payment, sale);
 
+    const debt = OPEN_PAYMENT_STATUSES.has(status)
+      ? openDebtClassification({
+        payment,
+        sale,
+        registrations: registrationsByPayment.get(String(payment.id)) || [],
+      })
+      : { is_debt: false, debt_reason: '' };
+
     rows.push({
       id: `payment:${payment.id}`,
       payment_id: payment.id,
@@ -758,6 +831,7 @@ export function buildPaymentsReport({
       payment_method_label: paymentMethodLabel(paymentMethod || (document ? eventsByDocument.get(String(document.id))?.[0]?.method : '')),
       status,
       original_status: payment.status || sale?.status || '',
+      ...debt,
       ...amounts,
       document_number: payment.icount_doc_number || sale?.icount_doc_number || document?.docnum || '',
       document_type: payment.icount_doctype || sale?.icount_doctype || document?.doctype || 'invrec',
@@ -776,6 +850,64 @@ export function buildPaymentsReport({
       equipment_policy_refund: !!payment.equipment_checkout_token,
       refund_reason: payment.refund_reason || sale?.refund_reason || '',
       refunded_at: payment.refunded_at || sale?.refunded_at || null,
+      accounting_only: false,
+    });
+  }
+
+  // The hosted-event debt exists when the event is booked, not when the host
+  // happens to open the payment page. Build the missing receivable directly
+  // from the activity so an untouched link cannot hide a real debt.
+  for (const activity of activities) {
+    if (activity.host_payment_id && rows.some((row) => String(row.payment_id || '') === String(activity.host_payment_id))) continue;
+    const date = String(activity.date || activity.created_at || '').slice(0, 10);
+    if (!dateInRange(date, from, to)) continue;
+    const activityRegistrations = registrationsByActivity.get(String(activity.id)) || [];
+    const debt = unpaidHostActivityDebt(activity, activityRegistrations);
+    if (!debt) continue;
+    const parent = parentById.get(String(activity.host_parent_id || '')) || null;
+    const amount = debt.amount;
+    rows.push({
+      id: `activity-debt:${activity.id}`,
+      payment_id: null,
+      sale_id: null,
+      date,
+      created_at: activity.updated_at || activity.created_at || `${date}T00:00:00`,
+      paid_at: null,
+      customer_id: activity.host_parent_id || null,
+      customer_name: parent?.name || activity.host_name || activity.contact_name || 'מזמין לא משויך',
+      customer_phone: parent?.phone || activity.host_phone || activity.contact_phone || '',
+      customer_email: parent?.email || activity.host_email || '',
+      student_id: null,
+      student_name: '',
+      icount_client_id: parent?.icount_client_id || null,
+      description: `תשלום אירוע: ${activity.name || 'אירוע'}`,
+      items: [{ id: activity.id, name: activity.name || 'אירוע', quantity: 1, unit_price: amount, total: amount }],
+      product_names: [activity.name || 'אירוע'],
+      activity_ids: [activity.id],
+      activities: [activity.name || 'אירוע'],
+      source: 'activity',
+      payment_method: 'online',
+      payment_method_label: paymentMethodLabel('online'),
+      status: 'open',
+      original_status: activity.payment_status || 'unpaid',
+      is_debt: true,
+      debt_reason: 'אירוע בהתחייבות המזמין',
+      ...paymentRowAmounts('open', amount),
+      document_number: '',
+      document_type: '',
+      document_id: null,
+      document_url: null,
+      refund_document_number: '',
+      refund_document_url: null,
+      payment_url: activity.payment_link || '',
+      sold_by: '',
+      confirmation_code: '',
+      card_last4: '',
+      has_passes: false,
+      equipment_payment: false,
+      equipment_policy_refund: false,
+      refund_reason: '',
+      refunded_at: null,
       accounting_only: false,
     });
   }
@@ -821,6 +953,8 @@ export function buildPaymentsReport({
         : 'לא ידוע',
       status,
       original_status: status,
+      is_debt: false,
+      debt_reason: '',
       ...amounts,
       document_number: document.docnum || '',
       document_type: document.doctype || '',
@@ -841,26 +975,27 @@ export function buildPaymentsReport({
     });
   }
 
-  rows.sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
+  const reportRows = rows.filter((row) => !OPEN_PAYMENT_STATUSES.has(row.status) || row.is_debt === true);
+  reportRows.sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
   const statusCounts = {};
   const methodCounts = {};
   const sourceCounts = {};
-  rows.forEach((row) => {
+  reportRows.forEach((row) => {
     statusCounts[row.status] = (statusCounts[row.status] || 0) + 1;
     methodCounts[row.payment_method_label] = (methodCounts[row.payment_method_label] || 0) + 1;
     sourceCounts[row.source] = (sourceCounts[row.source] || 0) + 1;
   });
 
   return {
-    summary: summarizePaymentRows(rows),
-    rows,
+    summary: summarizePaymentRows(reportRows),
+    rows: reportRows,
     filters: {
       statuses: statusCounts,
       payment_methods: methodCounts,
       sources: sourceCounts,
-      products: [...new Set(rows.flatMap((row) => row.product_names).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
-      events: [...new Set(rows.flatMap((row) => row.activities).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
-      customers: [...new Map(rows.filter((row) => row.customer_name).map((row) => [String(row.customer_id || row.customer_name), {
+      products: [...new Set(reportRows.flatMap((row) => row.product_names).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
+      events: [...new Set(reportRows.flatMap((row) => row.activities).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he')),
+      customers: [...new Map(reportRows.filter((row) => row.customer_name).map((row) => [String(row.customer_id || row.customer_name), {
         id: row.customer_id || null,
         name: row.customer_name,
       }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'he')),
