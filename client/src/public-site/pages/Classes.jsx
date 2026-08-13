@@ -130,14 +130,15 @@ function WeekBoard({ groups }) {
                     <div
                       className="ks-chip"
                       key={`${group.id}-${day}`}
+                      aria-label={`${cleanName(group)}, יום ${weekdayName(day)} בשעה ${group.time}`}
                       style={{
                         top: (start - startHour * 60) * PX_PER_MIN,
                         height: Math.max((group.duration || 50) * PX_PER_MIN - 4, 44),
                         '--ks-chip-accent': color,
                       }}
                     >
-                      <strong>{group.time}</strong>
-                      <span>{cleanName(group)}</span>
+                      <strong className="ks-chip-name">{cleanName(group)}</strong>
+                      <time className="ks-chip-time" dateTime={group.time}>{group.time}</time>
                     </div>
                   );
                 })}
@@ -167,8 +168,8 @@ function DayList({ groups }) {
                 key={`${group.id}-${day}`}
                 style={{ '--ks-chip-accent': color }}
               >
-                <strong>{group.time}</strong>
-                <span>{cleanName(group)}</span>
+                <strong className="ks-daylist-name">{cleanName(group)}</strong>
+                <time className="ks-daylist-time" dateTime={group.time}>{group.time}</time>
               </div>
             );
           })}
