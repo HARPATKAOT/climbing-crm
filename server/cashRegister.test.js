@@ -7,6 +7,7 @@ import {
   closeSession,
   adjustCash,
   recordSaleInLedger,
+  recordRefundInLedger,
   listLedger,
   LEDGER_ACTIONS,
 } from './cashRegister.js';
@@ -146,6 +147,54 @@ test('online sale does not change cash expected', () => {
   assert.equal(
     store.get('cash_ledger').some((r) => r.action_type === LEDGER_ACTIONS.SALE_ONLINE),
     true
+  );
+});
+
+test('cash refund reduces expected cash once; online refund is audit-only', () => {
+  const store = makeStore();
+  openSession(store, {
+    denominations: { 100: 5 },
+    reqUser: { name: 'א' },
+    body: OPERATOR_BODY,
+  });
+  recordSaleInLedger(store, {
+    paymentMethod: 'cash', total: 80, saleId: 'cash-sale', reqUser: { name: 'א' },
+  });
+  assert.equal(computeExpectedCash(store), 580);
+
+  recordRefundInLedger(store, {
+    paymentMethod: 'cash', total: 80, saleId: 'cash-sale', reqUser: { name: 'א' },
+  });
+  recordRefundInLedger(store, {
+    paymentMethod: 'cash', total: 80, saleId: 'cash-sale', reqUser: { name: 'א' },
+  });
+  assert.equal(computeExpectedCash(store), 500);
+  assert.equal(
+    store.get('cash_ledger').filter((r) => r.action_type === LEDGER_ACTIONS.REFUND_CASH).length,
+    1,
+  );
+
+  recordRefundInLedger(store, {
+    paymentMethod: 'online', total: 120, saleId: 'online-sale', reqUser: { name: 'א' },
+  });
+  assert.equal(computeExpectedCash(store), 500);
+  assert.equal(
+    store.get('cash_ledger').some((r) => r.action_type === LEDGER_ACTIONS.REFUND_ONLINE),
+    true,
+  );
+});
+
+test('sale ledger entry is idempotent per sale and payment method', () => {
+  const store = makeStore();
+  recordSaleInLedger(store, {
+    paymentMethod: 'online', total: 200, saleId: 'online-sale', reqUser: { name: 'א' },
+  });
+  recordSaleInLedger(store, {
+    paymentMethod: 'online', total: 200, saleId: 'online-sale', reqUser: { name: 'א' },
+  });
+  assert.equal(
+    store.get('cash_ledger').filter((r) => r.action_type === LEDGER_ACTIONS.SALE_ONLINE).length,
+    1,
   );
 });
 

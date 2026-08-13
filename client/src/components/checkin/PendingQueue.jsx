@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Award, Banknote, CheckCircle2, ClipboardList, CreditCard, ExternalLink, FileText, Hourglass,
-  RefreshCw, ShieldAlert, Undo2, X,
+  Award, Banknote, CheckCircle2, ClipboardList, CreditCard, Eye, Hourglass,
+  RefreshCw, ShieldAlert, X,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
-import { icountClientUrl } from '../../utils/icountLinks.js';
+import CounterRecordDialog from './CounterRecordDialog.jsx';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -15,9 +15,8 @@ const hhmm = (iso) => {
  * טבלת „ממתינים לטיפול” — מה שנשאר פתוח בדלפק.
  *
  * שני סוגי שורות: מי שנכנס ועוד לא עבר תדריך ומבחן אבטחה, ומי שנשלח אליו
- * קישור תשלום שעוד לא נסגר. שורת תשלום **לא נעלמת מעצמה** כשהכסף מגיע — היא
- * נצבעת ירוק, והמדריך מסיר אותה בלחיצה. הלחיצה היא מה שמוודא שאדם ראה
- * שהתשלום עבר, במקום ששורה תיעלם בזמן שאיש לא הסתכל.
+ * קישור תשלום שעוד לא שולם. ברגע שהכסף מגיע השורה מפסיקה להיות משימה
+ * ומופיעה מיד ב„מכירות במשמרת”; אם עדיין חסר מבחן אבטחה, נשארת שורת מבחן.
  *
  * הטבלה נטענת מחדש כל 20 שניות: התשלום מגיע מהסליקה בזמן שלו, בלי שאיש
  * במסוף לחץ על כלום.
@@ -32,6 +31,8 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
   const [loading, setLoading] = useState(true);
   const [byRow, setByRow] = useState({});
   const [savingId, setSavingId] = useState(null);
+  const [actionBusyId, setActionBusyId] = useState('');
+  const [selectedRecord, setSelectedRecord] = useState(null);
   const [error, setError] = useState('');
   const liveRef = useRef(true);
 
@@ -118,17 +119,21 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     }
   };
 
-  /** זיכוי מלא של מכירה — הכסף חוזר ללקוח ומופק מסמך זיכוי ב-iCount. */
-  const refundSale = async (row) => {
+  /** זיכוי מלא של מכירה — כולל תיקון יומן המזומן וביטול ההטבות שנוצרו. */
+  const refundSale = async (sale) => {
+    const cashNote = sale.method === 'cash'
+      ? '\nזו עסקת מזומן: לאחר האישור יש למסור ללקוח את הסכום מהמגירה.'
+      : '\nההחזר יבוצע לאמצעי התשלום דרך מערכת הסליקה.';
     const ok = window.confirm(
-      `לזכות את ${row.name} על ₪${row.total}?
-הכסף יוחזר ויופק מסמך זיכוי. אי אפשר לבטל את הפעולה.`
+      `לזכות את ${sale.payer_name || sale.name} על ₪${sale.total}?
+יופק מסמך זיכוי, וכרטיסייה או מנוי שנוצרו בעסקה יבוטלו.${cashNote}
+אי אפשר לבטל את הפעולה.`
     );
     if (!ok) return;
-    setSavingId(row.id);
+    setActionBusyId(`refund:${sale.sale_id}`);
     setError('');
     try {
-      const res = await fetch(`/api/pos/sales/${encodeURIComponent(row.sale_id)}/refund`, {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(sale.sale_id)}/refund`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'זיכוי מהדלפק' }),
@@ -136,11 +141,39 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'הזיכוי נכשל');
       await load();
-      onDone?.(`בוצע זיכוי ל${row.name}`);
+      setSelectedRecord(null);
+      onDone?.(`בוצע זיכוי ל${sale.payer_name || sale.name}`);
     } catch (err) {
       setError(err.message);
     } finally {
-      setSavingId(null);
+      setActionBusyId('');
+    }
+  };
+
+  /** עסקה שלא שולמה מבטלים; אין כסף להחזיר ואין מסמך זיכוי. */
+  const cancelSale = async (sale) => {
+    const ok = window.confirm(
+      `לבטל את קישור התשלום של ${sale.payer_name || sale.name} על ₪${sale.total}?\n`
+      + 'הקישור יפסיק לעבוד, והעסקה תישאר ביומן כמבוטלת.'
+    );
+    if (!ok) return;
+    setActionBusyId(`cancel:${sale.sale_id}`);
+    setError('');
+    try {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(sale.sale_id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'ביטול קישור מהדלפק' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'ביטול העסקה נכשל');
+      await load();
+      setSelectedRecord(null);
+      onDone?.(`קישור התשלום של ${sale.payer_name || sale.name} בוטל`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionBusyId('');
     }
   };
 
@@ -150,41 +183,79 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
    * המסלול מזרים PDF ודורש הזדהות, ולכן אי אפשר פשוט לפתוח אותו בלשונית —
    * היא תגיע בלי הטוקן ותחזור 401. מושכים את הקובץ ופותחים אותו מהזיכרון.
    */
-  const openDoc = async (row, kind = 'charge') => {
+  const openDoc = async (sale, kind = 'charge', printAfterOpen = false) => {
     setError('');
+    const popup = window.open('', '_blank');
+    if (!popup) {
+      setError('הדפדפן חסם את חלון החשבונית — אשרו חלונות קופצים ונסו שוב');
+      return;
+    }
+    popup.opener = null;
     try {
-      const res = await fetch(`/api/pos/sales/${encodeURIComponent(row.sale_id)}/invoice?kind=${kind}`);
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(sale.sale_id)}/invoice?kind=${kind}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || 'לא נמצא מסמך');
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank', 'noopener,noreferrer');
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      if (printAfterOpen) {
+        popup.onload = () => window.setTimeout(() => {
+          try { popup.focus(); popup.print(); } catch { /* חלון ה-PDF עדיין מאפשר הדפסה ידנית */ }
+        }, 300);
+      }
+      popup.location.href = url;
+      window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+      if (printAfterOpen) onDone?.('החשבונית נפתחה להדפסה חוזרת');
     } catch (err) {
+      popup.close();
       setError(err.message);
     }
   };
 
-  const clearPayment = async (row) => {
-    setSavingId(row.id);
+  const copyPaymentLink = async (sale) => {
     setError('');
     try {
-      const res = await fetch(`/api/checkin/pending/payment/${encodeURIComponent(row.sale_id)}/handled`, {
+      if (!sale.payment_url) throw new Error('לא נשמר קישור תשלום לעסקה הזאת');
+      await navigator.clipboard.writeText(sale.payment_url);
+      onDone?.('קישור התשלום הועתק');
+    } catch (err) {
+      setError(err.message || 'העתקת הקישור נכשלה');
+    }
+  };
+
+  const resendPaymentLink = async (sale) => {
+    setActionBusyId(`resend:${sale.sale_id}`);
+    setError('');
+    try {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(sale.sale_id)}/send-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employee_id: pickedFor(row) || null }),
+        body: JSON.stringify({ phone: sale.customer_phone || undefined }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'ההסרה נכשלה');
-      await load();
-      onDone?.(`התשלום של ${row.name} טופל`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'שליחת הקישור נכשלה');
+      if (!body.whatsappSent && body.whatsappUrl) window.open(body.whatsappUrl, '_blank', 'noopener,noreferrer');
+      onDone?.(body.whatsappSent ? 'קישור התשלום נשלח שוב' : 'נפתח WhatsApp לשליחה ידנית');
     } catch (err) {
       setError(err.message);
     } finally {
-      setSavingId(null);
+      setActionBusyId('');
     }
   };
+
+  const openDetails = (row, sourceTab) => {
+    setError('');
+    setSelectedRecord({ ...row, source_tab: sourceTab });
+  };
+
+  const relatedSales = selectedRecord
+    ? selectedRecord.sale_id
+      ? sales.filter((sale) => String(sale.sale_id) === String(selectedRecord.sale_id))
+      : selectedRecord.student_id
+        ? sales.filter((sale) => String(sale.student_id || '') === String(selectedRecord.student_id))
+        : []
+    : [];
 
   return (
     <div className="card">
@@ -231,7 +302,21 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                 </td></tr>
               )}
               {sales.map((row) => (
-                <tr key={row.id}>
+                <tr
+                  key={row.id}
+                  role="button"
+                  tabIndex={0}
+                  title="לחיצה להצגת פרטי העסקה והפעולות"
+                  onClick={() => openDetails(row, 'sales')}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openDetails(row, 'sales');
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
                   <td style={{ fontWeight: 600 }}>
                     {row.name}
@@ -243,7 +328,11 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--text-2)' }}>{row.items || '—'}</td>
                   <td>
-                    {row.method === 'cash' ? (
+                    {row.status === 'refunded' ? (
+                      <span className="badge badge-red"><CreditCard size={12} /> זוכה</span>
+                    ) : row.status === 'cancelled' ? (
+                      <span className="badge badge-gray"><X size={12} /> בוטל</span>
+                    ) : row.method === 'cash' ? (
                       <span className="badge badge-green"><Banknote size={12} /> מזומן</span>
                     ) : row.paid ? (
                       <span className="badge badge-green"><CreditCard size={12} /> שולם בקישור</span>
@@ -256,47 +345,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     {row.refunded && <div style={{ fontSize: 11, color: 'var(--amber)' }}>זוכתה</div>}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {row.icount_client_id && (
-                        <a
-                          className="btn btn-ghost btn-sm"
-                          href={icountClientUrl(row.icount_client_id)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="תיק הלקוח ב-iCount"
-                        >
-                          <ExternalLink size={14} /> תיק הלקוח
-                        </a>
-                      )}
-                      {row.doc_number && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          title={`מסמך ${row.doc_number}`}
-                          onClick={() => openDoc(row, 'charge')}
-                        >
-                          <FileText size={14} /> חשבונית
-                        </button>
-                      )}
-                      {row.refunded ? (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => openDoc(row, 'refund')}
-                        >
-                          <FileText size={14} /> מסמך זיכוי
-                        </button>
-                      ) : row.paid && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          disabled={savingId === row.id}
-                          onClick={() => refundSale(row)}
-                        >
-                          <Undo2 size={14} /> {savingId === row.id ? 'מזכה...' : 'זיכוי'}
-                        </button>
-                      )}
-                    </div>
+                    <span className="btn btn-ghost btn-sm"><Eye size={14} /> פרטים ופעולות</span>
                   </td>
                 </tr>
               ))}
@@ -307,16 +356,29 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
         <div className="table-wrap">
           <table className="crm-table">
             <thead>
-              <tr><th>שעת כניסה</th><th>שם</th><th>מצב</th></tr>
+              <tr><th>שעת כניסה</th><th>שם</th><th>מצב</th><th /></tr>
             </thead>
             <tbody>
               {active.length === 0 && (
-                <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
+                <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
                   אף אחד לא נכנס עדיין במשמרת הזאת
                 </td></tr>
               )}
               {active.map((row) => (
-                <tr key={row.id}>
+                <tr
+                  key={row.id}
+                  role="button"
+                  tabIndex={0}
+                  title="לחיצה להצגת פרטי הכניסה והרכישות"
+                  onClick={() => openDetails(row, 'active')}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openDetails(row, 'active');
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
                   <td style={{ fontWeight: 600 }}>{row.name}</td>
                   <td>
@@ -324,6 +386,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                       <CheckCircle2 size={12} /> שילם ועבר מבחן — על הקיר
                     </span>
                   </td>
+                  <td><span className="btn btn-ghost btn-sm"><Eye size={14} /> פרטים</span></td>
                 </tr>
               ))}
             </tbody>
@@ -356,7 +419,18 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
               return (
                 <tr
                   key={row.id}
-                  style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : undefined}
+                  role="button"
+                  tabIndex={0}
+                  title="לחיצה להצגת פרטי הרשומה והרכישות"
+                  onClick={() => openDetails(row, 'pending')}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openDetails(row, 'pending');
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
                 >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
                   <td style={{ fontWeight: 600 }}>
@@ -369,16 +443,11 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {isPayment && (row.paid ? (
-                        <span className="badge badge-green">
-                          <CheckCircle2 size={12} /> שולם ₪{row.total}
-                          {row.grants_entry ? ' — אפשר להכניס' : ''}
-                        </span>
-                      ) : (
+                      {isPayment && (
                         <span className="badge badge-amber">
                           <Hourglass size={12} /> קישור תשלום ₪{row.total} — טרם שולם
                         </span>
-                      ))}
+                      )}
                       {row.needs_safety && (
                         <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
                           <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
@@ -389,13 +458,9 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                       <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>{row.items}</div>
                     )}
                   </td>
-                  <td style={{ minWidth: 190 }}>
+                  <td style={{ minWidth: 190 }} onClick={(event) => event.stopPropagation()}>
                     {waitingForMoney ? (
                       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לסליקה</span>
-                    ) : isPayment && !row.needs_safety ? (
-                      // אישור על תשלום אינו חתימה על כלום — רק „ראיתי שהכסף נכנס”.
-                      // בורר עובד כאן שאל שאלה שאין לה משמעות בתיק של אף אחד.
-                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לאישור הדלפק</span>
                     ) : (
                       <EmployeeSelect
                         className="input select input-sm"
@@ -407,18 +472,8 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                       />
                     )}
                   </td>
-                  <td>
+                  <td onClick={(event) => event.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {isPayment && !waitingForMoney && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          disabled={savingId === row.id}
-                          onClick={() => clearPayment(row)}
-                        >
-                          <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'אישור'}
-                        </button>
-                      )}
                       {row.needs_safety && row.student_id && (
                         <button
                           type="button"
@@ -447,6 +502,22 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
           </tbody>
         </table>
       </div>
+      )}
+
+      {selectedRecord && (
+        <CounterRecordDialog
+          record={selectedRecord}
+          relatedSales={relatedSales}
+          busyId={actionBusyId}
+          error={error}
+          onClose={() => { setSelectedRecord(null); setError(''); }}
+          onRefund={refundSale}
+          onCancel={cancelSale}
+          onOpenDoc={(sale, kind) => openDoc(sale, kind, false)}
+          onPrintDoc={(sale, kind) => openDoc(sale, kind, true)}
+          onCopyPaymentLink={copyPaymentLink}
+          onResendPaymentLink={resendPaymentLink}
+        />
       )}
     </div>
   );

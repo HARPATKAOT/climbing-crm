@@ -36,6 +36,7 @@ import {
   closeSession,
   adjustCash,
   recordSaleInLedger,
+  recordRefundInLedger,
   listLedger,
   actionTypeLabel,
   getOpenSession,
@@ -11490,6 +11491,20 @@ app.post('/api/icount/webhook', async (req, res) => {
           });
           if (paidSale) await persistCore('pos_sales', paidSale);
 
+          // סליקה בקישור היא מכירת משמרת לכל דבר. בעבר רק מזומן נכתב ביומן
+          // הקופה, ולכן סיכומי המשמרת החמיצו את רוב העסקאות ששולמו באשראי.
+          const saleLedger = recordSaleInLedger(db, {
+            paymentMethod: sale.payment_method,
+            total: sale.total,
+            saleId: sale.id,
+            sessionId: sale.session_id || null,
+            reqUser: {
+              employee_id: sale.sold_by_employee_id || null,
+              name: sale.sold_by || 'סליקה בקישור',
+            },
+          });
+          if (saleLedger) await persistCore('cash_ledger', saleLedger);
+
           // The money arrived, so the reservation becomes a real redemption.
           if (sale.coupon_id) {
             const held = db.getOne('customer_coupons', sale.coupon_id);
@@ -15040,21 +15055,18 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
     let docHasCc = ['emv', 'credit', 'cc', 'online', 'card'].includes(
       String(sale.payment_method || '').toLowerCase()
     );
+    let alreadyCancelled = false;
 
     // Verify still cancellable when possible
     try {
       const info = await icount.getDocInfo({ doctype, docnum: sale.icount_doc_number });
       const docInfo = info.doc_info || info;
       if (docInfo?.is_cancelled) {
-        const updated = db.update('pos_sales', sale.id, {
-          status: 'refunded',
-          refunded_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          refund_note: 'המסמך כבר בוטל במערכת החיוב',
-        });
-        return res.json({ sale: updated, alreadyCancelled: true });
+        // המסמך כבר בוטל מחוץ למסך הזה, אך עדיין צריך להשלים אצלנו את כל
+        // הצדדים: כרטיסיות, תשלום, הטבה ויומן קופה. אסור לצאת מוקדם כאן.
+        alreadyCancelled = true;
       }
-      if (docInfo && docInfo.is_cancellable === false) {
+      if (!alreadyCancelled && docInfo && docInfo.is_cancellable === false) {
         return res.status(400).json({ error: 'המסמך במערכת החיוב לא ניתן לביטול' });
       }
       if (docInfo?.has_cc != null) {
@@ -15072,12 +15084,18 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       console.warn('⚠️ [POS refund] doc info check failed:', err.message);
     }
 
-    const cancellation = await icount.cancelDoc({
-      doctype,
-      docnum: sale.icount_doc_number,
-      reason,
-      refundCc: docHasCc,
-    });
+    const cancellation = alreadyCancelled
+      ? {
+          docnum: sale.refund_doc_number || null,
+          doctype: sale.refund_doctype || null,
+          docUrl: sale.refund_doc_url || null,
+        }
+      : await icount.cancelDoc({
+          doctype,
+          docnum: sale.icount_doc_number,
+          reason,
+          refundCc: docHasCc,
+        });
 
     // Void passes issued by this sale
     const voidedPasses = [];
@@ -15089,30 +15107,50 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
         void_reason: reason,
         updated_at: new Date().toISOString(),
       });
-      if (updatedPass) voidedPasses.push(updatedPass);
+      if (updatedPass) {
+        voidedPasses.push(updatedPass);
+        await persistCore('customer_passes', updatedPass);
+      }
     }
 
     // Mark related payments
+    const refundedPayments = [];
     for (const payment of db.get('payments') || []) {
       if (String(payment.pos_sale_id) !== String(sale.id) && String(payment.icount_doc_number) !== String(sale.icount_doc_number)) {
         continue;
       }
-      db.update('payments', payment.id, {
+      const updatedPayment = db.update('payments', payment.id, {
         status: 'refunded',
         updated_at: new Date().toISOString(),
       });
+      if (updatedPayment) {
+        refundedPayments.push(updatedPayment);
+        await persistCore('payments', updatedPayment);
+      }
     }
 
     const updatedSale = db.update('pos_sales', sale.id, {
       status: 'refunded',
       refunded_at: new Date().toISOString(),
       refund_reason: reason,
-      refund_doc_number: cancellation.docnum,
-      refund_doctype: cancellation.doctype,
-      refund_doc_url: cancellation.docUrl || null,
+      refund_doc_number: cancellation.docnum || sale.refund_doc_number || null,
+      refund_doctype: cancellation.doctype || sale.refund_doctype || null,
+      refund_doc_url: cancellation.docUrl || sale.refund_doc_url || null,
+      refund_note: alreadyCancelled ? 'המסמך כבר בוטל במערכת החיוב' : null,
       refunded_by: req.crmUser?.email || req.crmUser?.name || null,
       updated_at: new Date().toISOString(),
     });
+    if (updatedSale) await persistCore('pos_sales', updatedSale);
+
+    const refundLedger = recordRefundInLedger(db, {
+      paymentMethod: sale.payment_method,
+      total: sale.total,
+      saleId: sale.id,
+      // הזיכוי שייך למשמרת שבה בוצע בפועל, לא בהכרח לזו שבה נמכר.
+      sessionId: getOpenSession(db)?.id || null,
+      reqUser: req.crmUser,
+    });
+    if (refundLedger) await persistCore('cash_ledger', refundLedger);
 
     // Reversing the sale reverses the benefit too: the customer keeps the
     // coupon unless it has expired in the meantime.
@@ -15122,13 +15160,16 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
     }
 
     console.log(
-      `↩️ [POS] refund sale=${sale.id} doc=${sale.icount_doc_number} → cancel=${cancellation.docnum}`
+      `↩️ [POS] refund sale=${sale.id} doc=${sale.icount_doc_number} → cancel=${cancellation.docnum || 'already-cancelled'}`
     );
 
     res.json({
       sale: updatedSale,
       cancellation,
+      alreadyCancelled,
+      refundLedger,
       voidedPasses,
+      refundedPayments,
       restoredCoupons,
     });
   } catch (err) {
@@ -16665,6 +16706,9 @@ async function openPendingPosSale({
     payment_id: payment.id,
     sold_by: soldBy,
     sold_by_employee_id: soldByEmployeeId,
+    // קישור שנפתח בדלפק הוא עסקה של המשמרת כבר מרגע השליחה, בדיוק כמו
+    // מזומן. השיוך נשמר גם אם הלקוח משלם כמה דקות אחר כך.
+    session_id: getOpenSession(db)?.id || null,
     source: source || undefined,
     // The link that produced this sale, so the webhook can report back to it.
     checkout_link_id: checkoutLinkId || null,
@@ -17520,13 +17564,21 @@ app.get('/api/checkin/pending', async (req, res) => {
   const today = israelDateStr();
   // The counter is a live operational view. Await these small durable tables so
   // a sale handled by another server instance is visible on this very request.
-  const [checkIns, sales, punches] = await readTablesFresh('check_ins', 'pos_sales', 'pass_punches');
+  const [checkIns, sales, punches, payments] = await readTablesFresh(
+    'check_ins',
+    'pos_sales',
+    'pass_punches',
+    'payments'
+  );
   const tests = db.get('level_tests') || [];
+  const opener = wallShiftOpener(db.get('shift_hours') || []);
   res.json(buildCounterQueues({
     checkIns,
     sales,
     punches,
+    payments,
     today,
+    shiftStartedAt: opener?.clock_in || null,
     dateOf: (iso) => israelLocalParts(iso)?.date || null,
     studentOf: (id) => db.getOne('students', id),
     parentOf: (id) => db.getOne('parents', id),

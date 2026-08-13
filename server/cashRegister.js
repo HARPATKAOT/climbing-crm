@@ -396,6 +396,13 @@ export function recordSaleInLedger(store, {
         : null;
   if (!action) return null;
 
+  const existing = (store.get('cash_ledger') || []).find((row) => (
+    row.action_type === action
+    && saleId
+    && String(row.pos_sale_id || '') === String(saleId)
+  ));
+  if (existing) return existing;
+
   const open = getOpenSession(store);
   const actor = actorFrom(reqUser, {});
   const before = computeExpectedCash(store);
@@ -407,6 +414,43 @@ export function recordSaleInLedger(store, {
     tendered: method === 'cash' ? roundMoney(tendered) : null,
     change_given: method === 'cash' ? roundMoney(changeGiven) : null,
     expected_after: method === 'cash' ? roundMoney(before + amt) : null,
+    pos_sale_id: saleId || null,
+    employee_id: actor.employee_id,
+    employee_name: actor.employee_name,
+    notes: '',
+  });
+}
+
+/**
+ * רישום זיכוי ביומן הקופה. בזיכוי מזומן הכסף יוצא פיזית מהמגירה ולכן הוא
+ * מקטין את הסכום הצפוי; זיכוי אונליין נרשם לביקורת אך אינו משנה את המזומן.
+ * מזהה המכירה הופך את הפעולה לאידמפוטנטית גם אם תשובת הסליקה נשלחת שוב.
+ */
+export function recordRefundInLedger(store, {
+  paymentMethod,
+  total,
+  saleId,
+  sessionId,
+  reqUser,
+} = {}) {
+  const method = String(paymentMethod || '').toLowerCase();
+  const action = method === 'cash' ? LEDGER_ACTIONS.REFUND_CASH : LEDGER_ACTIONS.REFUND_ONLINE;
+  const existing = (store.get('cash_ledger') || []).find((row) => (
+    row.action_type === action
+    && saleId
+    && String(row.pos_sale_id || '') === String(saleId)
+  ));
+  if (existing) return existing;
+
+  const open = getOpenSession(store);
+  const actor = actorFrom(reqUser, {});
+  const before = computeExpectedCash(store);
+  const amount = roundMoney(total);
+  return insertLedger(store, {
+    session_id: sessionId || open?.id || null,
+    action_type: action,
+    amount,
+    expected_after: method === 'cash' ? roundMoney(before - amount) : null,
     pos_sale_id: saleId || null,
     employee_id: actor.employee_id,
     employee_name: actor.employee_name,
