@@ -126,11 +126,17 @@ export default function Dashboard({ students, groups, onNavigate }) {
 
   const counts = getPipelineCounts(students);
   const totalStudents = students.filter(s => s.status === 'registered').length;
-  const activeLeads   = students.filter(s => ['lead_new','health_signed','intro_scheduled','intro_paid'].includes(s.status)).length;
+  const activeLeads   = students.filter(s => [
+    'lead_new', 'health_signed', 'details_completed', 'awaiting_parent_confirmation',
+    'awaiting_centre_confirmation', 'intro_scheduled', 'intro_paid',
+  ].includes(s.status)).length;
 
   const pipelineStages = [
     { key: 'lead_new',        color: '#818CF8' },
+    { key: 'details_completed', color: '#67E8F9' },
     { key: 'health_signed',   color: '#FCD34D' },
+    { key: 'awaiting_parent_confirmation', color: '#FBBF24' },
+    { key: 'awaiting_centre_confirmation', color: '#C084FC' },
     { key: 'intro_scheduled', color: '#67E8F9' },
     { key: 'intro_paid',      color: '#C084FC' },
     { key: 'registered',      color: '#34D399' },

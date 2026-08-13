@@ -22,6 +22,11 @@ const SUNDAY = 0;
 const TUESDAY = 2;
 export const DIGEST_HOUR = 8;
 
+import {
+  confirmParentRegistration,
+  REGISTRATION_STATUS,
+} from './registrationLifecycle.js';
+
 function israelParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: TIME_ZONE,
@@ -54,7 +59,10 @@ export function findOpenCheck(db, studentId) {
 
 /** Pending trainees the follow-up may still ask about. A parent report closes the question. */
 export function studentsStillAwaitingRegistration(db, students = []) {
-  return (students || []).filter((student) => String(student?.status || '') === 'pending_signup'
+  return (students || []).filter((student) => [
+    'pending_signup',
+    REGISTRATION_STATUS.AWAITING_PARENT,
+  ].includes(String(student?.status || ''))
     && !findOpenCheck(db, student.id));
 }
 
@@ -71,9 +79,17 @@ async function markPlacementReported({ db, persist, student, now }) {
 
 export async function recordParentReport({ db, persist, student, parent, now = new Date() } = {}) {
   if (!student?.id) return { ok: false, error: 'אין מתאמן' };
-  await markPlacementReported({ db, persist, student, now });
+  const advanced = await confirmParentRegistration({ db, persist, student, now });
+  // Legacy pending rows are converted by the production migration. Until it
+  // runs, keep recording the report but never pretend that a 10-day hold was
+  // created when there was no atomic seat claim behind it.
+  if (!advanced.ok && String(student.status || '') === 'pending_signup') {
+    await markPlacementReported({ db, persist, student, now });
+  } else if (!advanced.ok) {
+    return { ok: false, error: advanced.reason || 'אין שמירת מקום פעילה', reason: advanced.reason };
+  }
   const existing = findOpenCheck(db, student.id);
-  if (existing) return { ok: true, row: existing, duplicate: true };
+  if (existing) return { ok: true, row: existing, duplicate: true, hold: advanced.hold || null };
   const row = db.insert(CENTRE_CHECK_COLLECTION, {
     id: `crc_${student.id}_${Date.now()}`,
     student_id: student.id,
@@ -87,7 +103,7 @@ export async function recordParentReport({ db, persist, student, parent, now = n
     created_at: now.toISOString(),
   });
   if (persist) await persist(CENTRE_CHECK_COLLECTION, row);
-  return { ok: true, row };
+  return { ok: true, row, hold: advanced.hold || null };
 }
 
 /** Sunday 08:00 — and Tuesday, for whoever came back unanswered. */

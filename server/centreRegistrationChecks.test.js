@@ -45,7 +45,7 @@ const SUNDAY_10 = new Date('2026-08-09T10:05:00+03:00');
 const TUESDAY_8 = new Date('2026-08-11T08:05:00+03:00');
 const MONDAY_8 = new Date('2026-08-10T08:05:00+03:00');
 
-const RANI = { id: 'st-rani', name: 'רני חורב' };
+const RANI = { id: 'st-rani', name: 'רני חורב', status: 'pending_signup' };
 const MOTHER = { id: 'p-yael', name: 'יעל חורב', phone: '972528310928' };
 
 test('השאלה נשלחת ביום ראשון בבוקר, ושוב בשלישי — לא בכל שעה', () => {
@@ -69,7 +69,7 @@ test('דיווח של הורה נאסף פעם אחת, גם אם הוא חוזר
 test('הודעה אחת לכרמית עם כל השמות, ולא הודעה לכל ילד', async () => {
   const db = testDb();
   await recordParentReport({ db, student: RANI, parent: MOTHER, now: SUNDAY_8 });
-  await recordParentReport({ db, student: { id: 'st-omer', name: 'עומר בזר' }, parent: MOTHER, now: SUNDAY_8 });
+  await recordParentReport({ db, student: { id: 'st-omer', name: 'עומר בזר', status: 'pending_signup' }, parent: MOTHER, now: SUNDAY_8 });
 
   const due = dueForDigest(db, SUNDAY_8);
   assert.equal(due.length, 2);

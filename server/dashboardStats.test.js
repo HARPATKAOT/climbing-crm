@@ -72,11 +72,14 @@ test('funnel counts one highest stage per family including parent-only leads', (
   assert.equal(result.totalFamilies, 4);
   assert.deepEqual(result.byStatus, {
     lead_new: 1,
+    details_completed: 0,
     health_signed: 1,
-    // Soft hold while the customer finishes registering — nobody is here yet.
+    // Legacy rows remain visible during the migration window.
     pending_signup: 0,
     intro_scheduled: 1,
     intro_paid: 0,
+    awaiting_parent_confirmation: 0,
+    awaiting_centre_confirmation: 0,
     registered: 1,
   });
 });

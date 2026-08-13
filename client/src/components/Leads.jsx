@@ -679,6 +679,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingFollowup, setSavingFollowup] = useState(false);
   const [programEligibility, setProgramEligibility] = useState([]);
   const [editEligibleGroupIds, setEditEligibleGroupIds] = useState([]);
+  const [lifecycleBusy, setLifecycleBusy] = useState('');
+  const [lifecycleMessage, setLifecycleMessage] = useState('');
+  const [registrationLifecycleState, setRegistrationLifecycleState] = useState(
+    student.registrationLifecycle || {}
+  );
+
+  // Keep an open card current even when the surrounding customer list still
+  // has an older snapshot after a background expiry or waitlist offer.
+  useEffect(() => {
+    let cancelled = false;
+    setRegistrationLifecycleState(student.registrationLifecycle || {});
+    fetch(`/api/students/${student.id}/registration-lifecycle`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload) setRegistrationLifecycleState(payload);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [student.id]); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Edit Form Fields (student)
   // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
@@ -956,7 +975,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     healthOnly: healthOnlySelected,
   });
   // Signed if status says so, declaration exists, or durable timestamp was saved on the student
-  const isHealthSigned = student.status === 'health_signed'
+  const isHealthSigned = ['health_signed', 'details_completed', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation'].includes(student.status)
     || !!student.healthSignedAt
     || !!student.waiverSignedAt
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
@@ -3024,6 +3043,44 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const studentStatusMeta = STATUSES[student.status];
   const statusSummary = studentStatusMeta?.label || student.status || '—';
   const statusColor = studentStatusMeta?.color || '#60A5FA';
+  const registrationLifecycle = registrationLifecycleState;
+  const placementHold = registrationLifecycle.hold || null;
+  const lifecycleWaitlists = (registrationLifecycle.waitlists || [])
+    .filter((entry) => ['waiting', 'offered', 'paused_after_acceptance'].includes(entry.status));
+  const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
+    .includes(registrationLifecycle.intro?.status)
+    ? registrationLifecycle.intro
+    : null;
+  const hasRegistrationLifecycle = Boolean(placementHold || lifecycleWaitlists.length || introBooking);
+  const lifecycleSummary = placementHold
+    ? (placementHold.phase === 'awaiting_centre' ? 'ממתין לאישור מתנ״ס' : 'מקום שמור')
+    : (lifecycleWaitlists.length ? `${lifecycleWaitlists.length} רשימות המתנה` : 'אימון היכרות');
+  const lifecycleDate = (value) => {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('he-IL');
+  };
+  const runLifecycleAction = async (key, path, body = {}) => {
+    setLifecycleBusy(key);
+    setLifecycleMessage('');
+    try {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || payload.reason || 'הפעולה נכשלה');
+      setLifecycleMessage('הפעולה נשמרה');
+      await refreshData?.();
+      const lifecycleResponse = await fetch(`/api/students/${student.id}/registration-lifecycle`);
+      if (lifecycleResponse.ok) setRegistrationLifecycleState(await lifecycleResponse.json());
+    } catch (error) {
+      setLifecycleMessage(error.message || 'הפעולה נכשלה');
+    } finally {
+      setLifecycleBusy('');
+    }
+  };
   const mailingListSummary = (() => {
     if (!parent?.id) return 'אין הורה';
     const active = broadcastListDefs.filter((list) => broadcastLists[list.key] !== false).length;
@@ -6311,6 +6368,76 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   )}
                 </div>
                   </>
+                )}
+              />
+            )}
+
+            {hasRegistrationLifecycle && (
+              <FolderRow
+                id="registration-lifecycle"
+                title="שמירת מקום והרשמה"
+                icon={CalendarDays}
+                accent="#FBBF24"
+                summary={lifecycleSummary}
+                open={openFolder === 'registration-lifecycle'}
+                onToggle={toggleFolder}
+                renderBody={() => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {placementHold && (
+                      <div className="card card-p" style={{ padding: 10 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13 }}>
+                          {placementHold.phase === 'awaiting_parent' && 'מקום שמור · ממתין לאישור הורה'}
+                          {placementHold.phase === 'awaiting_centre' && 'מקום שמור · ממתין לאישור מתנ״ס'}
+                          {placementHold.phase === 'waitlist_offer' && 'הצעת מקום מרשימת ההמתנה'}
+                          {placementHold.phase === 'intro_payment' && 'אימון היכרות · ממתין לתשלום'}
+                          {placementHold.phase === 'intro_scheduled' && 'אימון היכרות נקבע'}
+                          {placementHold.phase === 'intro_decision' && 'אימון היכרות · ממתין להחלטה'}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 12, color: 'var(--text-3)' }}>
+                          {placementHold.group_ids?.map((id) => groups.find((item) => String(item.id) === String(id))?.name || id).join(' · ')}
+                          {placementHold.expires_at ? ` · עד ${lifecycleDate(placementHold.expires_at)}` : ''}
+                        </div>
+                        {canManageBilling && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
+                            {placementHold.phase === 'waitlist_offer' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('accept', `/api/students/${student.id}/waitlist/accept`)}>
+                                {lifecycleBusy === 'accept' ? 'שומר…' : 'קבלת המקום'}
+                              </button>
+                            )}
+                            {placementHold.phase === 'intro_decision' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('continue', `/api/students/${student.id}/intro/continue`)}>
+                                {lifecycleBusy === 'continue' ? 'שומר…' : 'ממשיכים להרשמה'}
+                              </button>
+                            )}
+                            {placementHold.phase === 'awaiting_parent' && (
+                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                                onClick={() => runLifecycleAction('parent', `/api/students/${student.id}/registration/parent-confirmation`)}>
+                                {lifecycleBusy === 'parent' ? 'שומר…' : 'ההורה אישר הרשמה'}
+                              </button>
+                            )}
+                            <button className="btn btn-ghost btn-xs" disabled={!!lifecycleBusy}
+                              onClick={() => runLifecycleAction('release', `/api/placement-holds/${placementHold.id}/release`)}>
+                              {lifecycleBusy === 'release' ? 'משחרר…' : 'שחרור המקום'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {introBooking && (
+                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
+                      </div>
+                    )}
+                    {lifecycleWaitlists.map((entry) => (
+                      <div key={entry.id} style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        רשימת המתנה · {entry.group_name || entry.group_id}
+                        {entry.position ? ` · מקום ${entry.position}` : ''}
+                      </div>
+                    ))}
+                    {lifecycleMessage && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}
+                  </div>
                 )}
               />
             )}

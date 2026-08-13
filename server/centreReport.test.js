@@ -9,10 +9,23 @@ import {
 } from './centreReport.js';
 
 const students = [
-  { id: 's1', name: 'יונתן כהן' },
-  { id: 's2', name: 'נועה לוי' },
+  { id: 's1', name: 'יונתן כהן', groupId: 'weekly' },
+  { id: 's2', name: 'נועה לוי', groupId: 'weekly' },
   { id: 's3', name: 'יונתן מזרחי' },
 ];
+
+const groups = [
+  { id: 'weekly', trainingDays: [0] },
+  { id: 'twice', trainingDays: [1, 4] },
+];
+
+const introBookings = [{
+  id: 'intro-s1',
+  student_id: 's1',
+  session_date: '2026-07-05',
+  status: 'no_show',
+  paid_at: '2026-07-01T08:00:00.000Z',
+}];
 
 const attendance = [
   { student_id: 's1', date: '2026-07-05', status: 'intro_attended' },
@@ -43,12 +56,13 @@ test('only marks that mean the trainee climbed are counted', () => {
 });
 
 test('a name the centre typed is answered with the billing date', () => {
-  const report = buildCentreReport({ students, attendance, name: 'יונתן כהן' });
+  const report = buildCentreReport({ students, attendance, groups, introBookings, name: 'יונתן כהן' });
   assert.equal(report.ok, true);
   assert.equal(report.date, '2026-07-12');
   assert.equal(report.student.id, 's1');
   assert.match(report.reply, /12\.7\.2026/);
-  assert.match(report.reply, /שולם בנפרד/);
+  assert.equal(report.billing.label, '3/4');
+  assert.match(report.reply, /לפי 3\/4/);
 });
 
 test('anything the bot cannot settle goes to a person, with the reason', () => {
@@ -72,10 +86,28 @@ test('anything the bot cannot settle goes to a person, with the reason', () => {
 
 test('a trainee with no intro is reported from their first session', () => {
   const noIntro = [{ student_id: 's2', date: '2026-08-02', status: 'attended' }];
-  const report = buildCentreReport({ students, attendance: noIntro, name: 'נועה לוי' });
+  const report = buildCentreReport({ students, attendance: noIntro, groups, name: 'נועה לוי' });
   assert.equal(report.ok, true);
   assert.equal(report.date, '2026-08-02');
-  assert.match(report.reply, /ללא אימון היכרות/);
+  assert.equal(report.billing.label, '4/4');
+  assert.match(report.reply, /לפי 4\/4/);
+});
+
+test('a twice-weekly group deducts every paid intro in the same month', () => {
+  const twiceStudent = { id: 's4', name: 'יאיר כהן', groupId: 'twice' };
+  const report = buildCentreReport({
+    students: [twiceStudent],
+    attendance: [{ student_id: 's4', date: '2026-09-08', status: 'attended' }],
+    groups,
+    introBookings: [{
+      id: 'intro-s4', student_id: 's4', session_date: '2026-09-01',
+      status: 'no_show', paid_at: '2026-08-31T10:00:00.000Z',
+    }],
+    name: 'יאיר כהן',
+  });
+  assert.equal(report.ok, true);
+  assert.equal(report.billing.label, '7/8');
+  assert.match(report.reply, /לפי 7\/8/);
 });
 
 test('an exact name wins over a partial one', () => {

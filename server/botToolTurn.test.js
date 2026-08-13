@@ -249,15 +249,17 @@ test('a shared grade question is rewritten as one fact per child', () => {
   );
 });
 
-test('choosing a proposed group is approval to place and return registration links', () => {
-  assert.match(CUSTOMER_TOOL_RULES, /הבחירה שלו היא אישור השיבוץ/);
-  assert.match(CUSTOMER_TOOL_RULES, /חבילת ההרשמה/);
-  assert.match(CUSTOMER_TOOL_RULES, /קישור ההרשמה\/התשלום/);
+test('choosing a proposed group leads to direct signup or an intro without repeating the group question', () => {
+  assert.match(CUSTOMER_TOOL_RULES, /אל תשאל שוב «לשבץ\?»/);
+  assert.match(CUSTOMER_TOOL_RULES, /הרשמה ישירה או אימון היכרות/);
+  assert.match(CUSTOMER_TOOL_RULES, /startSignup/);
+  assert.match(CUSTOMER_TOOL_RULES, /scheduleIntroSession/);
 });
 
-test('soft placement and parent reports are never described as a reserved or approved place', () => {
-  assert.match(CUSTOMER_TOOL_RULES, /שיבוץ רך.*אינם שומרים מקום/);
-  assert.match(CUSTOMER_TOOL_RULES, /אסור לומר שנשמר מקום/);
+test('only a successful durable hold may be described as a reserved place', () => {
+  assert.match(CUSTOMER_TOOL_RULES, /בחירת קבוצה לבדה אינה שומרת מקום/);
+  assert.match(CUSTOMER_TOOL_RULES, /רק שמירת מקום קשיחה.*«המקום שמור»/);
+  assert.match(CUSTOMER_TOOL_RULES, /בתוך 3 ימים/);
   assert.match(CUSTOMER_TOOL_RULES, /דיווח של הלקוח אינם אישור מאומת/);
   assert.match(CUSTOMER_TOOL_RULES, /«התחלנו».*אינן השלמה/);
 });
@@ -384,8 +386,10 @@ test('a link the model wrote itself never reaches the customer', () => {
 test('the tools offered to the model are facts, links and placements — never sends or charges', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
   assert.deepEqual(names, [
+    'acceptWaitlistOffer',
     'addActivityInterest',
     'cancelSignup',
+    'continueAfterIntro',
     'findExistingParticipant',
     'getEquipmentInfo',
     'getEquipmentPaymentLink',
@@ -403,13 +407,24 @@ test('the tools offered to the model are facts, links and placements — never s
     'removeActivityInterest',
     'reportCentreRegistration',
     'requestPlacementApproval',
+    'resolveOtherWaitlists',
+    'retryIntroAfterNoShow',
     'scheduleFollowUp',
+    'scheduleIntroSession',
     'startSignup',
     'updateCustomerDetails',
   ]);
   // Every writing tool must name the child it acts on, so the bot can never
   // place — or unplace — "somebody" from the card.
-  for (const name of ['startSignup', 'joinWaitlist', 'cancelSignup']) {
+  for (const name of [
+    'startSignup',
+    'scheduleIntroSession',
+    'acceptWaitlistOffer',
+    'continueAfterIntro',
+    'retryIntroAfterNoShow',
+    'joinWaitlist',
+    'cancelSignup',
+  ]) {
     const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
     assert.deepEqual(decl.parameters.required, ['childName']);
   }
@@ -495,14 +510,15 @@ test('twice-weekly is offered only with both a configured price and signup link'
 });
 
 test('document signing preserves progress and pending without a group is not shown as placed', () => {
-  for (const status of ['registered', 'active', 'pending_signup', 'waitlist',
+  for (const status of ['registered', 'active', 'pending_signup', 'details_completed',
+    'awaiting_parent_confirmation', 'awaiting_centre_confirmation', 'waitlist',
     'intro_scheduled', 'intro_paid', 'past_registered']) {
     assert.equal(statusAfterHealthSignature(status), status);
   }
-  assert.equal(statusAfterHealthSignature('lead_new'), 'health_signed');
-  assert.equal(statusAfterHealthSignature(''), 'health_signed');
+  assert.equal(statusAfterHealthSignature('lead_new'), 'details_completed');
+  assert.equal(statusAfterHealthSignature(''), 'details_completed');
 
-  assert.equal(botVisibleStudentStatus({ status: 'pending_signup' }, null), 'health_signed');
+  assert.equal(botVisibleStudentStatus({ status: 'pending_signup' }, null), 'details_completed');
   assert.equal(
     botVisibleStudentStatus({ status: 'pending_signup' }, { id: 'g1' }),
     'pending_signup'

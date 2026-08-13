@@ -1,4 +1,5 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
+import { supa } from './supa.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import { encodeMediaRef, metaFromMediaRef } from './channels/mediaRef.js';
@@ -84,7 +85,7 @@ import { replyOffersForm } from './formFollowUp.js';
 import { scheduleFormCheck } from './botTools.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
-import { buildCentreReport, formatReportDate } from './centreReport.js';
+import { buildCentreReport, findStudentsByName, formatReportDate } from './centreReport.js';
 import {
   buildDigestMessage,
   dueForDigest,
@@ -94,6 +95,7 @@ import {
   markConfirmed as markCentreCheckConfirmed,
   markParentAsked,
 } from './centreRegistrationChecks.js';
+import { INTRO_COLLECTION, markPlacementRegistered } from './registrationLifecycle.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -249,54 +251,86 @@ export function askWhichChildReply(students = []) {
   return `בשמחה! 🙂\nבשביל מי מהילדים? ${unique.join(' / ')}\nאו כתבו «ילד אחר» ונמשיך משם.`;
 }
 
+export function centreStudentName(text) {
+  const typed = String(text || '').trim();
+  if (!typed || !HEBREW_LETTER.test(typed)) return '';
+  const isStartQuestion = /^מתי(?:\s|$)/.test(typed) && /(?:^|\s)התחיל(?:ה)?(?:\s|[?!.,]|$)/.test(typed);
+  if (isStartQuestion) {
+    return typed
+      .replace(/[?!.,:;]+/g, ' ')
+      .split(/\s+/)
+      .filter((word) => !['מתי', 'התחיל', 'התחילה', 'להתאמן', 'להגיע', 'האימון', 'הראשון', 'של'].includes(word))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  if (/^(?:תודה|מעולה|קיבלתי|הבנתי|סבבה|בוקר טוב|ערב טוב)[!?. ]*$/u.test(typed)) return '';
+  return typed.split(/\s+/).length <= 4 && typed.length <= 40 ? typed.replace(/[?!.,:;]+$/g, '').trim() : '';
+}
+
 async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const typed = String(text || '').trim();
-  // A name, not a sentence: the exchange is "יונתן כהן" and nothing else, so a
-  // "תודה!" from the same number still reaches the ordinary path below.
-  if (!typed || typed.length > 40 || typed.split(/\s+/).length > 4) return null;
-  if (!HEBREW_LETTER.test(typed)) return null;
+  const isStartQuestion = /^מתי(?:\s|$)/u.test(typed)
+    && /(?:^|\s)התחיל(?:ה)?(?:\s|[?!.,]|$)/u.test(typed);
+  const studentName = centreStudentName(typed);
+  // A bare name confirms registration. The centre may also ask the fixed
+  // billing question "מתי … התחיל?"; ordinary acknowledgements are ignored.
+  if (!studentName) return null;
 
-  const report = buildCentreReport({
-    students: db.get('students') || [],
+  if (supa.isEnabled()) {
+    const collections = ['students', 'groups', 'enrollments', 'attendance', 'group_placement_holds', INTRO_COLLECTION];
+    const loaded = await Promise.all(collections.map((collection) => supa.getAll(collection)));
+    collections.forEach((collection, index) => {
+      if (Array.isArray(loaded[index])) db.set(collection, loaded[index]);
+    });
+  }
+
+  const allStudents = db.withStudentRelations?.(db.get('students') || []) || (db.get('students') || []);
+  let report = buildCentreReport({
+    students: allStudents,
     attendance: db.get('attendance') || [],
-    name: typed,
+    groups: db.get('groups') || [],
+    introBookings: db.get(INTRO_COLLECTION) || [],
+    name: studentName,
   });
 
-  const student = report.student || null;
+  const registrationMatches = findStudentsByName(allStudents, studentName);
+  const student = report.student || (registrationMatches.length === 1 ? registrationMatches[0] : null);
   const parent = student?.parentId ? db.getOne('parents', student.parentId) : null;
 
   // Registration is the one thing the centre's word settles: they are the ones
   // who register the child. Only move forward, never drag a status back.
   //
-  // Until the switch is turned on, the confirmation is recorded and the team is
-  // told what to mark — the status itself waits for a person. Watching it work
-  // before letting it change a customer's record is the whole point.
   const settings = await loadBrandedBotSettings();
-  const mayMark = isCapabilityEnabled(settings, 'centre_marks_registered');
   let statusChanged = false;
   let needsStaffMark = false;
   // Whatever happens to the status, the weekly loop for this trainee is over:
   // the centre has answered about them, and Sunday must not ask again.
-  if (report.ok && student) {
+  if (!isStartQuestion && student && registrationMatches.length === 1) {
     await markCentreCheckConfirmed({ db, persist: persistCore, studentId: student.id })
       .catch((err) => console.error('centre check confirm failed:', err.message));
-  }
-  if (report.ok && student && !CUSTOMER_STATUSES.has(String(student.status || '')) && !mayMark) {
-    needsStaffMark = true;
-    await notifyStaffOfHandoff({
-      settings,
-      parent,
-      phone: parent?.phone || '',
-      customerText: `המתנ״ס אישר ש${student.name} נרשם — צריך לסמן אותו «רשום» בכרטיס`,
-      reason: 'handoff',
-      isSimulator,
-    });
-  }
-  if (report.ok && student && mayMark && !CUSTOMER_STATUSES.has(String(student.status || ''))) {
-    const updated = db.update('students', student.id, { status: 'registered' });
-    if (updated) {
-      await persistCore('students', updated);
-      statusChanged = true;
+    if (String(student.status || '') !== 'registered' && String(student.status || '') !== 'active') {
+      const registered = await markPlacementRegistered({
+        db,
+        persist: persistCore,
+        student,
+        source: 'centre',
+      });
+      statusChanged = registered.ok;
+      if (registered.ok) {
+        report = {
+          ...report,
+          student,
+          registrationConfirmed: true,
+          reply: report.ok
+            ? report.reply
+            : (report.reason === 'no_attendance'
+              ? `${student.name} סומן/ה כרשום/ה. עדיין אין אימון רגיל מסומן, ולכן אין לי תאריך חיוב מאומת; העברתי את בדיקת החיוב לצוות.`
+              : `${student.name} סומן/ה כרשום/ה. ${report.reply}`),
+        };
+      }
+    }
+    if (statusChanged) {
       recordBotAction(db, persistCore, {
         type: 'status_changed',
         summary: `${student.name} סומן כרשום לחוג לפי דיווח המתנ״ס`,
@@ -384,8 +418,8 @@ export async function notifyStaffOfHandoff({
 }
 
 /**
- * The bot placed a trainee. The team is told at once — a soft hold is easy to
- * undo, but only if somebody knows it happened.
+ * The bot placed a trainee. The team is told at once, including whether this
+ * is a durable seat hold or a waitlist entry.
  */
 export async function notifyStaffOfPlacement({
   settings,
@@ -410,7 +444,9 @@ export async function notifyStaffOfPlacement({
     `${cancelled ? 'הוסר מקבוצה' : 'קבוצה'}: ${group?.ageCategory || ''} · ${groupDaysPhrase(group)} ${group?.time || ''}`.trim(),
     cancelled
       ? 'סטטוס: חתם הצהרה — ללא קבוצה'
-      : (kind === 'waitlist' ? 'סטטוס: רשימת המתנה' : 'סטטוס: ממתין להרשמה (לא תופס מקום)'),
+      : (kind === 'waitlist'
+        ? 'סטטוס: רשימת המתנה'
+        : 'סטטוס: מקום שמור — ממתין לאישור הורה/מתנ״ס'),
     cancelled
       ? '← הלקוח ביקש לבטל. אם כבר נמסר למתנ״ס — לעדכן שם'
       : '← לבדוק מול המתנ״ס ולעדכן כשמתקבל אישור',
