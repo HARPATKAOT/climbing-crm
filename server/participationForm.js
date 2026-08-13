@@ -13,6 +13,14 @@
 /** מה שאומרים כשמזכירים אותו בקצרה, אחרי שכבר הוסבר מה יש בו. */
 export const FORM_SHORT = 'טופס השתתפות';
 
+/** Marks a participation form opened from the cash register. */
+export const CASH_REGISTER_FORM_SOURCE = 'pos';
+
+/** Cash-register paperwork must not force either mailing-list consent. */
+export function isCashRegisterFormSource(value) {
+  return String(value || '').trim().toLowerCase() === CASH_REGISTER_FORM_SOURCE;
+}
+
 /** כותרת תיקייה בתיק הלקוח — ברבים, כי יכולים להיות כמה. */
 export const FORM_FOLDER = 'טפסי השתתפות';
 

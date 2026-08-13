@@ -479,7 +479,7 @@ import {
   participationFormButtonParam,
   buildParticipationFormRedirectUrl,
 } from './participationFormWhatsappTemplate.js';
-import { FORM_FULL } from './participationForm.js';
+import { FORM_FULL, CASH_REGISTER_FORM_SOURCE, isCashRegisterFormSource } from './participationForm.js';
 import { migrateUnifiedWallWaiver } from './scripts/applyHealthDeclarationText.js';
 import {
   ensureProductCategories,
@@ -920,7 +920,8 @@ function redirectIntakeForm(req, res) {
     const phone = studentId.slice(2).replace(/\D/g, '');
     if (!phone) return res.status(400).send('חסר טלפון');
     const path = resolveIntakeRegisterPath(req.params.slug);
-    return res.redirect(302, `${eventPublicBase()}${path}?phone=${encodeURIComponent(phone)}`);
+    const params = new URLSearchParams({ phone, source: CASH_REGISTER_FORM_SOURCE });
+    return res.redirect(302, `${eventPublicBase()}${path}?${params.toString()}`);
   }
   if (String(req.params.slug || '').trim().toLowerCase() === 'health-renewal') {
     const params = new URLSearchParams({ studentId, mode: 'health-renewal' });
@@ -941,7 +942,7 @@ app.get('/api/f/:studentId', redirectIntakeForm);
  * form can identify the household by phone after it opens.
  */
 function redirectBlankIntakeForm(_req, res) {
-  return res.redirect(302, `${eventPublicBase()}/register`);
+  return res.redirect(302, `${eventPublicBase()}/register?source=${CASH_REGISTER_FORM_SOURCE}`);
 }
 app.get('/f', redirectBlankIntakeForm);
 app.get('/f/', redirectBlankIntakeForm);
@@ -17453,8 +17454,8 @@ app.post('/api/checkin/send-form-to-phone', async (req, res) => {
   const origin = resolvePublicAppOrigin(req.body?.origin);
   const formTemplate = findDefaultFormTemplate();
   const link = digits.length >= 9
-    ? buildShareableHealthUrl(origin, { phone: digits })
-    : buildShareableHealthUrl(origin, {});
+    ? buildShareableHealthUrl(origin, { phone: digits, source: CASH_REGISTER_FORM_SOURCE })
+    : buildShareableHealthUrl(origin, { source: CASH_REGISTER_FORM_SOURCE });
   const approved = findApprovedParticipationFormTemplate(db);
 
   // אין למי לשלוח, ושליחה שקורית בכל זאת מגיעה כהודעה שאיש לא ביקש.
@@ -17991,6 +17992,8 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
   const idNumber = String(req.query.idNumber || '').trim();
+  const cashRegisterForm = isCashRegisterFormSource(req.query.source);
+  const contextRequiredList = cashRegisterForm ? '' : REQUIRED_BROADCAST_LIST;
   // Which declaration the visitor is about to fill. "Already signed" is only a
   // meaningful answer with respect to a particular form.
   const requestedSlug = String(req.query.templateSlug || req.query.template || '').trim().toLowerCase();
@@ -18013,8 +18016,8 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
       selfStudent: null,
       students: [],
       listDefs,
-      subscriptions: Object.fromEntries(listDefs.map((list) => [list.key, list.key === REQUIRED_BROADCAST_LIST])),
-      requiredListKey: REQUIRED_BROADCAST_LIST,
+      subscriptions: Object.fromEntries(listDefs.map((list) => [list.key, list.key === contextRequiredList])),
+      requiredListKey: contextRequiredList,
       interestOptions: INTEREST_OPTIONS,
       template: publicTemplate,
     });
@@ -18098,7 +18101,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
   const broadcastRows = db.get('broadcast_lists') || [];
   const subscriptions = {};
   for (const list of listDefs) {
-    if (list.key === REQUIRED_BROADCAST_LIST) {
+    if (list.key === contextRequiredList) {
       subscriptions[list.key] = true;
       continue;
     }
@@ -18107,7 +18110,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
       : null;
     subscriptions[list.key] = record ? record.subscribed === true : false;
   }
-  subscriptions[REQUIRED_BROADCAST_LIST] = true;
+  if (contextRequiredList) subscriptions[contextRequiredList] = true;
 
   // The same template the "already signed" answers above were judged against,
   // so the form and its verdicts can never be about two different documents.
@@ -18189,7 +18192,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
     }),
     listDefs,
     subscriptions,
-    requiredListKey: REQUIRED_BROADCAST_LIST,
+    requiredListKey: contextRequiredList,
     // How many adults the household already holds: a second parent cannot be
     // added to a family that has two.
     householdParentCount: householdParents.length,
@@ -18751,7 +18754,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     // to join a class, where schedule changes are part of the service. A trip
     // form is a different errand, and a medical renewal must not silently
     // change marketing preferences at all.
-    const classSignup = normalizeParticipationScope(
+    const classSignup = !isCashRegisterFormSource(req.body?.source) && normalizeParticipationScope(
       req.body?.templateSlug || req.body?.template_slug || 'wall'
     ) !== 'trip';
     const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
@@ -19417,7 +19420,7 @@ function resolvePublicAppOrigin(requestedOrigin) {
 }
 
 function buildShareableHealthUrl(origin, {
-  pathSlug = '', studentId = '', phone = '', mode = '',
+  pathSlug = '', studentId = '', phone = '', mode = '', source = '',
 } = {}) {
   const base = `${String(origin).replace(/\/$/, '')}/register${pathSlug || ''}`;
   const params = new URLSearchParams();
@@ -19428,6 +19431,7 @@ function buildShareableHealthUrl(origin, {
     params.set('phone', phone);
   }
   if (mode) params.set('mode', mode);
+  if (source) params.set('source', source);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }

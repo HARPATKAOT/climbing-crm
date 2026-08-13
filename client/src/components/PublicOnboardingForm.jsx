@@ -715,6 +715,8 @@ export default function PublicOnboardingForm() {
   const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
   const healthOnlyMode = searchParams.get('mode') === 'health-renewal';
+  const formSource = String(searchParams.get('source') || '').trim().toLowerCase();
+  const cashRegisterForm = formSource === 'pos';
   const targetStudentId = String(searchParams.get('studentId') || '').trim();
   // Opened from an event page (`/event/<slug>` → here). The form then registers
   // the family for that outing and ends at payment, instead of only filing
@@ -959,7 +961,7 @@ export default function PublicOnboardingForm() {
    */
   const isTripForm = String(template?.slug || routeSlug || '').trim().toLowerCase() === 'trip';
   const classSignupForm = !healthOnlyMode && !isTripForm;
-  const effectiveRequiredListKey = classSignupForm ? requiredListKey : '';
+  const effectiveRequiredListKey = classSignupForm && !cashRegisterForm ? requiredListKey : '';
 
   const identityReady = !!otp.token && ['found', 'new'].includes(identityStatus);
   /**
@@ -1241,7 +1243,7 @@ export default function PublicOnboardingForm() {
     async function load() {
       setLoading(true);
       const params = new URLSearchParams();
-      ['parentId', 'studentId', 'phone'].forEach((key) => {
+      ['parentId', 'studentId', 'phone', 'source'].forEach((key) => {
         const v = searchParams.get(key);
         if (v) params.set(key, v);
       });
@@ -1283,7 +1285,7 @@ export default function PublicOnboardingForm() {
           if (l.key === reqKey) subs[l.key] = true;
           else if (subs[l.key] === undefined) subs[l.key] = false;
         });
-        subs[reqKey] = true;
+        if (reqKey) subs[reqKey] = true;
         setSubscriptions(subs);
 
         if (!res.ok) {
@@ -1560,6 +1562,7 @@ export default function PublicOnboardingForm() {
       const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
       if (healthOnlyMode && targetStudentId) params.set('studentId', targetStudentId);
       if (template?.slug) params.set('templateSlug', template.slug);
+      if (formSource) params.set('source', formSource);
       if (verificationToken) params.set('verificationToken', verificationToken);
       const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
@@ -2482,6 +2485,7 @@ export default function PublicOnboardingForm() {
           subscriptions: effectiveRequiredListKey
             ? { ...subscriptions, [effectiveRequiredListKey]: true }
             : { ...subscriptions },
+          source: formSource,
           templateSlug: template?.slug || 'wall',
           templateId: template?.id || null,
           completionRegistrationId: searchParams.get('registrationId') || null,

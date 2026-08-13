@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CASH_REGISTER_FORM_SOURCE, isCashRegisterFormSource } from './participationForm.js';
 import {
   PARTICIPATION_FORM_TEMPLATE,
   PARTICIPATION_FORM_TEMPLATE_ID,
@@ -88,4 +89,12 @@ test('approved template is returned for sending', () => {
   ]);
   const found = findApprovedParticipationFormTemplate(db);
   assert.equal(found.meta_name, PARTICIPATION_FORM_TEMPLATE);
+});
+
+test('only cash-register participation forms make operational messaging optional', () => {
+  assert.equal(CASH_REGISTER_FORM_SOURCE, 'pos');
+  assert.equal(isCashRegisterFormSource('pos'), true);
+  assert.equal(isCashRegisterFormSource(' POS '), true);
+  assert.equal(isCashRegisterFormSource(''), false);
+  assert.equal(isCashRegisterFormSource('crm'), false);
 });
