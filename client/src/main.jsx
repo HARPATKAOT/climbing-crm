@@ -6,7 +6,12 @@ import AppErrorBoundary from './components/AppErrorBoundary.jsx';
 import { BusinessProfileProvider } from './BusinessProfileContext.jsx';
 import { getAccessToken } from './authClient.js';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { installNumberInputWheelGuard } from './utils/numberInputWheelGuard.js';
 import './index.css';
+
+// Number and amount fields must never change accidentally while the user is
+// scrolling. Select menus and other scrollable option lists remain untouched.
+installNumberInputWheelGuard();
 
 // A tab that stayed open during a deployment can still run the previous entry
 // bundle while its lazy-loaded screen chunks have already been replaced. Vite
