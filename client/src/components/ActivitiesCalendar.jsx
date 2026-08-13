@@ -1785,21 +1785,21 @@ function RegularActivityModal({
                     <div className="choice-row" style={{ marginTop: 4 }}>
                       <button
                         type="button"
-                        className={`choice-pill ${form.status !== 'draft' ? 'active' : ''}`}
-                        style={{ '--choice-accent': '#34D399' }}
-                        disabled={readOnly}
-                        onClick={() => set('status', 'open')}
-                      >
-                        <Globe size={13} /> מפורסם באתר ובבוט
-                      </button>
-                      <button
-                        type="button"
                         className={`choice-pill ${form.status === 'draft' ? 'active' : ''}`}
                         style={{ '--choice-accent': '#FBBF24' }}
                         disabled={readOnly}
                         onClick={() => set('status', 'draft')}
                       >
                         <Clock3 size={13} /> אירוע בהכנה
+                      </button>
+                      <button
+                        type="button"
+                        className={`choice-pill ${form.status !== 'draft' ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#34D399' }}
+                        disabled={readOnly}
+                        onClick={() => set('status', 'open')}
+                      >
+                        <Globe size={13} /> מפורסם באתר ובבוט
                       </button>
                     </div>
                     <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
@@ -2658,7 +2658,7 @@ function visibilityFields(value) {
 
 /** Grey is off, blue is a link you hand out, green is out in the world. */
 const VISIBILITY_CHOICES = [
-  { value: 'closed', label: 'אירוע סגור', icon: Lock, accent: 'var(--text-3)' },
+  { value: 'closed', label: 'אירוע בהכנה', icon: Lock, accent: 'var(--text-3)' },
   { value: 'idea', label: 'רעיון', icon: Lightbulb, accent: '#FBBF24' },
   { value: 'link', label: 'קישור פרטי', icon: Link2, accent: '#A78BFA' },
   { value: 'public', label: 'מפורסם', icon: Globe, accent: '#34D399' },
