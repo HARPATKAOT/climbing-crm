@@ -27,6 +27,7 @@ import {
 } from '../utils/thermalPrinter.js';
 import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { comparePosShortcuts, isPosShortcut } from '../utils/posShortcuts.js';
 
 // שתי דרכים בלבד, וכל אחת בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
 const PAY_METHODS = [
@@ -353,25 +354,14 @@ export default function PosSale({
     setSendWhatsapp(Boolean(String(effectivePhone || '').trim()));
   }, [paymentMethod, effectivePhone]);
 
-  /**
-   * הכניסה הבודדת לקיר — הכפתור המהיר מתחת לשם המתאמן.
-   *
-   * „מקנה טיפוס בקיר” מסומן גם על אימון אישי ועל שיעור זוגי, ולכן שלושתם
-   * הופיעו כאן ודחקו את הפעולה שהדלפק עושה עשרות פעמים ביום. הכניסה הבודדת
-   * מזוהה בכך שהיא עוגן המחיר שכרטיסיות נגזרות ממנו — סימון שכבר קיים
-   * במחירון ואינו דורש תחזוקה נפרדת. כל השאר נמכר מהקטלוג שליד.
-   */
-  const wallEntryProducts = useMemo(() => {
-    const entries = pricelist.filter((item) => (
-      item.grants_wall_climbing === true
-      && (item.product_type || 'product') === 'product'
-    ));
-    const anchorIds = new Set(
-      pricelist.map((item) => item.price_anchor_id).filter(Boolean).map(String)
-    );
-    const anchored = entries.filter((item) => anchorIds.has(String(item.id)));
-    return anchored.length ? anchored : entries;
-  }, [pricelist]);
+  // Shortcuts are an explicit merchandising choice, independent of whether a
+  // product grants wall access. This prevents coaching products from appearing
+  // merely because they include climbing, and lets counter products such as
+  // shoes and ice pops live beside the entry button.
+  const shortcutProducts = useMemo(
+    () => pricelist.filter(isPosShortcut).sort(comparePosShortcuts),
+    [pricelist]
+  );
 
   const filteredProducts = useMemo(() => {
     const q = productFilter.trim().toLowerCase();
@@ -1716,11 +1706,8 @@ export default function PosSale({
           {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
             studentId: selectedStudentId,
             student: selectedStudent || null,
-            // רק הכניסה הבודדת עולה כקיצור דרך. כרטיסיות ומנויים הם מכירה
-            // שקורית לעיתים רחוקות ויש להם קטלוג שלם ליד — רשימה של שלושה-עשר
-            // כפתורים מתחת לשם המתאמן מסתירה את הפעולה שבאמת נדרשת.
             addToCart,
-            wallProducts: wallEntryProducts,
+            shortcutProducts,
             cartCount: cart.length,
           })}
 

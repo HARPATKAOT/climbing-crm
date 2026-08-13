@@ -15,6 +15,7 @@ import {
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
 import { cancellationPolicyIcon } from '../utils/cancellationPolicyIcons.js';
+import { isPosShortcut } from '../utils/posShortcuts.js';
 
 const NOTION_PRICELIST = [
   { id: 'pr-1a', name: 'כניסה לקיר', price: 50, description: 'כניסה בודדת לקיר הטיפוס ללא הגבלת זמן', notes: '', durationH: null, participants: '', categories: ['כניסה'], ages: ['ללא הגבלה'], active: true, image: '' },
@@ -144,6 +145,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
   const [imageFit, setImageFit] = useState(item?.image_fit === 'contain' ? 'contain' : 'cover');
   const [selfServe, setSelfServe] = useState(item?.self_serve === true);
   const [grantsWallClimbing, setGrantsWallClimbing] = useState(item?.grants_wall_climbing === true);
+  const [posShortcut, setPosShortcut] = useState(isPosShortcut(item));
   const [familyShared, setFamilyShared] = useState(item?.family_shared === true);
   const [transferable, setTransferable] = useState(item?.transferable === true);
   const [cancellationPolicyChoice, setCancellationPolicyChoice] = useState(
@@ -203,6 +205,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
       stock_qty: productType === 'product' && stockQty !== '' ? parseInt(stockQty, 10) : null,
       self_serve: sellableOnline && selfServe,
       grants_wall_climbing: grantsWallClimbing,
+      pos_shortcut: posShortcut,
       family_shared: productType === 'punch_card' && familyShared,
       transferable: productType === 'punch_card' && transferable,
       cancellation_policy_id: cancellationPolicyChoice === 'none' ? null : cancellationPolicyChoice,
@@ -340,6 +343,21 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
             </div>
           </>
         )}
+      </div>
+
+      <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.3)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={posShortcut}
+            onChange={(event) => setPosShortcut(event.target.checked)}
+            style={{ width: 18, height: 18 }}
+          />
+          <span style={{ fontWeight: 700 }}>הצג כקיצור דרך במסך הקופה</span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+          המוצר יופיע ככפתור כחול להוספה מהירה לעגלה, בלי לפתוח קטגוריה או לחפש אותו.
+        </div>
       </div>
 
       <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.25)' }}>
