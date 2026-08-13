@@ -26,7 +26,7 @@ const FRESH_REGISTRATION_MS = 14 * 24 * 60 * 60 * 1000;
 
 export function latestRegistrationTime(students = [], now = Date.now()) {
   const times = (Array.isArray(students) ? students : [students])
-    .filter((student) => student?.status === 'health_signed')
+    .filter((student) => ['health_signed', 'details_completed'].includes(student?.status))
     .map((student) => Date.parse(student?.healthSignedAt || student?.waiverSignedAt || ''))
     .filter(Number.isFinite)
     .filter((time) => now - time <= FRESH_REGISTRATION_MS);
