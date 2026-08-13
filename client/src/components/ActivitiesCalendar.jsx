@@ -398,6 +398,14 @@ function formatListDateRange(activity) {
   return `${startLabel} ← ${endLabel}`;
 }
 
+function formatListTimeRange(activity) {
+  if (activity?.all_day) return 'יום שלם';
+  const start = activity?.start_time ? String(activity.start_time).slice(0, 5) : '';
+  const end = activity?.end_time ? String(activity.end_time).slice(0, 5) : '';
+  if (start && end) return `${start}–${end}`;
+  return start || end || '—';
+}
+
 function emptyForm(dateStr = '', opts = {}) {
   const start_time = opts.start_time || '10:00';
   let end_time = opts.end_time;
@@ -1714,6 +1722,26 @@ function RegularActivityModal({
           )}
 
           <div className="activity-modal-operations">
+            {isOps && (
+              <section className="activity-settings-card" style={{ '--card-accent': 'var(--blue)' }}>
+                <div className="activity-settings-card-title">
+                  <SlidersHorizontal aria-hidden="true" />
+                  פרטי הפעילות
+                </div>
+                <label>
+                  <span className="activity-settings-label">כותרת</span>
+                  <input
+                    className={`input${showError && !String(form.name || '').trim() ? ' input-error' : ''}`}
+                    value={form.name || ''}
+                    onChange={(event) => set('name', event.target.value)}
+                    placeholder="למשל: שעות פתיחה"
+                    required
+                    autoFocus={!readOnly}
+                    disabled={readOnly}
+                  />
+                </label>
+              </section>
+            )}
             {(isTemplateEdit || !isOps) && (
             <section className="activity-settings-card" style={{ '--card-accent': 'var(--blue)' }}>
               <div className="activity-settings-card-title">
@@ -6011,7 +6039,7 @@ export default function ActivitiesCalendar({
             fontWeight: 700,
             color: 'var(--text-3)',
           }}>
-            <div>תאריכים</div>
+            <div>תאריך ושעה</div>
             <div>שם</div>
             {showStaffColumn && <div>צוות</div>}
             <div>הערות</div>
@@ -6052,12 +6080,21 @@ export default function ActivitiesCalendar({
                   onClick={() => openEdit(item)}
                 >
                   <div style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: meta.color,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3,
                     fontVariantNumeric: 'tabular-nums',
                   }}>
-                    {formatListDateRange(item)}
+                    <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>
+                      {formatListDateRange(item)}
+                    </span>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      fontSize: 11, fontWeight: 600, color: 'var(--text-2)',
+                    }}>
+                      <Clock3 size={12} aria-hidden="true" />
+                      {formatListTimeRange(item)}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <RowIcon
