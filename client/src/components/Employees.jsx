@@ -46,6 +46,7 @@ import {
 import AppSelect from './AppSelect.jsx';
 import EmployeePayrollPeriods from './EmployeePayrollPeriods.jsx';
 import PayrollTracking from './PayrollTracking.jsx';
+import WallShiftOperationsJournal from './WallShiftOperationsJournal.jsx';
 import { isWallStaff as employeeIsWallStaff } from '../utils/employeeScope.js';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -2607,7 +2608,9 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   });
 
   // UI state
-  const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll | settings
+  const [activeTab, setActiveTab] = useState(() => (
+    new URLSearchParams(window.location.search).get('tab') === 'shifts' ? 'shifts' : 'permanent'
+  )); // permanent | certs | wages | shifts | payroll | settings
   const [staffAttSettings, setStaffAttSettings] = useState({
     minutes_before_shift_ok: 15,
     wall_open_confirm_message: 'המקום מסודר ונקי?',
@@ -2682,6 +2685,16 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   // Shift logging quick state
   const [clockActivity, setClockActivity] = useState({});
   const [clockInEmployee, setClockInEmployee] = useState('');
+  const [shiftHistoryView, setShiftHistoryView] = useState(() => (
+    new URLSearchParams(window.location.search).get('shift_history') === 'wall' ? 'wall' : 'all'
+  ));
+  const selectShiftHistoryView = (view) => {
+    setShiftHistoryView(view);
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'shifts');
+    next.set('shift_history', view);
+    setSearchParams(next, { replace: true });
+  };
 
   // רוחב תיק העובד — נגרר ונשמר בדפדפן, כי הרוחב הנוח תלוי במסך של כל אחד.
   const [drawerWidth, setDrawerWidth] = useState(loadDrawerWidth);
@@ -3705,7 +3718,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
           { key: 'permanent', label: 'עובדים',               icon: Users },
           ...(canViewHr ? [{ key: 'certs', label: 'תעודות והסמכות', icon: Award }] : []),
           ...(canViewHr ? [{ key: 'wages', label: 'הסכמי שכר', icon: Coins }] : []),
-          ...(canViewShifts ? [{ key: 'shifts', label: 'שעון נוכחות ומשמרות', icon: Clock }] : []),
+          ...(canViewShifts ? [{ key: 'shifts', label: 'משמרות', icon: Clock }] : []),
           ...(canViewHr ? [{ key: 'payroll', label: 'תשלום חודשי', icon: Banknote }] : []),
           ...(canViewHr ? [{ key: 'settings', label: 'הגדרות', icon: Settings2 }] : []),
           ...(canViewHr ? [{ key: 'onboard-link', label: 'קישור קליטה', icon: Link2 }] : []),
@@ -4375,7 +4388,30 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
 
           {/* Shifts log history */}
           <div>
-            <div className="section-title" style={{ marginBottom: 12 }}>היסטוריית משמרות ונוכחות החודש</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+              <div className="section-title">היסטוריית משמרות</div>
+              <div style={{ display: 'flex', gap: 6 }} role="group" aria-label="סינון היסטוריית משמרות">
+                <button
+                  type="button"
+                  className={`btn btn-sm ${shiftHistoryView === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                  aria-pressed={shiftHistoryView === 'all'}
+                  onClick={() => selectShiftHistoryView('all')}
+                >
+                  כל המשמרות
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${shiftHistoryView === 'wall' ? 'btn-primary' : 'btn-ghost'}`}
+                  aria-pressed={shiftHistoryView === 'wall'}
+                  onClick={() => selectShiftHistoryView('wall')}
+                >
+                  פתיחות וסגירות קיר
+                </button>
+              </div>
+            </div>
+            {shiftHistoryView === 'wall' ? (
+              <WallShiftOperationsJournal />
+            ) : (
             <div className="card">
               <div className="table-wrap">
                 <table className="crm-table">
@@ -4429,6 +4465,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                 </table>
               </div>
             </div>
+            )}
           </div>
 
         </div>

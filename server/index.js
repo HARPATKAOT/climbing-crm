@@ -561,6 +561,7 @@ import {
   VACATION_MARKER,
 } from './attendanceUtils.js';
 import { buildShiftJournal } from './employeeShiftJournal.js';
+import { buildWallShiftHistory } from './wallShiftHistory.js';
 import { canAccessLevelTest } from './levelTestAccess.js';
 import {
   PAY_MODES,
@@ -11761,6 +11762,23 @@ app.get('/api/shifts', (req, res) => {
   res.json(db.get('shift_hours'));
 });
 
+app.get('/api/shifts/wall-history', (req, res) => {
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || ''))
+    ? String(req.query.month)
+    : '';
+  res.json({
+    month: month || null,
+    entries: buildWallShiftHistory({
+      shiftHours: db.get('shift_hours') || [],
+      cashSessions: db.get('cash_register_sessions') || [],
+      cashLedger: db.get('cash_ledger') || [],
+      safetyInspections: db.get('safety_inspections') || [],
+      employees: db.get('employees') || [],
+      month,
+    }),
+  });
+});
+
 app.post('/api/shifts/clock-in', (req, res) => {
   const { employeeId, activityType, notes } = req.body;
   const shift = db.clockIn(employeeId, activityType, notes);
@@ -11899,7 +11917,12 @@ app.get('/api/wall-shift/open', (req, res) => {
 });
 
 app.post('/api/wall-shift/open', async (req, res) => {
-  const { employee_id: employeeId, confirmed } = req.body || {};
+  const {
+    employee_id: employeeId,
+    confirmed,
+    place_orderly: placeOrderlyRaw,
+    opening_note: openingNoteRaw,
+  } = req.body || {};
   if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
   const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
@@ -11917,15 +11940,29 @@ app.post('/api/wall-shift/open', async (req, res) => {
     return res.status(409).json({ error: 'העובד כבר נמצא במשמרת', code: 'ALREADY_ON_SHIFT' });
   }
   const settings = await readStaffAttendanceSettings(db, supa);
-  if (confirmed !== true) {
+  // Older clients only sent `confirmed`; they are treated as the old "yes"
+  // answer. The current terminal always records an explicit yes/no choice.
+  const placeOrderly = typeof placeOrderlyRaw === 'boolean'
+    ? placeOrderlyRaw
+    : (confirmed === true ? true : null);
+  const openingNote = String(openingNoteRaw || '').trim().slice(0, 2000);
+  if (placeOrderly == null) {
     return res.status(400).json({
-      error: 'נדרש אישור פתיחת קיר',
+      error: 'יש לבחור האם המקום מסודר',
       code: 'CONFIRM_REQUIRED',
       confirm_message: settings.wall_open_confirm_message,
     });
   }
+  if (placeOrderly === false && !openingNote) {
+    return res.status(400).json({
+      error: 'כשהמקום אינו מסודר יש לכתוב הערה',
+      code: 'OPENING_NOTE_REQUIRED',
+    });
+  }
   const shift = db.clockIn(employeeId, WALL_ACTIVITY_TYPE, 'משמרת קיר — מסוף כניסה', {
     wall_role: WALL_ROLE.OPENER,
+    place_orderly: placeOrderly,
+    opening_note: openingNote,
   });
   res.status(201).json({ shift, state: await wallShiftState() });
 });
@@ -11989,6 +12026,15 @@ app.post('/api/wall-shift/close', async (req, res) => {
 
   const openShifts = openWallShifts(db.get('shift_hours') || []);
   if (openShifts.length === 0) return res.status(404).json({ error: 'אין משמרת פתוחה' });
+
+  const openerShift = wallShiftOpener(openShifts);
+  if (openerShift) {
+    db.update('shift_hours', openerShift.id, {
+      closed_by_employee_id: closer.id,
+      wall_closing_note: String(body.notes || '').trim().slice(0, 2000),
+      wall_close_checklist_confirmed: body.checklist_confirmed === true,
+    });
+  }
 
   const closerNote = `נסגר ע"י ${closer.name}`;
   const ordered = [

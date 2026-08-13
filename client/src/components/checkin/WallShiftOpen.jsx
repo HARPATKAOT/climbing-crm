@@ -20,8 +20,11 @@ const hhmm = (iso) => {
 export default function WallShiftOpen({ state, employees = [], busy, onOpenShift, onSignSafety, onRefresh }) {
   const [pickedId, setPickedId] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [placeOrderly, setPlaceOrderly] = useState(null);
+  const [openingNote, setOpeningNote] = useState('');
   const [cashMode, setCashMode] = useState(null);
   const [signerByCheck, setSignerByCheck] = useState({});
+  const [safetyNoteByCheck, setSafetyNoteByCheck] = useState({});
   const [signingId, setSigningId] = useState(null);
 
   const step = state?.step ?? 1;
@@ -39,7 +42,8 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
     if (!testerId) return;
     setSigningId(check.id);
     try {
-      await onSignSafety(check, testerId);
+      await onSignSafety(check, testerId, safetyNoteByCheck[check.id] || '');
+      setSafetyNoteByCheck((prev) => ({ ...prev, [check.id]: '' }));
     } finally {
       setSigningId(null);
     }
@@ -88,7 +92,11 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
                 type="button"
                 className="btn btn-primary"
                 disabled={busy || !pickedId}
-                onClick={() => setConfirmOpen(true)}
+                onClick={() => {
+                  setPlaceOrderly(null);
+                  setOpeningNote('');
+                  setConfirmOpen(true);
+                }}
               >
                 <LogIn size={15} /> פתיחת משמרת
               </button>
@@ -145,6 +153,17 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
                             onChange={(emp) => setSignerByCheck((prev) => ({ ...prev, [check.id]: emp?.id || '' }))}
                           />
                         </div>
+                        <input
+                          className="input input-sm"
+                          value={safetyNoteByCheck[check.id] || ''}
+                          onChange={(event) => setSafetyNoteByCheck((prev) => ({
+                            ...prev,
+                            [check.id]: event.target.value,
+                          }))}
+                          placeholder="הערה לבדיקה (אופציונלי)"
+                          aria-label={`הערה עבור בדיקת ${check.name}`}
+                          style={{ flex: '1 1 220px', minWidth: 190 }}
+                        />
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
@@ -192,6 +211,40 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.55 }}>{confirmMessage}</div>
               <div style={{ fontSize: 12, color: 'var(--text-3)' }}>פותח: {nameOf(pickedId)}</div>
+              <div
+                role="group"
+                aria-label="האם המקום מסודר"
+                style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}
+              >
+                <button
+                  type="button"
+                  className={`btn ${placeOrderly === true ? 'btn-success' : 'btn-ghost'}`}
+                  aria-pressed={placeOrderly === true}
+                  disabled={busy}
+                  onClick={() => setPlaceOrderly(true)}
+                >
+                  כן, המקום מסודר
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${placeOrderly === false ? 'btn-danger' : 'btn-ghost'}`}
+                  aria-pressed={placeOrderly === false}
+                  disabled={busy}
+                  onClick={() => setPlaceOrderly(false)}
+                >
+                  לא, יש בעיה
+                </button>
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
+                הערה {placeOrderly === false ? '(חובה)' : '(אופציונלי)'}
+                <textarea
+                  className="input textarea"
+                  rows={3}
+                  value={openingNote}
+                  onChange={(event) => setOpeningNote(event.target.value)}
+                  placeholder={placeOrderly === false ? 'מה לא מסודר או מה דורש טיפול?' : 'אפשר לציין משהו שכדאי לדעת'}
+                />
+              </label>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirmOpen(false)}>
                   ביטול
@@ -199,14 +252,21 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  disabled={busy || !pickedId}
+                  disabled={busy || !pickedId || placeOrderly == null || (placeOrderly === false && !openingNote.trim())}
                   onClick={async () => {
-                    await onOpenShift(pickedId);
-                    setConfirmOpen(false);
-                    setPickedId('');
+                    const result = await onOpenShift(pickedId, {
+                      place_orderly: placeOrderly,
+                      opening_note: openingNote.trim(),
+                    });
+                    if (result) {
+                      setConfirmOpen(false);
+                      setPickedId('');
+                      setPlaceOrderly(null);
+                      setOpeningNote('');
+                    }
                   }}
                 >
-                  מאשר ופותח
+                  פתיחת משמרת
                 </button>
               </div>
             </div>

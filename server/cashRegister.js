@@ -198,6 +198,8 @@ export function openSession(store, { denominations = {}, confirmSuggested = fals
     discrepancy,
     cash_sales_total: 0,
     online_sales_total: 0,
+    opening_notes: notes || '',
+    closing_notes: '',
     notes: notes || '',
     created_at: now,
     updated_at: now,
@@ -262,6 +264,8 @@ export function closeSession(store, { denominations = {}, notes = '', reqUser, b
     discrepancy,
     cash_sales_total: cashSales,
     online_sales_total: onlineSales,
+    opening_notes: open.opening_notes || open.notes || '',
+    closing_notes: notes || '',
     notes: notes || open.notes || '',
     updated_at: now,
   });

@@ -20,6 +20,7 @@ export default function WallShiftClose({ state, employees = [], busy, onClose, o
   const [closerId, setCloserId] = useState(closers.length === 1 ? closers[0].id : '');
   const [cashMode, setCashMode] = useState(null);
   const [checked, setChecked] = useState({});
+  const [closingNote, setClosingNote] = useState('');
   const [error, setError] = useState('');
 
   const allChecked = checklistItems.every((_, index) => checked[index]);
@@ -28,7 +29,7 @@ export default function WallShiftClose({ state, employees = [], busy, onClose, o
   const confirm = async () => {
     setError('');
     try {
-      await onConfirm(closerId);
+      await onConfirm(closerId, closingNote);
     } catch (err) {
       setError(err.message || 'סגירת המשמרת נכשלה');
     }
@@ -85,6 +86,17 @@ export default function WallShiftClose({ state, employees = [], busy, onClose, o
               ))}
             </div>
           </StepRow>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
+            הערת סגירה (אופציונלי)
+            <textarea
+              className="input textarea"
+              rows={3}
+              value={closingNote}
+              onChange={(event) => setClosingNote(event.target.value)}
+              placeholder="תקלות, חוסר סדר או דבר שחשוב להעביר למשמרת הבאה"
+            />
+          </label>
 
           {staff.length > 1 && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '8px 10px', borderRadius: 8, background: 'var(--bg-input)' }}>

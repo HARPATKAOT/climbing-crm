@@ -128,11 +128,15 @@ export default function CheckInConsole({
     }
   };
 
-  const openShift = guarded((employeeId) => call('/api/wall-shift/open', { employee_id: employeeId, confirmed: true }));
+  const openShift = guarded((employeeId, openingReport = {}) => call('/api/wall-shift/open', {
+    employee_id: employeeId,
+    confirmed: true,
+    ...openingReport,
+  }));
   const clockIn = guarded((employeeId) => call('/api/wall-shift/staff/clock-in', { employee_id: employeeId }));
   const clockOut = guarded((employeeId) => call('/api/wall-shift/staff/clock-out', { employee_id: employeeId }));
 
-  const signSafety = guarded(async (check, employeeId) => {
+  const signSafety = guarded(async (check, employeeId, notes = '') => {
     const res = await fetch('/api/safety/inspections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,7 +145,7 @@ export default function CheckInConsole({
         title: check.name,
         completed_by_employee_id: employeeId,
         status: 'תקין',
-        description: '',
+        description: String(notes || '').trim(),
       }),
     });
     if (!res.ok) {
@@ -151,8 +155,12 @@ export default function CheckInConsole({
     await loadState();
   });
 
-  const confirmClose = async (closerId) => {
-    const data = await call('/api/wall-shift/close', { closed_by: closerId, checklist_confirmed: true });
+  const confirmClose = async (closerId, notes = '') => {
+    const data = await call('/api/wall-shift/close', {
+      closed_by: closerId,
+      checklist_confirmed: true,
+      notes: String(notes || '').trim(),
+    });
     setClosing(false);
     setSuccessMsg('המשמרת נסגרה');
     window.setTimeout(() => setSuccessMsg(null), 4000);
