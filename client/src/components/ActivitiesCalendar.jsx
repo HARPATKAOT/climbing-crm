@@ -197,6 +197,7 @@ const SOURCE_LABELS = {
 
 
 const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+const HEB_WEEKDAYS_FULL = ['יום ראשון', 'יום שני', 'יום שלישי', 'יום רביעי', 'יום חמישי', 'יום שישי', 'יום שבת'];
 const HEB_MONTHS = [
   'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
@@ -387,13 +388,13 @@ function formatListDateRange(activity) {
   const startLabel = (() => {
     const d = parseDateStr(start);
     if (!d) return start;
-    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+    return `${HEB_WEEKDAYS_FULL[d.getDay()]} · ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
   })();
   if (!end || end === start) return startLabel;
   const endLabel = (() => {
     const d = parseDateStr(end);
     if (!d) return end;
-    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+    return `${HEB_WEEKDAYS_FULL[d.getDay()]} · ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
   })();
   return `${startLabel} ← ${endLabel}`;
 }
