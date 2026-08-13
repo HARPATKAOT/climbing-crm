@@ -229,6 +229,10 @@ export default function PosSale({
   const [documentsBlock, setDocumentsBlock] = useState(null);
   const [documentsLink, setDocumentsLink] = useState(null);
   const [sendingDocsLink, setSendingDocsLink] = useState(false);
+  const [externalPickerLineId, setExternalPickerLineId] = useState('');
+  const [externalParticipantQuery, setExternalParticipantQuery] = useState('');
+  const [externalParticipantBusyId, setExternalParticipantBusyId] = useState('');
+  const [externalParticipantError, setExternalParticipantError] = useState('');
   const [sellerId, setSellerId] = useState('');
   // אחראי הקופה שנקבע במסוף גובר: המכירה נרשמת עליו בלי לשאול שוב.
   useEffect(() => {
@@ -342,6 +346,22 @@ export default function PosSale({
     if (!selectedParent?.id) return [];
     return students.filter((s) => String(s.parentId) === String(selectedParent.id));
   }, [students, selectedParent]);
+
+  const externalParticipantSuggestions = useMemo(() => {
+    const query = externalParticipantQuery.trim().toLowerCase();
+    if (query.length < 2 || !selectedParent?.id) return [];
+    const householdIds = new Set(childrenOfSelectedParent.map((child) => String(child.id)));
+    return students
+      .filter((student) => (
+        !householdIds.has(String(student.id))
+        && String(student.name || '').trim().toLowerCase().includes(query)
+      ))
+      .slice(0, 8)
+      .map((student) => ({
+        ...student,
+        parentName: parents.find((parent) => String(parent.id) === String(student.parentId))?.name || '',
+      }));
+  }, [childrenOfSelectedParent, externalParticipantQuery, parents, selectedParent, students]);
 
   const effectivePhone = walkInPhone || selectedParent?.phone || '';
   const effectiveEmail = walkInEmail || selectedParent?.email || '';
@@ -874,6 +894,37 @@ export default function PosSale({
     }));
   };
 
+  const addExternalParticipant = async (cartLineId, participant) => {
+    setExternalParticipantBusyId(participant.id);
+    setExternalParticipantError('');
+    try {
+      const response = await fetch(`/api/students/${encodeURIComponent(participant.id)}/wall-documents`);
+      const documents = response.ok ? await response.json() : null;
+      if (!documents?.ok) {
+        setExternalParticipantError(
+          `אי אפשר לצרף את ${participant.name}: נדרשים הצהרת בריאות ואישור השתתפות בתוקף בתיק שלו.`
+        );
+        return;
+      }
+      setCart((prev) => prev.map((line) => {
+        if (line.cartLineId !== cartLineId) return line;
+        const current = Array.isArray(line.participant_ids) && line.participant_ids.length
+          ? line.participant_ids
+          : (selectedStudentId ? [selectedStudentId] : []);
+        if (current.includes(participant.id)) return line;
+        const next = [...current, participant.id];
+        const perUnit = Math.max(1, Number(line.participants_per_unit) || 1);
+        return { ...line, participant_ids: next, quantity: Math.ceil(next.length / perUnit) };
+      }));
+      setExternalParticipantQuery('');
+      setExternalPickerLineId('');
+    } catch {
+      setExternalParticipantError('בדיקת אישור ההשתתפות נכשלה. נסו שוב.');
+    } finally {
+      setExternalParticipantBusyId('');
+    }
+  };
+
   const setQty = (cartLineId, qty) => {
     const n = Math.max(1, Math.round(Number(qty) || 1));
     setCart((prev) =>
@@ -980,9 +1031,14 @@ export default function PosSale({
       ? walkInName || selectedParent?.name || selectedStudent?.name || ''
       : pendingNewLeadName;
 
+  const firstCartParticipantId = cart
+    .flatMap((line) => (Array.isArray(line.participant_ids) ? line.participant_ids : []))
+    .find(Boolean);
+  const effectiveStudentId = selectedStudentId || firstCartParticipantId || '';
+
   const payloadBase = () => ({
     cart,
-    studentId: selectedStudentId || undefined,
+    studentId: effectiveStudentId || undefined,
     parentId: selectedParent?.id || selectedParentId || undefined,
     walkInName: resolvedWalkInName || undefined,
     walkInPhone: effectivePhone || undefined,
@@ -1003,9 +1059,29 @@ export default function PosSale({
       setError('יש לבחור מי מבצע את המכירה');
       return false;
     }
-    if (needsCustomer && !selectedStudentId) {
+    if (needsCustomer && !effectiveStudentId) {
       setError('למנוי או כרטיסייה חובה לבחור מתאמן (אפשר לחפש הורה ואז לבחור ילד)');
       return false;
+    }
+    if (cart.some((line) => line.grants_wall_climbing && !line.family_shared)) {
+      if (!selectedParent?.id) {
+        setError('לכניסה לקיר חובה לבחור את ההורה המשלם');
+        return false;
+      }
+      if (!effectiveStudentId) {
+        setError('בחרו לפחות ילד אחד שעבורו משולמת הכניסה');
+        return false;
+      }
+      const unassignedLine = cart.find((line) => (
+        line.grants_wall_climbing
+        && !line.family_shared
+        && !selectedStudentId
+        && !(Array.isArray(line.participant_ids) && line.participant_ids.length)
+      ));
+      if (unassignedLine) {
+        setError(`בחרו עבור מי נרכש המוצר "${unassignedLine.name}"`);
+        return false;
+      }
     }
     if (!anonymousSale && isPendingNewLead && !String(effectivePhone || '').trim()) {
       setError('לליד חדש חובה למלא טלפון, לבחור לקוח קיים, או לסמן מכירה ללא זיהוי');
@@ -1840,6 +1916,14 @@ export default function PosSale({
                 const hasDiscount =
                   line.discountType && Number(line.discountValue) > 0;
                 const isEditingDiscount = editingDiscountId === line.cartLineId;
+                const participantIds = line.participant_ids?.length
+                  ? line.participant_ids.map(String)
+                  : (selectedStudentId ? [String(selectedStudentId)] : []);
+                const householdIds = new Set(childrenOfSelectedParent.map((child) => String(child.id)));
+                const externalParticipants = students.filter((student) => (
+                  participantIds.includes(String(student.id))
+                  && !householdIds.has(String(student.id))
+                ));
                 return (
                   <div
                     key={line.cartLineId}
@@ -1896,10 +1980,10 @@ export default function PosSale({
                           )}
                         </div>
 
-                        {/* תשלום על כמה ילדים של אותו הורה בבת אחת: כל מי
-                            שמסומן מקבל יחידה משלו, והכמות נגזרת מהסימון. */}
+                        {/* The payer stays the selected parent. Participants can
+                            be siblings, or an approved child from another file. */}
                         {line.grants_wall_climbing && !line.family_shared
-                          && childrenOfSelectedParent.length > 1 && (
+                          && selectedParent?.id && (
                           <div style={{ marginTop: 8 }}>
                             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
                               עבור מי:
@@ -1909,9 +1993,7 @@ export default function PosSale({
                             </div>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                               {childrenOfSelectedParent.map((child) => {
-                                const chosen = (line.participant_ids?.length
-                                  ? line.participant_ids
-                                  : [selectedStudentId]).includes(child.id);
+                                const chosen = participantIds.includes(String(child.id));
                                 return (
                                   <button
                                     key={child.id}
@@ -1924,7 +2006,89 @@ export default function PosSale({
                                   </button>
                                 );
                               })}
+                              {externalParticipants.map((participant) => (
+                                <button
+                                  key={participant.id}
+                                  type="button"
+                                  className="btn btn-sm btn-primary"
+                                  style={{ padding: '3px 9px', fontSize: 11 }}
+                                  onClick={() => toggleParticipant(line.cartLineId, participant.id)}
+                                  title="הסרת הילד מהשורה"
+                                >
+                                  {participant.name} · ילד נוסף <X size={10} />
+                                </button>
+                              ))}
                             </div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ marginTop: 6, padding: '4px 8px', fontSize: 11 }}
+                              onClick={() => {
+                                const opening = externalPickerLineId !== line.cartLineId;
+                                setExternalPickerLineId(opening ? line.cartLineId : '');
+                                setExternalParticipantQuery('');
+                                setExternalParticipantError('');
+                              }}
+                            >
+                              <Plus size={11} /> הוספת ילד שאינו מהמשפחה
+                            </button>
+                            {externalPickerLineId === line.cartLineId && (
+                              <div
+                                style={{
+                                  marginTop: 6,
+                                  padding: 8,
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 8,
+                                  background: 'var(--bg-input)',
+                                }}
+                              >
+                                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+                                  ניתן לצרף רק ילד עם הצהרת בריאות ואישור השתתפות בתוקף.
+                                </div>
+                                <input
+                                  className="input input-sm"
+                                  value={externalParticipantQuery}
+                                  onChange={(event) => {
+                                    setExternalParticipantQuery(event.target.value);
+                                    setExternalParticipantError('');
+                                  }}
+                                  placeholder="חיפוש הילד לפי שם"
+                                  autoFocus
+                                  style={{ width: '100%', fontSize: 12 }}
+                                />
+                                {externalParticipantQuery.trim().length >= 2 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                                    {externalParticipantSuggestions.map((participant) => (
+                                      <button
+                                        key={participant.id}
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        disabled={externalParticipantBusyId === participant.id}
+                                        onClick={() => addExternalParticipant(line.cartLineId, participant)}
+                                        style={{ justifyContent: 'space-between', fontSize: 11 }}
+                                      >
+                                        <span>{participant.name}</span>
+                                        <span style={{ color: 'var(--text-3)' }}>
+                                          {externalParticipantBusyId === participant.id
+                                            ? 'בודק אישור…'
+                                            : (participant.parentName ? `תיק ${participant.parentName}` : 'בדיקת אישור')}
+                                        </span>
+                                      </button>
+                                    ))}
+                                    {externalParticipantSuggestions.length === 0 && (
+                                      <div style={{ fontSize: 11, color: 'var(--text-3)', padding: 4 }}>
+                                        לא נמצא ילד נוסף בשם הזה
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {externalParticipantError && (
+                                  <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>
+                                    {externalParticipantError}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

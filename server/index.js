@@ -322,6 +322,7 @@ import {
   scopedDeclarationSignedAt,
 } from './healthValidity.js';
 import { participationEligibility } from './participationEligibility.js';
+import { participantPaymentAccess } from './posParticipantAccess.js';
 import {
   CANONICAL_HEALTH_QUESTIONS,
   normalizeParticipationScope,
@@ -14512,8 +14513,25 @@ async function resolveWallAccessSale(lines, { student, parent }) {
       );
     }
     for (const participantId of participantIds) {
-      if (!isStudentInHousehold(db, household.id, participantId)) {
-        throw Object.assign(new Error('לא ניתן לשייך מוצר לאדם שאינו חבר בתיק המשפחה'), { status: 403 });
+      const participant = db.getOne('students', participantId);
+      if (!participant) {
+        throw Object.assign(new Error('המשתתף שנבחר לא נמצא'), { status: 404 });
+      }
+      const inPayerHousehold = isStudentInHousehold(db, household.id, participantId);
+      const eligibility = inPayerHousehold
+        ? null
+        : participationEligibility(db, { studentId: participantId, scope: 'wall' });
+      const access = participantPaymentAccess({
+        inPayerHousehold,
+        wallEligible: eligibility?.eligible === true,
+      });
+      if (!access.allowed) {
+        const error = new Error(
+          `אפשר לשלם על ${participant.name || 'ילד שאינו מהמשפחה'} רק כשמסמכי ההשתתפות שלו בתוקף`
+        );
+        error.status = 409;
+        error.code = 'external_participant_documents_required';
+        throw error;
       }
     }
     return { ...line, participant_ids: participantIds };
