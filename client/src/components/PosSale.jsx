@@ -1651,12 +1651,6 @@ export default function PosSale({
               </button>
             </div>
           )}
-          {!loadError && (
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
-              {parents.length} לקוחות · {students.length} מתאמנים במערכת
-            </div>
-          )}
-
           {(selectedStudent || selectedParent) && (
             <div
               style={{
@@ -1705,113 +1699,106 @@ export default function PosSale({
           {!anonymousSale && !(selectedStudent || selectedParent) && (
             <div
               style={{
-                display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap',
                 marginBottom: 10,
                 position: 'relative',
                 zIndex: suggestionsOpen ? 70 : 1,
               }}
             >
-            <div className="form-group" style={{ flex: '1 1 260px', marginBottom: 0 }}>
               <label className="form-label">
                 לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
               </label>
-              <div style={{ position: 'relative' }}>
-                <Search
-                  size={14}
-                  style={{
-                    position: 'absolute',
-                    right: 10,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    color: 'var(--text-3)',
-                    pointerEvents: 'none',
-                  }}
-                />
-                <input
-                  className="input"
-                  style={{ paddingRight: 34 }}
-                  placeholder="שם, טלפון או מייל..."
-                  value={customerQuery}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setCustomerQuery(value);
-                    setWalkInName(value);
-                    setHideSuggestions(false);
-                  }}
-                  autoComplete="off"
-                />
-              </div>
-              {customerQuery.trim() && !hideSuggestions && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    zIndex: 80,
-                    right: 0,
-                    left: 0,
-                    top: '100%',
-                    marginTop: 4,
-                    maxHeight: 280,
-                    overflow: 'auto',
-                    border: '1px solid var(--border)',
-                    borderRadius: 10,
-                    background: 'var(--bg-card, #0f172a)',
-                    boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
-                  }}
-                >
-                  {customerSuggestions.map((hit) => (
-                    <button
-                      key={hit.key}
-                      type="button"
-                      className="btn btn-ghost btn-sm"
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                <div style={{ position: 'relative', flex: '1 1 260px' }}>
+                  <Search
+                    size={14}
+                    style={{
+                      position: 'absolute',
+                      right: 10,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: 'var(--text-3)',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  <input
+                    className="input"
+                    style={{ paddingRight: 34 }}
+                    placeholder="שם, טלפון או מייל..."
+                    value={customerQuery}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setCustomerQuery(value);
+                      setWalkInName(value);
+                      setHideSuggestions(false);
+                    }}
+                    autoComplete="off"
+                  />
+                  {customerQuery.trim() && !hideSuggestions && (
+                    <div
                       style={{
-                        width: '100%',
-                        justifyContent: 'flex-start',
-                        borderRadius: 0,
-                        gap: 8,
-                        padding: '10px 12px',
-                        textAlign: 'right',
+                        position: 'absolute',
+                        zIndex: 80,
+                        right: 0,
+                        left: 0,
+                        top: '100%',
+                        marginTop: 4,
+                        maxHeight: 280,
+                        overflow: 'auto',
+                        border: '1px solid var(--border)',
+                        borderRadius: 10,
+                        background: 'var(--bg-card, #0f172a)',
+                        boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
                       }}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => selectCustomer(hit)}
                     >
-                      <span style={{ fontWeight: 700 }}>{hit.name}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                        {hit.type === 'parent' ? 'לקוח / הורה' : hit.isSelfCustomer ? 'לקוח · מתאמן' : 'מתאמן'}
-                        {hit.parentName && !hit.isSelfCustomer ? ` · ${hit.parentName}` : ''}
-                        {hit.phone ? ` · ${hit.phone}` : ''}
-                      </span>
-                    </button>
-                  ))}
-                  {customerSuggestions.length === 0 && (
-                    <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-3)' }}>
-                      לא נמצא לקוח בשם או במספר הזה
+                      {customerSuggestions.map((hit) => (
+                        <button
+                          key={hit.key}
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{
+                            width: '100%',
+                            justifyContent: 'flex-start',
+                            borderRadius: 0,
+                            gap: 8,
+                            padding: '10px 12px',
+                            textAlign: 'right',
+                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectCustomer(hit)}
+                        >
+                          <span style={{ fontWeight: 700 }}>{hit.name}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                            {hit.type === 'parent' ? 'לקוח / הורה' : hit.isSelfCustomer ? 'לקוח · מתאמן' : 'מתאמן'}
+                            {hit.parentName && !hit.isSelfCustomer ? ` · ${hit.parentName}` : ''}
+                            {hit.phone ? ` · ${hit.phone}` : ''}
+                          </span>
+                        </button>
+                      ))}
+                      {customerSuggestions.length === 0 && (
+                        <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-3)' }}>
+                          לא נמצא לקוח בשם או במספר הזה
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {!needsCustomer && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{
-                  flex: '0 1 200px', flexDirection: 'column', alignItems: 'flex-start',
-                  gap: 2, padding: '9px 12px', textAlign: 'right', height: 'auto',
-                }}
-                onClick={() => {
-                  setAnonymousSale(true);
-                  setSendWhatsapp(false);
-                  setSendEmail(false);
-                  clearCustomer();
-                }}
-              >
-                <span style={{ fontWeight: 700, fontSize: 13 }}>מכירה ללא זיהוי</span>
-                <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>
-                  קנייה במזומן בלי שם וטלפון
-                </span>
-              </button>
-            )}
+                {!needsCustomer && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ flex: '0 0 auto', whiteSpace: 'nowrap', minHeight: 38 }}
+                    onClick={() => {
+                      setAnonymousSale(true);
+                      setSendWhatsapp(false);
+                      setSendEmail(false);
+                      clearCustomer();
+                    }}
+                  >
+                    מכירה ללא זיהוי
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -1948,7 +1935,9 @@ export default function PosSale({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <div className="section-title" style={{ marginBottom: 0 }}>עגלה</div>
+              <div className="section-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ShoppingCart size={16} /> עגלה
+              </div>
               {!cashSessionOpen && (
                 <button
                   type="button"
@@ -1962,12 +1951,11 @@ export default function PosSale({
                 </button>
               )}
             </div>
-            <span
-              className={`badge ${cashSessionOpen ? 'badge-green' : 'badge-amber'}`}
-              style={{ fontWeight: 700 }}
-            >
-              {cashSessionOpen ? 'קופה פתוחה' : 'קופה סגורה'}
-            </span>
+            {!cashSessionOpen && (
+              <span className="badge badge-amber" style={{ fontWeight: 700 }}>
+                קופה סגורה
+              </span>
+            )}
           </div>
 
           {cart.length === 0 ? (

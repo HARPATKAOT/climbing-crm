@@ -1079,10 +1079,10 @@ input, select, textarea { font-family: var(--font); }
 .badge-cyan   { background: rgba(45,212,191,0.12); color: #5EEAD4; border: 1px solid rgba(45,212,191,0.28); }
 .badge-gray   { background: rgba(255,255,255,0.05); color: var(--text-3); border: 1px solid var(--border); }
 
-/* Three fixed counter checks: green is settled, amber needs attention. */
+/* Two document checks: green is settled, amber needs attention. */
 .entry-status-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 .entry-status-item {

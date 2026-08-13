@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  CalendarClock, ClipboardCheck, CreditCard, HeartPulse, LogIn, Search, Send,
+  CalendarClock, ClipboardCheck, HeartPulse, LogIn, Search, Send,
   ShieldAlert, Ticket, UserPlus,
 } from 'lucide-react';
 
@@ -28,27 +28,21 @@ function StatusItem({ Icon, label, settled, detail, loading }) {
   );
 }
 
-function EntryStatusRow({ documents, punch, membership, loading }) {
+function EntryStatusRow({ documents, loading }) {
   const healthState = documents?.health?.state;
   const waiverState = documents?.waiver?.state;
   const healthSettled = healthState === 'valid';
   const waiverSettled = waiverState === 'valid';
-  const paymentSettled = Boolean(punch || membership);
   const healthDetail = healthSettled
     ? 'הצהרת הבריאות בתוקף'
     : healthState === 'expired' ? 'הצהרת הבריאות פגה' : healthState === 'blocked' ? 'קיימת חסימה רפואית' : 'חסרה הצהרת בריאות';
   const waiverDetail = waiverSettled
     ? 'אישור ההשתתפות בקיר בתוקף'
     : waiverState === 'expired' ? 'אישור ההשתתפות בקיר פג' : 'חסר אישור השתתפות בקיר';
-  const paymentDetail = punch
-    ? 'קיימת כרטיסייה פעילה'
-    : membership ? 'קיים מנוי פעיל' : 'נדרש להסדיר תשלום';
-
   return (
     <div className="entry-status-row" aria-label="סטטוס כניסה">
       <StatusItem Icon={HeartPulse} label="הצהרת בריאות" settled={healthSettled} detail={healthDetail} loading={loading || !documents} />
       <StatusItem Icon={ClipboardCheck} label="אישור השתתפות" settled={waiverSettled} detail={waiverDetail} loading={loading || !documents} />
-      <StatusItem Icon={CreditCard} label="תשלום" settled={paymentSettled} detail={paymentDetail} loading={loading || !documents} />
     </div>
   );
 }
@@ -285,8 +279,6 @@ export default function ClimberEntryPanel({
 
       <EntryStatusRow
         documents={summary?.documents}
-        punch={punch}
-        membership={membership}
         loading={loading}
       />
 
