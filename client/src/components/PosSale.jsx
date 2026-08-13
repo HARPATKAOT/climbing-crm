@@ -1966,6 +1966,11 @@ export default function PosSale({
                   participantIds.includes(String(student.id))
                   && !householdIds.has(String(student.id))
                 ));
+                const lineQuantity = Number(line.quantity) || 1;
+                const lineTotal = roundMoney((Number(line.unitprice) || 0) * lineQuantity);
+                const listLineTotal = roundMoney(
+                  (Number(line.listPrice ?? line.unitprice) || 0) * lineQuantity
+                );
                 return (
                   <div
                     key={line.cartLineId}
@@ -1979,10 +1984,11 @@ export default function PosSale({
                         display: 'flex',
                         alignItems: 'flex-start',
                         gap: 8,
+                        flexWrap: 'wrap',
                       }}
                     >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>
+                      <div style={{ display: 'contents' }}>
+                        <div style={{ flex: '1 1 140px', minWidth: 0, order: 0, fontWeight: 600, fontSize: 13 }}>
                           {line.name}
                           {line.isCustom ? (
                             <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500 }}> · מותאם</span>
@@ -1992,14 +1998,23 @@ export default function PosSale({
                             be siblings, or an approved child from another file. */}
                         {line.grants_wall_climbing && !line.family_shared
                           && selectedParent?.id && (
-                          <div style={{ marginTop: 8 }}>
-                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
-                              עבור מי:
-                              {(Number(line.participants_per_unit) || 1) > 1 && (
-                                <> {line.name} מכסה {line.participants_per_unit} משתתפים ליחידה</>
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <div style={{ order: 3, flex: '1 0 100%', minWidth: 0, marginTop: 2 }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                flexWrap: 'nowrap',
+                                overflowX: 'auto',
+                                paddingBottom: 2,
+                              }}
+                            >
+                              <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--text-3)' }}>
+                                עבור מי:
+                                {(Number(line.participants_per_unit) || 1) > 1 && (
+                                  <> {line.name} מכסה {line.participants_per_unit} משתתפים ליחידה</>
+                                )}
+                              </span>
                               {childrenOfSelectedParent.map((child) => {
                                 const chosen = participantIds.includes(String(child.id));
                                 return (
@@ -2007,7 +2022,7 @@ export default function PosSale({
                                     key={child.id}
                                     type="button"
                                     className={`btn btn-sm ${chosen ? 'btn-primary' : 'btn-ghost'}`}
-                                    style={{ padding: '3px 9px', fontSize: 11 }}
+                                    style={{ flex: '0 0 auto', padding: '3px 9px', fontSize: 11 }}
                                     onClick={() => toggleParticipant(line.cartLineId, child.id)}
                                   >
                                     {child.name}
@@ -2019,7 +2034,7 @@ export default function PosSale({
                                   key={participant.id}
                                   type="button"
                                   className="btn btn-sm btn-primary"
-                                  style={{ padding: '3px 9px', fontSize: 11 }}
+                                  style={{ flex: '0 0 auto', padding: '3px 9px', fontSize: 11 }}
                                   onClick={() => toggleParticipant(line.cartLineId, participant.id)}
                                   title="הסרת הילד מהשורה"
                                 >
@@ -2029,7 +2044,7 @@ export default function PosSale({
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
-                                style={{ padding: '3px 9px', fontSize: 11 }}
+                                style={{ flex: '0 0 auto', padding: '3px 9px', fontSize: 11 }}
                                 onClick={() => {
                                   const opening = externalPickerLineId !== line.cartLineId;
                                   setExternalPickerLineId(opening ? line.cartLineId : '');
@@ -2109,6 +2124,7 @@ export default function PosSale({
                           paddingTop: 2,
                           flexWrap: 'wrap',
                           justifyContent: 'flex-end',
+                          order: 1,
                         }}
                       >
                         <button
@@ -2124,16 +2140,6 @@ export default function PosSale({
                         >
                           <Percent size={11} /> הנחה
                         </button>
-                        {hasDiscount && (
-                          <span style={{ fontSize: 11, color: 'var(--accent, #F59E0B)' }}>
-                            {line.discountType === 'percent'
-                              ? `-${line.discountValue}%`
-                              : `-₪${line.discountValue}`}
-                            {Number(line.listPrice) !== Number(line.unitprice)
-                              ? ` (מ־₪${line.listPrice})`
-                              : ''}
-                          </span>
-                        )}
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"
@@ -2175,6 +2181,27 @@ export default function PosSale({
                         >
                           <Trash2 size={12} />
                         </button>
+                      </div>
+                      <div
+                        style={{
+                          order: 2,
+                          flex: '0 0 auto',
+                          minWidth: 64,
+                          paddingTop: 5,
+                          textAlign: 'left',
+                          display: 'flex',
+                          alignItems: 'baseline',
+                          justifyContent: 'flex-end',
+                          gap: 5,
+                        }}
+                        aria-label={`מחיר הפריט ₪${lineTotal}`}
+                      >
+                        {hasDiscount && listLineTotal !== lineTotal && (
+                          <span style={{ fontSize: 10.5, color: 'var(--text-3)', textDecoration: 'line-through' }}>
+                            ₪{listLineTotal.toLocaleString()}
+                          </span>
+                        )}
+                        <strong style={{ fontSize: 14 }}>₪{lineTotal.toLocaleString()}</strong>
                       </div>
                     </div>
                     {isEditingDiscount && (
@@ -2251,16 +2278,6 @@ export default function PosSale({
                   </div>
                 );
               })}
-              {appliedCoupon && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13, color: 'var(--green)' }}>
-                  <span>הטבה · {appliedCoupon.label} ({appliedCoupon.code})</span>
-                  <span>−₪{couponDiscount.toLocaleString()}</span>
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontWeight: 800, fontSize: 18 }}>
-                <span>סה״כ כולל מע״מ</span>
-                <span>₪{total.toLocaleString()}</span>
-              </div>
             </div>
           )}
 
@@ -2342,6 +2359,30 @@ export default function PosSale({
                   ואם הקישור לא ישולם תוך שבוע היא תחזור ללקוח.
                 </div>
               )}
+            </div>
+          )}
+
+          {cart.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              {appliedCoupon && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)' }}>
+                  <span>הטבה · {appliedCoupon.label} ({appliedCoupon.code})</span>
+                  <span>−₪{couponDiscount.toLocaleString()}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 18 }}>
+                <span>סה״כ כולל מע״מ</span>
+                <span>₪{total.toLocaleString()}</span>
+              </div>
             </div>
           )}
 
@@ -2486,9 +2527,15 @@ export default function PosSale({
                     minWidth: 0,
                     padding: '10px 12px',
                     borderRadius: 8,
-                    border: `1px solid ${changePreview < 0 ? 'rgba(251,191,36,0.42)' : 'rgba(52,211,153,0.35)'}`,
-                    background: changePreview < 0 ? 'rgba(251,191,36,0.08)' : 'rgba(52,211,153,0.07)',
-                    color: changePreview < 0 ? 'var(--amber, #FBBF24)' : 'var(--green, #34D399)',
+                    border: `1px solid ${changePreview < 0
+                      ? 'rgba(251,191,36,0.42)'
+                      : changePreview > 0 ? 'rgba(96,165,250,0.42)' : 'rgba(52,211,153,0.35)'}`,
+                    background: changePreview < 0
+                      ? 'rgba(251,191,36,0.08)'
+                      : changePreview > 0 ? 'rgba(96,165,250,0.10)' : 'rgba(52,211,153,0.07)',
+                    color: changePreview < 0
+                      ? 'var(--amber, #FBBF24)'
+                      : changePreview > 0 ? '#60A5FA' : 'var(--green, #34D399)',
                   }}
                 >
                   <div style={{ fontSize: 11.5, marginBottom: 3 }}>
@@ -2503,7 +2550,7 @@ export default function PosSale({
           )}
 
           {lastChange != null && lastChange > 0 && (
-            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 16, fontWeight: 800 }}>
+            <div className="alert alert-info" style={{ marginTop: 10, fontSize: 16, fontWeight: 800, color: '#60A5FA' }}>
               עודף להחזר ללקוח: ₪{Number(lastChange).toFixed(2)}
             </div>
           )}
