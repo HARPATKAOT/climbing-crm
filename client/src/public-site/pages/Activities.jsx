@@ -17,6 +17,10 @@ export function ActivityCard({ activity }) {
     ? 'כל היום'
     : [activity.start_time, activity.end_time].filter(Boolean).join('–');
   const label = ACTIVITY_TYPE_LABELS[activity.type] || 'פעילות';
+  const summary = String(activity.description || '')
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\u200d\ufe0f]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   return (
     <article className="ks-activity-card">
@@ -30,7 +34,7 @@ export function ActivityCard({ activity }) {
         <p className="ks-meta">
           {[hours, activity.location].filter(Boolean).join(' · ')}
         </p>
-        {activity.description && <p>{activity.description}</p>}
+        {summary && <p className="ks-activity-summary">{summary}</p>}
         <p className="ks-meta">
           {activity.price > 0 ? `₪${activity.price} למשתתף` : 'ללא עלות'}
           {activity.remaining != null && activity.remaining <= 5 ? ` · נותרו ${activity.remaining} מקומות` : ''}
