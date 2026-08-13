@@ -13,6 +13,9 @@ function store(row) {
   const rows = { [row.id]: { ...row } };
   return {
     rows,
+    getOne: (collection, id) => collection === 'groups' && id === 'g-young'
+      ? { id, name: 'נבחרת צעירה — ב׳+ה׳ 17:00' }
+      : null,
     update: (collection, id, patch) => {
       rows[id] = { ...rows[id], ...patch };
       return rows[id];
@@ -21,12 +24,12 @@ function store(row) {
 }
 
 test('הנוסח הוא מה שנקבע, ונגמר בשאלה', () => {
-  const msg = eligibilityNoticeMessage();
-  assert.equal(msg, 'מנהל אישר לכם זכאות להרשמה לקבוצת מתקדמים\nהאם תרצו להמשיך בהרשמה?');
+  const msg = eligibilityNoticeMessage({ studentName: 'עידו', groupName: 'נבחרת צעירה', gender: 'male' });
+  assert.equal(msg, 'עידו מאושר להרשמה לנבחרת צעירה.\nהאם תרצו להמשיך בהרשמה?');
 });
 
 test('חלון פתוח — ההודעה יוצאת ללקוח והשליחה נחתמת על שורת הזכאות', async () => {
-  const db = store({ id: 'pe-1' });
+  const db = store({ id: 'pe-1', group_id: 'g-young' });
   const sent = [];
   const result = await announceProgramEligibility({
     db,
@@ -40,7 +43,7 @@ test('חלון פתוח — ההודעה יוצאת ללקוח והשליחה נ
   assert.equal(result.sent, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].phone, PARENT.phone);
-  assert.match(sent[0].text, /זכאות להרשמה לקבוצת מתקדמים/);
+  assert.match(sent[0].text, /נווה פאר.*נבחרת צעירה/);
   assert.ok(db.rows['pe-1'].notified_at);
 });
 

@@ -41,6 +41,7 @@ import {
 } from './aiServiceState.js';
 import {
   claimBotReply,
+  conversationReplyLockKey,
   finishBotReplyClaim,
   releaseBotReplyClaim,
   replyKeyForBurst,
@@ -1285,6 +1286,21 @@ export const whatsappService = {
       };
     }
 
+    const conversationLockId = conversationReplyLockKey(normalizedPhone);
+    const conversationLock = await claimBotReply(db, conversationLockId, {
+      phone: normalizedPhone,
+      kind: 'conversation_lock',
+    });
+    if (!conversationLock.claimed) {
+      await releaseBotReplyClaim(db, replyKey);
+      return {
+        success: false,
+        status: 409,
+        reason: 'conversation_busy',
+        error: 'הבוט כבר מנסח תשובה לשיחה הזאת. הרצף יעובד יחד בסיום.',
+      };
+    }
+
     try {
       // The staff member explicitly asked the bot to take this turn now.
       if (!context.respectGate) await clearBotPause(normalizedPhone);
@@ -1413,6 +1429,8 @@ export const whatsappService = {
     } catch (error) {
       await releaseBotReplyClaim(db, replyKey);
       throw error;
+    } finally {
+      await releaseBotReplyClaim(db, conversationLockId);
     }
   },
 
@@ -1778,6 +1796,7 @@ export const whatsappService = {
     // composing their replies. This durable claim makes the tool turn itself
     // single-owner across retries, restarts and parallel instances.
     let aiTurnClaimed = false;
+    let conversationLockId = '';
     if (!isSimulator && replyKey) {
       const turnClaim = await claimBotReply(db, replyKey, { phone: normalizedPhone });
       if (!turnClaim.claimed) {
@@ -1791,11 +1810,27 @@ export const whatsappService = {
         };
       }
       aiTurnClaimed = true;
+
+      conversationLockId = conversationReplyLockKey(normalizedPhone);
+      const conversationLock = await claimBotReply(db, conversationLockId, {
+        phone: normalizedPhone,
+        kind: 'conversation_lock',
+      });
+      if (!conversationLock.claimed) {
+        await releaseBotReplyClaim(db, replyKey);
+        return {
+          parent,
+          student,
+          isNew,
+          replied: false,
+          skippedReason: 'conversation_busy',
+          burstCount: inboundBurst?.items?.length || 1,
+        };
+      }
     }
 
-    let aiResult;
     try {
-      aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
+      const aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
         phone: normalizedPhone,
         parent,
         students,
@@ -1803,38 +1838,11 @@ export const whatsappService = {
         isSimulator,
         inboundBurstCount: inboundBurst?.items?.length || 0,
       });
-    } catch (err) {
-      if (aiTurnClaimed) await releaseBotReplyClaim(db, replyKey);
-      throw err;
-    }
-    // The customer may add one last bubble while the model is composing. The
-    // newer handler owns the answer; sending this stale draft would recreate
-    // the exact multi-reply problem the quiet window is meant to solve.
-    if (inboundBurst
-      && !inboundCustomerBursts.isCurrent(normalizedPhone, inboundBurst.generation)) {
-      if (aiTurnClaimed) {
-        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
-      }
-      return {
-        parent,
-        student,
-        isNew,
-        replied: false,
-        skippedReason: 'burst_superseded_during_reply',
-        burstCount: inboundBurst.items.length,
-      };
-    }
-    if (inboundBurst) {
-      const latestBurstAt = inboundBurst.items
-        .map((item) => String(item?.createdAt || ''))
-        .filter(Boolean)
-        .sort()
-        .at(-1);
-      if (latestBurstAt && await hasNewerDurableInbound({
-        parentId: parent?.id || '',
-        phone: normalizedPhone,
-        after: latestBurstAt,
-      })) {
+      // The customer may add one last bubble while the model is composing. The
+      // newer handler owns the answer; sending this stale draft would recreate
+      // the exact multi-reply problem the quiet window is meant to solve.
+      if (inboundBurst
+        && !inboundCustomerBursts.isCurrent(normalizedPhone, inboundBurst.generation)) {
         if (aiTurnClaimed) {
           await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
         }
@@ -1843,54 +1851,83 @@ export const whatsappService = {
           student,
           isNew,
           replied: false,
-          skippedReason: 'burst_superseded_durably',
+          skippedReason: 'burst_superseded_during_reply',
           burstCount: inboundBurst.items.length,
         };
       }
-    }
-    if (aiResult.silent || !aiResult.text) {
-      if (aiTurnClaimed) {
-        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'silent' });
+      if (inboundBurst) {
+        const latestBurstAt = inboundBurst.items
+          .map((item) => String(item?.createdAt || ''))
+          .filter(Boolean)
+          .sort()
+          .at(-1);
+        if (latestBurstAt && await hasNewerDurableInbound({
+          parentId: parent?.id || '',
+          phone: normalizedPhone,
+          after: latestBurstAt,
+        })) {
+          if (aiTurnClaimed) {
+            await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
+          }
+          return {
+            parent,
+            student,
+            isNew,
+            replied: false,
+            skippedReason: 'burst_superseded_durably',
+            burstCount: inboundBurst.items.length,
+          };
+        }
       }
-      return {
-        parent,
-        student,
-        isNew,
-        replied: false,
-        skippedReason: aiResult.reason || 'ai_unavailable',
-        burstCount: inboundBurst?.items?.length || 1,
-      };
-    }
-    if (aiResult.handoff) {
-      await recordBotHandoff(normalizedPhone);
-      // Prefer the model's natural wording; canned ack only when empty.
-      const handoffText = aiResult.text || settings.aiHandoffAckMessage;
-      await whatsappService.sendBotReply(normalizedPhone, handoffText, {
+      if (aiResult.silent || !aiResult.text) {
+        if (aiTurnClaimed) {
+          await finishBotReplyClaim(db, persistCore, replyKey, { status: 'silent' });
+        }
+        return {
+          parent,
+          student,
+          isNew,
+          replied: false,
+          skippedReason: aiResult.reason || 'ai_unavailable',
+          burstCount: inboundBurst?.items?.length || 1,
+        };
+      }
+      if (aiResult.handoff) {
+        await recordBotHandoff(normalizedPhone);
+        // Prefer the model's natural wording; canned ack only when empty.
+        const handoffText = aiResult.text || settings.aiHandoffAckMessage;
+        await whatsappService.sendBotReply(normalizedPhone, handoffText, {
+          isSimulator,
+          source: 'bot_control',
+          replyKey,
+          replyClaimed: aiTurnClaimed,
+        });
+        await notifyStaffOfHandoff({
+          settings,
+          parent,
+          phone: normalizedPhone,
+          customerText: text,
+          reason: aiResult.unsure ? 'unsure' : 'handoff',
+          isSimulator,
+        });
+        return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
+      }
+
+      await whatsappService.sendBotReply(normalizedPhone, aiResult.text, {
         isSimulator,
-        source: 'bot_control',
         replyKey,
         replyClaimed: aiTurnClaimed,
       });
-      await notifyStaffOfHandoff({
-        settings,
-        parent,
-        phone: normalizedPhone,
-        customerText: text,
-        reason: aiResult.unsure ? 'unsure' : 'handoff',
-        isSimulator,
-      });
-      return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
+      if (!isSimulator) {
+        await scheduleFormCheckIfOffered(aiResult.text, parent, normalizedPhone, settings);
+      }
+      return { parent, student, isNew, replied: true, reply: aiResult.text };
+    } catch (err) {
+      if (aiTurnClaimed) await releaseBotReplyClaim(db, replyKey);
+      throw err;
+    } finally {
+      if (conversationLockId) await releaseBotReplyClaim(db, conversationLockId);
     }
-
-    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, {
-      isSimulator,
-      replyKey,
-      replyClaimed: aiTurnClaimed,
-    });
-    if (!isSimulator) {
-      await scheduleFormCheckIfOffered(aiResult.text, parent, normalizedPhone, settings);
-    }
-    return { parent, student, isNew, replied: true, reply: aiResult.text };
     } finally {
       releaseInboundMetaId(metaMessageId);
     }

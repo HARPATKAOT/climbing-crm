@@ -255,6 +255,13 @@ test('choosing a proposed group is approval to place and return registration lin
   assert.match(CUSTOMER_TOOL_RULES, /קישור ההרשמה\/התשלום/);
 });
 
+test('soft placement and parent reports are never described as a reserved or approved place', () => {
+  assert.match(CUSTOMER_TOOL_RULES, /שיבוץ רך.*אינם שומרים מקום/);
+  assert.match(CUSTOMER_TOOL_RULES, /אסור לומר שנשמר מקום/);
+  assert.match(CUSTOMER_TOOL_RULES, /דיווח של הלקוח אינם אישור מאומת/);
+  assert.match(CUSTOMER_TOOL_RULES, /«התחלנו».*אינן השלמה/);
+});
+
 test('כן תודה is treated as approval of the last bot question, not a reason to repeat it', async () => {
   const history = [
     { role: 'model', parts: [{ text: 'לשבץ אותך לקבוצת הבוגרים ביום ד׳ בשעה 20:10?' }] },

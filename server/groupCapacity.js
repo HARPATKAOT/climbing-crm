@@ -6,25 +6,20 @@
 
 import { studentInGroup } from './studentGroups.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
-import { holdIsLive } from './placementHold.js';
 
 export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist']);
 
 /**
- * A placement waiting on the מתנ״ס takes its seat.
- *
- * It used to leave the seat open so waiting on somebody else's confirmation
- * would not block the next family — which meant we kept offering a class that
- * was in fact full, and then had to tell people there was no room after
- * sending them off to register. The seat is held instead, for three days; see
- * placementHold.js for what releases it.
+ * A soft placement waiting on the מתנ״ס does not take a seat. Staff use it to
+ * remember the family's choice; a place is real only after the registration is
+ * verified. This distinction is also what the customer must be told.
  */
 export function countsTowardCapacity(student, groupId, { now = new Date() } = {}) {
   if (!student || !groupId) return false;
   if (!studentInGroup(student, groupId)) return false;
   const status = String(student.status || '');
   if (CAPACITY_EXCLUDED_STATUSES.has(status)) return false;
-  if (status === 'pending_signup') return holdIsLive(student, now);
+  if (status === 'pending_signup') return false;
   return true;
 }
 

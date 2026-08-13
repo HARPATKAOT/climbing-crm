@@ -36,6 +36,7 @@ import {
   familyEquipmentStanding,
 } from './equipmentStanding.js';
 import { buildEquipmentRedirectUrl } from './equipmentService.js';
+import { studentsStillAwaitingRegistration } from './centreRegistrationChecks.js';
 
 /**
  * What is still open for this family, read now rather than when the row was
@@ -49,8 +50,7 @@ function liveFollowUpState(row, parent) {
   // The row names the one trainee whose placement created it, but two siblings
   // registered on the same afternoon are one errand to the parent — asking
   // about one of them reads as though we lost the other.
-  const awaitingRegistration = students
-    .filter((s) => String(s.status || '') === 'pending_signup')
+  const awaitingRegistration = studentsStillAwaitingRegistration(db, students)
     .map((s) => String(s.name || '').trim().split(/\s+/)[0])
     .filter(Boolean);
 

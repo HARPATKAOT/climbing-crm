@@ -31,8 +31,6 @@ import { isOpenIdea, openActivityIdeas } from './activityIdeas.js';
 import {
   frequencyForRequest,
   groupsForFrequency,
-  holdExpiryFrom,
-  holdNoticeForCustomer,
 } from './placementHold.js';
 import { enrollmentId } from './studentGroups.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
@@ -1965,9 +1963,10 @@ export function buildCustomerTools({
           סטטוס_פנימי: 'ממתין להרשמה',
           כבר_נשמר: true,
           חבילת_הרשמה: registrationPack,
-          הערה: 'השיבוץ הזה כבר נשמר. אין לשבץ שוב ואין לשאול שוב לאישור. '
+          הערה: 'בחירת הקבוצה כבר נרשמה כשיבוץ רך. אין לשבץ שוב ואין לשאול שוב לאישור. '
             + 'קישורי ההרשמה והתשלום מוחזרים בחבילת ההרשמה ויש לשלוח אותם עכשיו. '
-            + 'אין להציג ללקוח את הסטטוס הפנימי.',
+            + 'אין לומר שנשמר מקום: שיבוץ רך אינו תופס מקום, והמקום מובטח רק לאחר '
+            + 'השלמת ההרשמה במתנ״ס. אין להציג ללקוח את הסטטוס הפנימי.',
         };
       }
 
@@ -2009,9 +2008,9 @@ export function buildCustomerTools({
         status: 'pending_signup',
         groupId: group.id,
         groupIds: placedGroups.map((g) => String(g.id)),
-        // The seat is taken from now, and only for a few days — see
-        // placementHold.js. Reporting the registration makes it firm.
-        placement_hold_until: holdExpiryFrom(),
+        // This is a preference recorded for the registration flow, not a seat
+        // reservation. Only the verified centre registration takes a place.
+        placement_hold_until: null,
         placement_hold_firm: false,
       });
       if (!row) return { error: 'השיבוץ נכשל — יש להעביר לצוות' };
@@ -2061,11 +2060,11 @@ export function buildCustomerTools({
         שובץ: student.name || '',
         קבוצה: placedGroups.map((g) => describeGroup(g)).join(' + '),
         סטטוס_פנימי: 'ממתין להרשמה',
-        שמירת_מקום: holdNoticeForCustomer(),
+        שיבוץ_רך: 'בחירת הקבוצה נרשמה, אך עדיין לא נשמר מקום.',
         חבילת_הרשמה: registrationPack,
-        הערה: 'השיבוץ נשמר והמקום נתפס. יש לשלוח את קישורי ההרשמה והציוד, ולומר '
-          + 'ללקוח בדיוק את מה שכתוב בשדה «שמירת_מקום» — שהמקום שמור לזמן קצוב '
-          + 'ושעליו לעדכן כשנרשם. הקישור אינו אישור הרשמה; ההרשמה הופכת לסופית '
+        הערה: 'בחירת הקבוצה נרשמה כשיבוץ רך שאינו תופס מקום. יש לשלוח את קישורי '
+          + 'ההרשמה והציוד, ולומר בקצרה שהמקום מובטח רק אחרי השלמת ההרשמה במתנ״ס. '
+          + 'הקישור עצמו אינו אישור הרשמה; ההרשמה הופכת לסופית '
           + 'רק אחרי אימות מהמתנ״ס או אישור צוות. אין להציג ללקוח את הסטטוס '
           + 'הפנימי. נקבעה בדיקה חוזרת פנימית למחר — אין צורך לקרוא '
           + 'ל-scheduleFollowUp בנוסף.',

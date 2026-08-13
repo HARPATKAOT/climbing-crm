@@ -16,6 +16,7 @@ import {
   markConfirmed,
   markParentAsked,
   recordParentReport,
+  studentsStillAwaitingRegistration,
 } from './centreRegistrationChecks.js';
 
 function testDb(seed = []) {
@@ -119,4 +120,15 @@ test('ילד שלא חזר בתשובה — קודם שואלים את ההור�
 test('רשימה ריקה אינה הודעה', () => {
   assert.equal(buildDigestMessage([]), '');
   assert.equal(buildDigestMessage([{ student_name: '  ' }]), '');
+});
+
+test('אחרי שהורה דיווח שנרשם לא שואלים אותו שוב אם נרשם', async () => {
+  const db = testDb();
+  const sibling = { id: 's-2', name: 'אחיו', status: 'pending_signup' };
+  await recordParentReport({ db, student: RANI, parent: MOTHER, now: SUNDAY_8 });
+  const waiting = studentsStillAwaitingRegistration(db, [
+    { ...RANI, status: 'pending_signup' },
+    sibling,
+  ]);
+  assert.deepEqual(waiting.map((student) => student.id), ['s-2']);
 });

@@ -32,6 +32,17 @@ export function botSpokeRecently(messages = [], phone = '', now = Date.now()) {
     && Date.parse(m.created_at || '') > now - FREE_TEXT_WINDOW_MS);
 }
 
+/** A participation form for a one-off wall visit must not start class signup. */
+export function hasRecentClassSignupIntent(messages = [], now = Date.now()) {
+  const intent = /חוג|קבוצה|נבחרת|מתקדמים|להירשם|להרשם|לרשום|הרשמה|לשבץ|שיבוץ|באיזו כיתה/u;
+  return messages.some((message) => {
+    const at = Date.parse(message.created_at || '');
+    if (!Number.isFinite(at) || at <= now - FREE_TEXT_WINDOW_MS) return false;
+    if (message.direction !== 'inbound' && message.is_ai !== true) return false;
+    return intent.test(String(message.message || ''));
+  });
+}
+
 /**
  * A parent who submits the form while the conversation is running gets the
  * ordinary reply and this one within seconds of each other — two messages in a
@@ -105,6 +116,7 @@ export async function resumeConversationAfterForm({
   // automation already sends — not a question about a class nobody discussed.
   const messages = (db.get('messages') || []).filter((m) => String(m.phone || '') === String(parent.phone || phone));
   if (!botSpokeRecently(messages, phone, now)) return { sent: false, reason: 'no_recent_conversation' };
+  if (!hasRecentClassSignupIntent(messages, now)) return { sent: false, reason: 'no_class_signup_intent' };
   // Two messages in a row about the same placement: the ordinary turn had just
   // answered, and this one arrived seconds later saying much the same thing.
   if (botAnsweredMomentsAgo(messages, now)) return { sent: false, reason: 'just_answered' };

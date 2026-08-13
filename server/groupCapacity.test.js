@@ -25,6 +25,14 @@ test('waitlist and archived do not take a seat', () => {
   assert.equal(isGroupFull(group, students), true);
 });
 
+test('pending signup records the choice but does not reserve capacity', () => {
+  const pending = [
+    { id: 'p1', groupId: 'g1', status: 'pending_signup', placement_hold_firm: true },
+  ];
+  assert.equal(countEnrolled('g1', pending), 0);
+  assert.equal(spotsLeft(group, pending), 2);
+});
+
 test('multi-group student counts in each group', () => {
   const multi = [
     { id: 'm1', groupIds: ['g1', 'gx'], groupId: 'g1', status: 'registered' },
