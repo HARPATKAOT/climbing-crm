@@ -9,8 +9,11 @@ import {
 } from './vat.js';
 
 describe('vat helpers', () => {
-  it('treats entered price as before VAT by default', () => {
-    assert.equal(normalizePriceIncludesVat(undefined), false);
+  it('treats entered price as including VAT by default', () => {
+    assert.equal(normalizePriceIncludesVat(undefined), true);
+    assert.equal(chargeAmount(118), 118);
+    assert.equal(netAmount(118), 100);
+    assert.equal(normalizePriceIncludesVat(false), false);
     assert.equal(chargeAmount(100, false), 118);
     assert.equal(netAmount(100, false), 100);
   });

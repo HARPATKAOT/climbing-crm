@@ -124,7 +124,7 @@ test('summarizeHostPayment exposes invoice fields for paid host', () => {
   assert.equal(summary.icount_doc_url, 'https://example.com/doc/555');
   assert.equal(summary.amount, 450);
   assert.equal(summary.entered_amount, 450);
-  assert.equal(summary.price_includes_vat, false);
+  assert.equal(summary.price_includes_vat, true);
 });
 
 test('summarizeHostPayment charges VAT when price is before tax', () => {

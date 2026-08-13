@@ -4,7 +4,7 @@
  * Body: application/x-www-form-urlencoded (not JSON)
  */
 
-import { VAT_RATE, chargeAmount, roundMoney } from './vat.js';
+import { VAT_RATE, chargeAmount, icountVatType, roundMoney } from './vat.js';
 
 const BASE_URL = 'https://api.icount.co.il/api/v3.php';
 
@@ -264,7 +264,7 @@ export async function createInvRec({
   comment,
   emailTo,
   paymentMethod = 'cash',
-  vattype = 1,
+  vattype = icountVatType(),
   vatRate = DEFAULT_VAT_RATE,
 }) {
   const fields = {
@@ -322,7 +322,7 @@ export async function createOffer({
   items,
   comment,
   emailTo,
-  vattype = 1,
+  vattype = icountVatType(),
 }) {
   const fields = {
     doctype: 'offer',
