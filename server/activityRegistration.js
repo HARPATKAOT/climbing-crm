@@ -183,6 +183,9 @@ export function publicRegistrationPayload(activity, registrations) {
     included: activity.included || '',
     what_to_bring: activity.what_to_bring || '',
     important_info: activity.important_info || '',
+    // A deliberate "no customer cancellation" choice is still a public term.
+    // Keep it separate from a missing policy so the event page can explain it.
+    cancellation_policy_disabled: activity.cancellation_policy_disabled === true,
     cover_image: safeTheme.cover_image || '',
     cover_position: safeTheme.cover_position || '50% 50%',
     host_name: activity.host_name || activity.contact_name || '',

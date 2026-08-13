@@ -104,6 +104,23 @@ test('publicRegistrationPayload exposes cover_image from theme', () => {
   assert.equal(payload.page_title, 'טיול לנחל');
 });
 
+test('publicRegistrationPayload exposes an explicit no-cancellation term', () => {
+  const payload = publicRegistrationPayload(
+    {
+      id: 'a-no-cancel',
+      name: 'טיול קלימנוס',
+      date: '2026-09-01',
+      registration_enabled: true,
+      registration_mode: 'paid_per_participant',
+      price: 3900,
+      cancellation_policy_disabled: true,
+    },
+    []
+  );
+
+  assert.equal(payload.cancellation_policy_disabled, true);
+});
+
 test('publicRegistrationPayload parses theme JSON string', () => {
   const payload = publicRegistrationPayload(
     {
