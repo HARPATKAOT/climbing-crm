@@ -63,6 +63,7 @@ const PUBLIC_API_ROUTES = [
   /^\/google-calendar\/sync-due$/,
   /^\/google-contacts\/oauth\/callback$/,
   /^\/google-contacts\/sync-due$/,
+  /^\/google-business-profile\/oauth\/callback$/,
   /^\/finance\/sync-scheduled$/,
 ];
 

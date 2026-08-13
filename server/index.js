@@ -141,6 +141,7 @@ import {
 } from './userAccess.js';
 import { googleCalendarService } from './googleCalendar.js';
 import { googleContactsService } from './googleContacts.js';
+import { googleBusinessProfileService } from './googleBusinessProfile.js';
 import {
   sendActivityRegistrationConfirmation,
   sendHostRegistrationLink,
@@ -5680,6 +5681,9 @@ function ensureActivityRegistrationSlug(activity) {
 }
 
 async function syncActivityToGoogle(record, { deleted = false } = {}) {
+  if (record?.type === 'opening_hours') {
+    googleBusinessProfileService.scheduleSync(() => db.get('activities') || []);
+  }
   try {
     const result = await googleCalendarService.pushActivity(record, { deleted });
     if (deleted || result?.skipped) return record;
@@ -5696,8 +5700,8 @@ async function syncActivityToGoogle(record, { deleted = false } = {}) {
   return record;
 }
 
-function applyGooglePull(dbRef) {
-  return googleCalendarService.pullChanges({
+async function applyGooglePull(dbRef) {
+  const result = await googleCalendarService.pullChanges({
     getActivities: () => dbRef.get('activities') || [],
     upsertFromGoogle: (local, fields, crmId) => {
       if (local) {
@@ -5740,6 +5744,10 @@ function applyGooglePull(dbRef) {
       }
     },
   });
+  if ((result?.created || 0) + (result?.updated || 0) + (result?.deleted || 0) > 0) {
+    googleBusinessProfileService.scheduleSync(() => dbRef.get('activities') || []);
+  }
+  return result;
 }
 
 const ACTIVITY_FINANCE_FIELDS = new Set([
@@ -5893,6 +5901,9 @@ app.put('/api/activities/:id', async (req, res) => {
   syncActivityToGoogle(updated).catch((err) =>
     console.error('Background Google push failed:', err.message)
   );
+  if (existing.type === 'opening_hours' && updated.type !== 'opening_hours') {
+    googleBusinessProfileService.scheduleSync(() => db.get('activities') || []);
+  }
   applyVacationAttendanceForActivities(existing, updated).catch((err) =>
     console.error('Vacation attendance sync failed:', err.message)
   );
@@ -9141,6 +9152,68 @@ app.post('/api/google-calendar/sync-due', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Google Business Profile — public opening hours on Search/Maps ───────────
+app.get('/api/google-business-profile/status', requireOwner, async (_req, res) => {
+  try {
+    res.json(await googleBusinessProfileService.getStatus());
+  } catch (err) {
+    res.status(500).json({ configured: false, connected: false, ready: false, error: err.message });
+  }
+});
+
+app.get('/api/google-business-profile/auth-url', requireOwner, (_req, res) => {
+  try {
+    res.json({ url: googleBusinessProfileService.getAuthUrl() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-business-profile/oauth/callback', async (req, res) => {
+  const base = googleBusinessProfileService.frontendBase();
+  try {
+    const code = String(req.query.code || '');
+    if (!code) throw new Error('לא התקבל אישור מגוגל');
+    const status = await googleBusinessProfileService.completeOAuth(code);
+    if (status.ready) {
+      await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    }
+    res.redirect(googleBusinessProfileService.oauthCallbackRedirectUrl());
+  } catch (err) {
+    console.error('Google Business Profile OAuth callback failed:', err.message);
+    res.redirect(
+      `${base}/business-settings?tab=integrations&googleBusiness=error&msg=${encodeURIComponent(err.message)}`
+    );
+  }
+});
+
+app.put('/api/google-business-profile/location', requireOwner, async (req, res) => {
+  try {
+    const status = await googleBusinessProfileService.selectLocation(req.body?.locationName);
+    const sync = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    res.json({ ...status, sync });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-business-profile/sync', requireOwner, async (_req, res) => {
+  try {
+    const result = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/google-business-profile/disconnect', requireOwner, async (_req, res) => {
+  try {
+    res.json(await googleBusinessProfileService.disconnect());
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
@@ -19811,6 +19884,26 @@ app.listen(PORT, () => {
     setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
   } else {
     console.log('📅 Google Calendar background sync disabled on this process (local/dev)');
+  }
+
+  // The rolling two-week window advances every day even when nobody edits the
+  // calendar, so refresh Google Maps/Search periodically as a safety net.
+  const runBusinessHoursSyncIfConnected = async () => {
+    try {
+      if (!googleBusinessProfileService.backgroundSyncEnabled()) return;
+      const status = await googleBusinessProfileService.getStatus();
+      if (!status.ready) return;
+      const result = await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
+      if (result?.success) {
+        console.log(`🕒 Google Business Profile hours sync: ${result.startDate}–${result.endDate}`);
+      }
+    } catch (err) {
+      console.error('Periodic Google Business Profile sync failed:', err.message);
+    }
+  };
+  if (googleBusinessProfileService.backgroundSyncEnabled()) {
+    setTimeout(() => { runBusinessHoursSyncIfConnected(); }, 120_000);
+    setInterval(() => { runBusinessHoursSyncIfConnected(); }, 6 * 60 * 60 * 1000);
   }
 
   // Meta WhatsApp template statuses (PENDING → APPROVED/REJECTED)
