@@ -1,12 +1,15 @@
 const DEFAULT_POS_SHORTCUT_NAMES = [
   'כניסה לקיר',
-  'השכרת נעליים',
+  'השכרת נעלי טיפוס',
   'ארטיק תמרה',
 ];
 
 const DEFAULT_POS_SHORTCUT_ORDER = new Map(
   DEFAULT_POS_SHORTCUT_NAMES.map((name, index) => [name, index])
 );
+// Keep the wording from catalogues created before the product received its
+// final name, and place it in the same second position.
+DEFAULT_POS_SHORTCUT_ORDER.set('השכרת נעליים', 1);
 
 function productName(item) {
   return String(item?.name || '').trim();

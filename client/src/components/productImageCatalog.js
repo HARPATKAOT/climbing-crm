@@ -7,6 +7,7 @@
  */
 export const PRODUCT_IMAGE_PATHS = Object.freeze({
   'ארטיק תמרה': '/product-images/generated/tamara-popsicle.webp',
+  'השכרת נעלי טיפוס': '/product-images/generated/climbing-shoe-rental.webp',
   'חמש מדבקות': '/product-images/generated/climbing-sticker-pack.webp',
   'נקניקיה בלחמניה': '/product-images/generated/hot-dog.webp',
   'POWER BALL': '/product-images/generated/power-ball.webp',

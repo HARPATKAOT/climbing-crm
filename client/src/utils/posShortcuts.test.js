@@ -4,6 +4,7 @@ import { comparePosShortcuts, isPosShortcut } from './posShortcuts.js';
 
 test('the requested counter products are shortcuts for existing catalogues', () => {
   assert.equal(isPosShortcut({ name: 'כניסה לקיר' }), true);
+  assert.equal(isPosShortcut({ name: 'השכרת נעלי טיפוס' }), true);
   assert.equal(isPosShortcut({ name: 'השכרת נעליים' }), true);
   assert.equal(isPosShortcut({ name: 'ארטיק תמרה' }), true);
   assert.equal(isPosShortcut({ name: 'אימון אישי עם מדריך' }), false);
@@ -17,12 +18,12 @@ test('an explicit editor choice overrides the name-based default', () => {
 test('the requested shortcuts use the requested display order', () => {
   const rows = [
     { name: 'ארטיק תמרה' },
-    { name: 'השכרת נעליים' },
+    { name: 'השכרת נעלי טיפוס' },
     { name: 'כניסה לקיר' },
   ];
   assert.deepEqual(rows.sort(comparePosShortcuts).map((row) => row.name), [
     'כניסה לקיר',
-    'השכרת נעליים',
+    'השכרת נעלי טיפוס',
     'ארטיק תמרה',
   ]);
 });
