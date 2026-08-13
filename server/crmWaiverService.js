@@ -104,6 +104,9 @@ const FORM_STATUS_PRESERVE = new Set([
   'registered',
   'active',
   'pending_signup',
+  'details_completed',
+  'awaiting_parent_confirmation',
+  'awaiting_centre_confirmation',
   'waitlist',
   'intro_scheduled',
   'intro_paid',
@@ -113,7 +116,7 @@ const FORM_STATUS_PRESERVE = new Set([
 /** Signing documents must never move a participant backwards in the journey. */
 export function statusAfterHealthSignature(previousStatus) {
   const status = String(previousStatus || '').trim();
-  return FORM_STATUS_PRESERVE.has(status) ? status : 'health_signed';
+  return FORM_STATUS_PRESERVE.has(status) ? status : 'details_completed';
 }
 
 /** Always the active default health template — used by public activity registration. */
@@ -641,7 +644,7 @@ export async function saveCrmParticipants({
     let createdNow = false;
     if (student) {
       student = db.update('students', student.id, patch) || { ...student, ...patch };
-      if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
+      if (previousStatus !== student.status) {
         onStudentStatusChanged?.(student);
       }
     } else {
