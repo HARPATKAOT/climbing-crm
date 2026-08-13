@@ -13,12 +13,12 @@ const ALL_DAYS = [0, 1, 2, 3, 4, 5];
 
 /* The brand palette is used as a restrained identifier, never as a solid card fill. */
 const AGE_BANDS = [
-  { key: "א'-ב'", color: '#179BA2' },
-  { key: "ג'-ד'", color: '#287DB8' },
-  { key: "ה'-ו'", color: '#D69A2D' },
-  { key: 'חטיבה', color: '#0B6F75' },
-  { key: 'תיכון', color: '#B62531' },
-  { key: 'בוגרים', color: '#7A4B22' },
+  { key: "א'-ב'", color: '#0AA6A6' },
+  { key: "ג'-ד'", color: '#2866B1' },
+  { key: "ה'-ו'", color: '#D59A18' },
+  { key: 'חטיבה', color: '#476B72' },
+  { key: 'תיכון', color: '#B72E3D' },
+  { key: 'בוגרים', color: '#7B4A1F' },
 ];
 
 function ageColor(category) {
