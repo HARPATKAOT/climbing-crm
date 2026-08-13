@@ -41,7 +41,10 @@ function firstNameOf(name) {
  * paid or declared from home still counts for everyone: that is a fact about
  * the trainee, not a demand on the parent.
  */
-const OWES_EQUIPMENT_STATUSES = new Set(['pending_signup', 'registered', 'active']);
+const OWES_EQUIPMENT_STATUSES = new Set([
+  'pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
+  'registered', 'active',
+]);
 
 /**
  * שורות הציוד של כל מתאמן במשפחה, מחולקות למה שחסר, מה שנרכש ומה שכבר היה
