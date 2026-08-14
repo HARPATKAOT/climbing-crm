@@ -2,17 +2,24 @@ import React from 'react';
 import { Check, Clock3, ShieldCheck, Users } from 'lucide-react';
 import GroupPickerCards from './GroupPickerCards.jsx';
 
+const MODE_ORDER = ['none', 'waitlist', 'hold', 'fixed'];
 const LEGEND = [
   { key: 'waitlist', label: 'רשימת המתנה', icon: Users, color: '#60A5FA' },
   { key: 'hold', label: 'מקום שמור', icon: Clock3, color: '#FBBF24' },
   { key: 'fixed', label: 'רשום', icon: ShieldCheck, color: '#34D399' },
 ];
 
+function cycleMode(current, direction) {
+  const index = Math.max(0, MODE_ORDER.indexOf(current || 'none'));
+  return MODE_ORDER[(index + direction + MODE_ORDER.length) % MODE_ORDER.length];
+}
+
 export default function GroupPlacementEditor({
   groups = [], placements = {}, onPlacementsChange, onSave, onCancel, saving = false, error = '',
 }) {
-  const change = (groupId, mode) => {
+  const change = (groupId, direction) => {
     const id = String(groupId);
+    const mode = cycleMode(placements[id], direction);
     const next = { ...placements };
     if (!mode || mode === 'none') delete next[id];
     else next[id] = mode;
@@ -23,7 +30,7 @@ export default function GroupPlacementEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontSize: 11.5, color: 'var(--text-2)', lineHeight: 1.55 }}>
-        בחרו לכל קבוצה: רשימת המתנה, שמירת מקום או שיבוץ קבוע. לחיצה נוספת מבטלת.
+        לחצו על קבוצה כדי לעבור בין המתנה, מקום שמור ורשום. לחיצה רביעית מבטלת.
       </div>
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
         {LEGEND.map(({ key, label, icon: Icon, color }) => (
@@ -37,8 +44,8 @@ export default function GroupPlacementEditor({
           groups={groups}
           selectedIds={selectedIds}
           modeByGroupId={placements}
-          onToggle={() => {}}
-          onModeChange={change}
+          onToggle={(groupId) => change(groupId, 1)}
+          onReverseToggle={(groupId) => change(groupId, -1)}
           disabled={saving}
           minColWidth={0}
           fitHeight={390}
