@@ -175,7 +175,7 @@ export default function ActivityRegistrationPanel({
   const [interestSuggestOpen, setInterestSuggestOpen] = useState(false);
   const [interestBusy, setInterestBusy] = useState('');
   const [convertingId, setConvertingId] = useState(null);
-  const [convertStatus, setConvertStatus] = useState('paid');
+  const [convertStatus, setConvertStatus] = useState(canViewFinance ? 'paid' : 'pending');
 
   // Attendance lives inside the registered-participants list, not beside it.
   // The token changes with the participant list, so a newcomer becomes
@@ -831,7 +831,7 @@ export default function ActivityRegistrationPanel({
     if (readOnly) return;
     const hostPays =
       (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
-    setConvertStatus(hostPays ? 'not_required' : 'paid');
+    setConvertStatus(hostPays ? 'not_required' : (canViewFinance ? 'paid' : 'pending'));
     setConvertingId(row.id);
     setMsg('');
   };
@@ -2024,9 +2024,9 @@ export default function ActivityRegistrationPanel({
                           onChange={(e) => setConvertStatus(e.target.value)}
                           disabled={rowBusy}
                         >
-                          <option value="paid">שולם</option>
-                          <option value="pending">ממתין לתשלום</option>
-                          <option value="not_required">ללא תשלום</option>
+                          {!isHostPays && canViewFinance && <option value="paid">שולם</option>}
+                          {!isHostPays && <option value="pending">ממתין לתשלום</option>}
+                          {isHostPays && <option value="not_required">ללא תשלום למשתתף</option>}
                         </AppSelect>
                         <button
                           type="button"

@@ -216,11 +216,36 @@ export async function closeInterestForRegistrations({
 
 export function normalizeConversionPaymentStatus(value, activity) {
   const requested = clean(value);
-  if (REGISTRATION_PAYMENT_STATUSES.has(requested)) return requested;
   const mode = activity?.registration_mode || (
     activity?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
   );
-  return mode === 'paid_per_participant' ? 'paid' : 'not_required';
+  if (mode !== 'paid_per_participant') {
+    if (requested && requested !== 'not_required') {
+      throw badRequest('לא ניתן לסמן תשלום נפרד למשתתף באירוע בתשלום מארח');
+    }
+    return 'not_required';
+  }
+  if (!requested) return 'pending';
+  if (!REGISTRATION_PAYMENT_STATUSES.has(requested)) {
+    throw badRequest(`סטטוס תשלום לא חוקי: ${requested}`);
+  }
+  if (requested === 'not_required') {
+    throw badRequest('סטטוס התשלום אינו מתאים לאירוע בתשלום למשתתף');
+  }
+  return requested;
+}
+
+/**
+ * Recording money as received is a finance operation. Operational registration
+ * staff may still reserve a place, but it must remain pending until somebody
+ * with finance access confirms the payment.
+ */
+export function authorizedRegistrationPaymentStatus(value, activity, canRecordPayment = false) {
+  const status = normalizeConversionPaymentStatus(value, activity);
+  if (status === 'paid' && !canRecordPayment) {
+    throw Object.assign(new Error('נדרשת הרשאת כספים כדי לסמן את ההרשמה כשולמה'), { status: 403 });
+  }
+  return status;
 }
 
 export function registrationAmount(activity, paymentStatus) {

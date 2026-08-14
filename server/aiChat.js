@@ -23,7 +23,7 @@ import { resolveJoinDate } from './equipmentService.js';
 import { childrenOfParent } from './studentGuardians.js';
 import { countEnrolled, maxSlotsOf } from './groupCapacity.js';
 import { activeRegistrations, remainingCapacity } from './activityRegistration.js';
-import { REGISTRATION_PAYMENT_STATUSES, listInterest } from './activityInterest.js';
+import { listInterest, normalizeConversionPaymentStatus } from './activityInterest.js';
 import {
   SUGGESTIONS_COLLECTION,
   SUGGESTION_PENDING,
@@ -624,7 +624,7 @@ function rawToolDeclarations() {
             type: 'string',
             enum: ['pending', 'paid', 'not_required'],
             description: 'pending = טרם שולם, paid = שולם, not_required = ללא תשלום. '
-              + 'אל תנחש: כשלא נאמר, השמט והמערכת תקבע לפי הגדרת האירוע.',
+              + 'אל תנחש: כשלא נאמר, השמט; אירוע בתשלום יירשם כממתין ובאירוע מארח לא ייגבה תשלום מהמשתתף.',
           },
           reason: { type: 'string' },
         },
@@ -804,13 +804,10 @@ export function normalizeChatAction(db, name, args = {}, { today = israelDateStr
   const left = remainingCapacity(activity, activeRegistrations(db, activity.id));
   if (left !== null && left < 1) throw badRequest(`אין מקומות פנויים ב-${where}`);
 
-  // ערך שאינו באוצר המילים של ההרשמות נופל לברירת המחדל של האירוע — ובאירוע
-  // בתשלום ברירת המחדל היא "שולם". לכן ערך לא מוכר נדחה כאן ולא מועבר הלאה:
-  // סימון שגוי של "שולם" הוא בדיוק הטעות שלא מתגלה עד שמישהו מחפש את הכסף.
+  // Validate both the vocabulary and the event's payment mode before storing
+  // the suggestion. Omission is kept as null and resolves safely at approval.
   const requested = clean(args.payment_status);
-  if (requested && !REGISTRATION_PAYMENT_STATUSES.has(requested)) {
-    throw badRequest(`סטטוס תשלום לא חוקי: ${requested}`);
-  }
+  if (requested) normalizeConversionPaymentStatus(requested, activity);
 
   return {
     type: 'register_to_activity',

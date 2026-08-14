@@ -227,9 +227,11 @@ import {
   rejectSuggestion,
   saveAssistantSettings,
   scenarioStats,
+  suggestionRows,
   updateScenario,
   updateTask,
 } from './aiActions.js';
+import { assertAiSuggestionApprovalAccess } from './aiApprovalSecurity.js';
 import { READ_TOOLS, runChatTurn, callGeminiChat } from './aiChat.js';
 import {
   approveFeedback,
@@ -249,6 +251,7 @@ import {
   enrichInterest,
   listInterest,
   normalizeInterestInput,
+  authorizedRegistrationPaymentStatus,
   updateInterest,
 } from './activityInterest.js';
 import {
@@ -276,6 +279,9 @@ import {
 import { executePartialRefund } from './partialRefund.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
 import { equipmentPurchaseRows } from './equipmentPurchases.js';
+import { canClearPaidEquipmentStatus } from './equipmentPaymentSecurity.js';
+import { normalizeManualDeclaration } from './manualDeclarationSecurity.js';
+import { secureCheckInRecord } from './checkInSecurity.js';
 import { passesOfSale, saleRefundPlan } from './passRefund.js';
 import { validateManualRefund, manualRefundMarks } from './manualRefund.js';
 import {
@@ -524,6 +530,11 @@ import {
 import { calculateDashboardStats } from './dashboardStats.js';
 import { validateUploadedDocument } from './uploadedDocument.js';
 import { unsupportedStudentEditFields } from './studentUpdateSecurity.js';
+import {
+  WORK_PAY_FIELDS,
+  canMutateApprovedWorkAssignment,
+  hasWorkPayOverride,
+} from './workAssignmentSecurity.js';
 import {
   applyBusinessBrand,
   isOptedOut,
@@ -3546,6 +3557,14 @@ app.put('/api/ai/assistant-settings', async (req, res) => {
 
 app.post('/api/ai/suggestions/:id/approve', async (req, res) => {
   try {
+    const suggestion = suggestionRows(db).find((row) => String(row.id) === String(req.params.id));
+    if (!suggestion) return res.status(404).json({ error: 'ההצעה לא נמצאה' });
+    const activity = suggestion.type === 'register_to_activity'
+      ? (db.get('activities') || []).find(
+          (row) => String(row.id) === String(suggestion.args?.activity_id)
+        )
+      : null;
+    assertAiSuggestionApprovalAccess(req.crmUser, suggestion, activity);
     const result = await approveSuggestion({
       db,
       persist: persistCore,
@@ -4463,6 +4482,16 @@ app.put('/api/equipment/:id', async (req, res) => {
     await refreshStudentEquipmentCache();
     const row = db.getOne('student_equipment', req.params.id);
     if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
+    if (
+      req.body?.payment_status !== undefined
+      && !canClearPaidEquipmentStatus(
+        row.payment_status,
+        req.body.payment_status,
+        hasSensitiveAccess(req.crmUser, 'finance')
+      )
+    ) {
+      return res.status(403).json({ error: 'נדרשת הרשאת כספים כדי לבטל סימון תשלום קיים' });
+    }
     const patch = {};
     // מידות: החולצה נבחרת בדף התשלום, הנעליים נרשמות על ידי המדריך.
     const sizePatch = {};
@@ -4613,6 +4642,11 @@ app.post('/api/equipment/:id/mark-pending', async (req, res) => {
 app.post('/api/equipment/:id/mark-own', async (req, res) => {
   try {
     await refreshStudentEquipmentCache();
+    const row = db.getOne('student_equipment', req.params.id);
+    if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
+    if (!canClearPaidEquipmentStatus(row.payment_status, 'own', hasSensitiveAccess(req.crmUser, 'finance'))) {
+      return res.status(403).json({ error: 'נדרשת הרשאת כספים כדי לבטל סימון תשלום קיים' });
+    }
     const result = markEquipmentOwn({
       db,
       persist: persistCore,
@@ -4628,6 +4662,11 @@ app.post('/api/equipment/:id/mark-own', async (req, res) => {
 app.post('/api/equipment/:id/mark-declined', async (req, res) => {
   try {
     await refreshStudentEquipmentCache();
+    const row = db.getOne('student_equipment', req.params.id);
+    if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
+    if (!canClearPaidEquipmentStatus(row.payment_status, 'declined', hasSensitiveAccess(req.crmUser, 'finance'))) {
+      return res.status(403).json({ error: 'נדרשת הרשאת כספים כדי לבטל סימון תשלום קיים' });
+    }
     const result = markEquipmentDeclined({
       db,
       persist: persistCore,
@@ -4643,6 +4682,11 @@ app.post('/api/equipment/:id/mark-declined', async (req, res) => {
 app.post('/api/equipment/:id/mark-unpaid', async (req, res) => {
   try {
     await refreshStudentEquipmentCache();
+    const row = db.getOne('student_equipment', req.params.id);
+    if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
+    if (!canClearPaidEquipmentStatus(row.payment_status, 'unpaid', hasSensitiveAccess(req.crmUser, 'finance'))) {
+      return res.status(403).json({ error: 'נדרשת הרשאת כספים כדי לבטל סימון תשלום קיים' });
+    }
     const result = markEquipmentUnpaid({
       db,
       persist: persistCore,
@@ -5857,6 +5901,7 @@ const ACTIVITY_FINANCE_FIELDS = new Set([
   // ב-ActivitiesCalendar.jsx, אחרת עובד בלי הרשאת כספים שולח null ומקבל 403
   // על כל שמירה — גם כשהוא שינה רק את המיקום.
   'price_rule_id', 'price_rule_version',
+  'payment_status',
 ]);
 const ACTIVITY_HR_FIELDS = new Set(['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']);
 
@@ -5873,6 +5918,19 @@ function activityForRequest(req, activity) {
   if (!hasSensitiveAccess(req.crmUser, 'finance')) result = omitFields(result, ACTIVITY_FINANCE_FIELDS);
   if (!hasSensitiveAccess(req.crmUser, 'hr')) result = omitFields(result, ACTIVITY_HR_FIELDS);
   return result;
+}
+
+function cancellationSummaryForRequest(req, summary) {
+  if (hasSensitiveAccess(req.crmUser, 'finance')) return summary;
+  return {
+    activity_id: summary?.activity_id || null,
+    activity_name: summary?.activity_name || '',
+    already_cancelled: !!summary?.already_cancelled,
+    registrations_count: Number(summary?.registrations_count) || 0,
+    total_registrations: Number(summary?.total_registrations) || 0,
+    history_only: !!summary?.history_only,
+    deletable: !!summary?.deletable,
+  };
 }
 
 function rejectActivitySensitiveChanges(req, body = {}, existing = {}) {
@@ -6027,7 +6085,7 @@ app.delete('/api/activities/:id', async (req, res) => {
           ? 'יש היסטוריית הרשמות לאירוע הזה'
           : 'יש תשלום מזמין שולם לאירוע הזה'),
       code: 'activity_has_registrations',
-      summary,
+      summary: cancellationSummaryForRequest(req, summary),
     });
   }
   const deleted = db.delete('activities', id);
@@ -6055,7 +6113,7 @@ app.post('/api/activities/:id/archive', async (req, res) => {
       return res.status(409).json({
         error: 'יש לבטל תחילה את ההרשמות הפעילות והזיכויים של האירוע',
         code: 'activity_has_active_registrations',
-        summary,
+        summary: cancellationSummaryForRequest(req, summary),
       });
     }
 
@@ -6305,7 +6363,11 @@ app.post('/api/activities/:id/interested/:interestId/convert', async (req, res) 
       persist: persistCore,
       activity,
       row,
-      paymentStatus: req.body?.payment_status,
+      paymentStatus: authorizedRegistrationPaymentStatus(
+        req.body?.payment_status,
+        activity,
+        hasSensitiveAccess(req.crmUser, 'finance')
+      ),
     });
     res.json({
       success: true,
@@ -11864,7 +11926,13 @@ app.post('/api/shifts/clock-out', (req, res) => {
 });
 
 app.post('/api/shifts/approve', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'אישור שעות דורש הרשאת משאבי אנוש' });
+  }
   const { shiftIds } = req.body;
+  if (!Array.isArray(shiftIds) || !shiftIds.length) {
+    return res.status(400).json({ error: 'shiftIds is required' });
+  }
   const approved = db.approveShifts(shiftIds);
   res.json({ success: approved });
 });
@@ -13190,19 +13258,14 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   };
 }
 
-const WORK_PAY_FIELDS = new Set([
-  'pay_mode', 'flat_amount', 'pay_amount', 'pay_rate', 'rate', 'frozen_rate', 'wage_agreement_id',
-  'pay_frozen_at', 'pay_locked_at', 'travel_amount', 'total_pay',
-]);
-
 function workAssignmentForRequest(req, row) {
   if (hasSensitiveAccess(req.crmUser, 'hr') || isOwnEmployeeRequest(req, row?.employee_id)) return row;
   return Object.fromEntries(Object.entries(row || {}).filter(([key]) => !WORK_PAY_FIELDS.has(key)));
 }
 
-function rejectWorkPayOverride(req, body = {}) {
+function rejectWorkPayOverride(req, body = {}, existing = {}) {
   if (hasSensitiveAccess(req.crmUser, 'hr')) return;
-  if ([...WORK_PAY_FIELDS].some((key) => body[key] !== undefined && body[key] !== null && body[key] !== '')) {
+  if (hasWorkPayOverride(body, existing)) {
     throw Object.assign(new Error('אין הרשאה לשנות תעריף או סכום שכר'), { statusCode: 403 });
   }
 }
@@ -14116,8 +14179,11 @@ app.put('/api/work-assignments/:id', (req, res) => {
   const { id } = req.params;
   const existing = db.getOne('work_assignments', id);
   if (!existing) return res.status(404).json({ error: 'Work assignment not found' });
+  if (!canMutateApprovedWorkAssignment(existing, hasSensitiveAccess(req.crmUser, 'hr'))) {
+    return res.status(403).json({ error: 'שורת שכר מאושרת ניתנת לעריכה רק עם הרשאת משאבי אנוש' });
+  }
   try {
-    rejectWorkPayOverride(req, req.body || {});
+    rejectWorkPayOverride(req, req.body || {}, existing);
   } catch (error) {
     return res.status(error.statusCode || 403).json({ error: error.message });
   }
@@ -14137,6 +14203,11 @@ app.put('/api/work-assignments/:id', (req, res) => {
 
 app.delete('/api/work-assignments/:id', (req, res) => {
   const { id } = req.params;
+  const existing = db.getOne('work_assignments', id);
+  if (!existing) return res.status(404).json({ error: 'Work assignment not found' });
+  if (!canMutateApprovedWorkAssignment(existing, hasSensitiveAccess(req.crmUser, 'hr'))) {
+    return res.status(403).json({ error: 'שורת שכר מאושרת ניתנת למחיקה רק עם הרשאת משאבי אנוש' });
+  }
   const ok = db.delete('work_assignments', id);
   if (!ok) return res.status(404).json({ error: 'Work assignment not found' });
   res.json({ success: true });
@@ -17273,9 +17344,20 @@ app.get('/api/health-declarations/:declarationId', (req, res) => {
   res.json(row);
 });
 
-app.post('/api/health-declarations', (req, res) => {
-  const record = db.insert('health_declarations', req.body);
-  res.status(201).json(record);
+app.post('/api/health-declarations', async (req, res) => {
+  try {
+    const record = db.insert('health_declarations', normalizeManualDeclaration(req.body, {
+      actor: req.crmUser?.email || req.crmUser?.id || '',
+      today: israelDateStr(),
+    }));
+    const durable = await persistCore('health_declarations', record);
+    if (durable?.ok === false) {
+      return res.status(503).json({ error: durable.error || 'שמירת ההצהרה נכשלה' });
+    }
+    res.status(201).json(record);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
 });
 
 // ─── Form templates (health + liability pages by activity) ───────────────────
@@ -17773,13 +17855,11 @@ app.post('/api/check-ins', async (req, res) => {
   // Decided here, never taken from the screen: the counter used to compute it
   // with a looser rule of its own, so the day's log could show a green "תקין"
   // beside someone whose pass had just been refused.
-  const documents = wallDocumentsFor(req.body?.climber_id);
-  const record = db.insert('check_ins', {
-    ...req.body,
-    medical_approved: documents.ok,
-    documents_state: documents.state,
-    documents_label: documents.label,
-  });
+  const student = db.getOne('students', req.body?.climber_id);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+  const group = student.groupId ? db.getOne('groups', student.groupId) : null;
+  const documents = wallDocumentsFor(student.id);
+  const record = db.insert('check_ins', secureCheckInRecord({ student, group, documents }));
   const persisted = await persistCore('check_ins', record);
   if (persisted?.ok === false) {
     return res.status(503).json({ error: 'שמירת הכניסה נכשלה', code: 'CHECK_IN_NOT_DURABLE' });

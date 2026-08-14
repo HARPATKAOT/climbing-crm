@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   INTEREST_COLLECTION,
   INTEREST_CONVERTED,
+  authorizedRegistrationPaymentStatus,
   convertInterestToRegistration,
   closeInterestForRegistrations,
   listInterest,
@@ -182,7 +183,7 @@ test('conversion refuses a row with neither customer nor phone, and refuses twic
   );
 });
 
-test('hosted events default to a free participant row, paid events to a paid one', () => {
+test('hosted events stay free and paid events default safely to pending', () => {
   const hosted = { id: 'a1', registration_mode: 'host_pays', price: 1200 };
   const perParticipant = {
     id: 'a2',
@@ -191,8 +192,15 @@ test('hosted events default to a free participant row, paid events to a paid one
     price_includes_vat: false,
   };
   assert.equal(normalizeConversionPaymentStatus('', hosted), 'not_required');
-  assert.equal(normalizeConversionPaymentStatus('', perParticipant), 'paid');
-  assert.equal(normalizeConversionPaymentStatus('pending', hosted), 'pending');
+  assert.equal(normalizeConversionPaymentStatus('', perParticipant), 'pending');
+  assert.throws(() => normalizeConversionPaymentStatus('pending', hosted), /תשלום נפרד/);
+  assert.throws(() => normalizeConversionPaymentStatus('not_required', perParticipant), /אינו מתאים/);
+  assert.throws(
+    () => authorizedRegistrationPaymentStatus('paid', perParticipant, false),
+    (err) => err.status === 403 && /הרשאת כספים/.test(err.message)
+  );
+  assert.equal(authorizedRegistrationPaymentStatus('paid', perParticipant, true), 'paid');
+  assert.equal(authorizedRegistrationPaymentStatus('', perParticipant, false), 'pending');
   assert.equal(registrationAmount(hosted, 'not_required'), 0);
   assert.equal(registrationAmount(perParticipant, 'paid'), 118);
 });

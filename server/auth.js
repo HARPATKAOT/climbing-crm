@@ -121,7 +121,9 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment' },
   { methods: WRITE, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment', level: 'edit' },
 
-  { methods: [...READ, ...WRITE], pattern: /^\/activities\/[^/]+\/(host-payment|host-customer|registration-link|send-registration-link|registrations\/[^/]+\/refund)(\/|$)/, module: 'activity_registrations', level: 'edit', sensitive: 'finance' },
+  { methods: [...READ, ...WRITE], pattern: /^\/activities\/[^/]+\/(host-payment|host-customer|registration-link|send-registration-link|registrations\/[^/]+\/refund(?:-preview)?)(\/|$)/, module: 'activity_registrations', level: 'edit', sensitive: 'finance' },
+  { methods: ['GET', 'POST', 'PATCH'], pattern: /^\/activities\/[^/]+\/(cancellation-preview|cancel|payment-status)$/, module: 'activities', level: 'edit', sensitive: 'finance' },
+  { methods: WRITE, pattern: /^\/activities\/[^/]+\/notify-cancelled$/, module: 'activity_registrations', level: 'edit' },
   { methods: READ, pattern: /^\/activities\/[^/]+\/(registrations|interested|attendance)(\/|$)/, module: 'activity_registrations' },
   { methods: WRITE, pattern: /^\/activities\/[^/]+\/(registrations|interested|attendance)(\/|$)/, module: 'activity_registrations', level: 'edit' },
   { methods: READ, pattern: /^\/(activities|activity-templates|google-calendar)(\/|$)/, module: 'activities' },
@@ -144,8 +146,8 @@ const TEAM_RULES = [
   // בניית בייטים להדפסת קבלה ולפתיחת המגירה היא פעולת דלפק, לא דוח כספי —
   // היא לא מחזירה שום נתון על העסק. בלעדיה עמדת הקיר לא יכולה להדפיס בכלל.
   { methods: WRITE, pattern: /^\/cash-register\/receipt-bytes$/, module: 'cash_management', level: 'edit' },
-  { methods: [...READ, ...WRITE], pattern: /^\/(cash-register|payments|icount)(\/|$)/, module: 'cash_management', sensitive: 'finance' },
-  { methods: [...READ, ...WRITE], pattern: /^\/finance(\/|$)/, module: 'cash_management', sensitive: 'finance' },
+  { methods: [...READ, ...WRITE], pattern: /^\/(cash-register|payments|icount)(\/|$)/, module: 'cash_management', writeLevel: true, sensitive: 'finance' },
+  { methods: [...READ, ...WRITE], pattern: /^\/finance(\/|$)/, module: 'cash_management', writeLevel: true, sensitive: 'finance' },
 
   { methods: READ, pattern: /^\/safety\/check-types(\/|$)/, anyModules: ['safety_checks', 'safety_settings'] },
   { methods: WRITE, pattern: /^\/safety\/check-types(\/|$)/, module: 'safety_settings', level: 'edit' },
@@ -153,13 +155,15 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/safety\/(inspections|incidents)(\/|$)/, module: 'safety_checks', level: 'edit' },
   { methods: [...READ, ...WRITE], pattern: /^\/level-tests(\/|$)/, anyModules: ['level_tests', 'safety_tests', 'lead_tests'], writeLevel: true },
 
-  { methods: [...READ, ...WRITE], pattern: /^\/employees\/[^/]+\/(documents|payroll-documents|attendance-summary|shift-journal)(\/|$)/, module: 'hr', sensitive: 'hr' },
+  { methods: [...READ, ...WRITE], pattern: /^\/employees\/[^/]+\/(documents|payroll-documents|attendance-summary|shift-journal)(\/|$)/, module: 'hr', writeLevel: true, sensitive: 'hr' },
   { methods: WRITE, pattern: /^\/employees\/onboard-invite$/, module: 'employees', level: 'edit' },
   { methods: READ, pattern: /^\/employees\/onboard-fields$/, module: 'employees' },
   { methods: READ, pattern: /^\/employees(\/|$)/, module: 'employees' },
   { methods: WRITE, pattern: /^\/employees(\/|$)/, module: 'employees', level: 'edit' },
-  { methods: [...READ, ...WRITE], pattern: /^\/wages(\/|$)/, module: 'hr', sensitive: 'hr' },
+  { methods: [...READ, ...WRITE], pattern: /^\/wages(\/|$)/, module: 'hr', writeLevel: true, sensitive: 'hr' },
   { methods: READ, pattern: /^\/(work-assignments|shifts)(\/|$)/, module: 'shifts' },
+  { methods: WRITE, pattern: /^\/work-assignments\/approve$/, module: 'hr', level: 'edit', sensitive: 'hr' },
+  { methods: WRITE, pattern: /^\/shifts\/approve$/, module: 'hr', level: 'edit', sensitive: 'hr' },
   { methods: WRITE, pattern: /^\/(work-assignments|shifts)(\/|$)/, module: 'shifts', level: 'edit' },
   { methods: READ, pattern: /^\/staff-roles(\/|$)/, module: 'employees' },
   { methods: WRITE, pattern: /^\/staff-roles(\/|$)/, module: 'hr', level: 'edit', sensitive: 'hr' },
@@ -170,8 +174,8 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/automations(\/|$)/, module: 'automations', level: 'edit' },
   { methods: READ, pattern: /^\/agenda-digest(\/|$)/, module: 'automations' },
   { methods: WRITE, pattern: /^\/agenda-digest(\/|$)/, module: 'automations', level: 'edit' },
-  { methods: [...READ, ...WRITE], pattern: /^\/ai(\/|$)/, module: 'assistant' },
-  { methods: [...READ, ...WRITE], pattern: /^\/bot-learning(\/|$)/, module: 'assistant' },
+  { methods: [...READ, ...WRITE], pattern: /^\/ai(\/|$)/, module: 'assistant', writeLevel: true },
+  { methods: [...READ, ...WRITE], pattern: /^\/bot-learning(\/|$)/, module: 'assistant', writeLevel: true },
   { methods: READ, pattern: /^\/signature-evidence(\/|$)/, module: 'health' },
 ];
 

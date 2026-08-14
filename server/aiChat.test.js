@@ -635,6 +635,12 @@ test('סטטוס תשלום לא מוכר נדחה ולא נופל בשקט ל"�
   }, { today: TODAY });
   assert.equal(ok.args.payment_status, 'pending');
   assert.match(ok.label, /טרם שולם/);
+  assert.throws(
+    () => normalizeChatAction(db, 'register_to_activity', {
+      activity_id: 'a1', parent_id: 'p2', payment_status: 'not_required',
+    }, { today: TODAY }),
+    /אינו מתאים/
+  );
 });
 
 test('רישום בסטטוס "טרם שולם" לא מסומן כמשולם', async () => {
