@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, CalendarDays, X } from 'lucide-react';
+import { Check, CalendarDays, Clock3, ShieldCheck, Users, X } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 import { getGroupDays, groupColor, shortGroupLabel } from '../scheduleUtils.js';
 
@@ -35,6 +35,10 @@ export default function GroupPickerCards({
   // When given, the day columns are stretched (or squeezed) to exactly this
   // many pixels, so the whole week lands inside a window without scrolling.
   fitHeight = null,
+  modeByGroupId = null,
+  activeId = null,
+  onReverseToggle = null,
+  onModeChange = null,
 }) {
   const selected = useMemo(
     () => new Set(selectedIds.map((id) => String(id))),
@@ -139,8 +143,12 @@ export default function GroupPickerCards({
                   height={(Number(g.duration) || 60) * scale}
                   scale={scale}
                   checked={selected.has(String(g.id))}
+                  mode={modeByGroupId?.[String(g.id)] || null}
+                  active={String(activeId || '') === String(g.id)}
                   disabled={disabled}
                   onToggle={() => onToggle(String(g.id))}
+                  onReverseToggle={onReverseToggle ? () => onReverseToggle(String(g.id)) : null}
+                  onModeChange={onModeChange ? (mode) => onModeChange(String(g.id), mode) : null}
                 />
               ))}
             </div>
@@ -152,53 +160,116 @@ export default function GroupPickerCards({
 }
 
 /** One board block at picker scale — same fill, border and title colour. */
-function MiniBlock({ group, top, height, checked, disabled, onToggle, scale = 0.75 }) {
+const PLACEMENT_BADGES = {
+  waitlist: { label: 'המתנה', title: 'רשימת המתנה', color: '#60A5FA', icon: Users },
+  hold: { label: 'שמור', title: 'שמירת מקום', color: '#FBBF24', icon: Clock3 },
+  fixed: { label: 'רשום', title: 'שיבוץ קבוע', color: '#34D399', icon: ShieldCheck },
+};
+
+function MiniBlock({ group, top, height, checked, mode, active, disabled, onToggle, onReverseToggle, onModeChange, scale = 0.75 }) {
   const c = groupColor(group);
   const label = shortGroupLabel(group.name) || group.name;
   // A roomier board carries a roomier caption; the tiny one stays at 9px.
   const fontSize = scale >= 1 ? 11 : 9;
 
-  return (
-    <label
-      title={`${label}${group.time ? ` · ${group.time}` : ''}`}
-      style={{
-        position: 'absolute',
-        top, height,
-        left: 2, right: 2,
-        background: c.bg,
-        border: `1.5px solid ${checked ? c.text : c.border}`,
-        borderRadius: 5,
-        padding: '2px 4px',
-        cursor: disabled ? 'default' : 'pointer',
-        overflow: 'hidden',
-        boxShadow: checked ? `0 0 0 2px ${c.text}44` : '0 1px 3px rgba(0,0,0,0.2)',
-        transition: 'box-shadow 0.15s, border-color 0.15s',
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 2,
-        zIndex: checked ? 3 : 1,
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={onToggle}
-        // Off-screen rather than removed, so the block stays keyboard- and
-        // screen-reader-reachable while the block itself is the visible control.
-        style={{ position: 'absolute', opacity: 0, width: 1, height: 1, margin: 0 }}
-      />
-      {checked && (
-        <Check size={fontSize} strokeWidth={3.5} color={c.text} style={{ flexShrink: 0, marginTop: 1 }} />
-      )}
-      <span style={{
-        minWidth: 0, fontSize, fontWeight: 700, color: c.text, lineHeight: 1.2,
-        overflow: 'hidden', display: '-webkit-box',
-        WebkitLineClamp: height >= 45 ? 3 : 2, WebkitBoxOrient: 'vertical',
-      }}>
-        {label}
+  const blockStyle = {
+    position: 'absolute',
+    top, height,
+    left: 2, right: 2,
+    background: c.bg,
+    border: `1.5px solid ${mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].color : (checked ? c.text : c.border)}`,
+    borderRadius: 5,
+    padding: '3px 4px',
+    cursor: disabled ? 'default' : 'pointer',
+    overflow: 'hidden',
+    boxShadow: active
+      ? '0 0 0 3px rgba(255,255,255,0.32)'
+      : (checked ? `0 0 0 2px ${(PLACEMENT_BADGES[mode]?.color || c.text)}44` : '0 1px 3px rgba(0,0,0,0.2)'),
+    transition: 'box-shadow 0.15s, border-color 0.15s',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    gap: 2, textAlign: 'right',
+    zIndex: checked ? 3 : 1,
+  };
+  const content = <>
+    <span style={{
+      minWidth: 0, fontSize, fontWeight: 700, color: c.text, lineHeight: 1.15,
+      overflow: 'hidden', display: '-webkit-box',
+      WebkitLineClamp: height >= 60 ? 2 : 1, WebkitBoxOrient: 'vertical',
+    }}>
+      {label}
+    </span>
+    {onModeChange ? (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 2, direction: 'rtl' }}>
+        {Object.entries(PLACEMENT_BADGES).map(([key, item]) => {
+          const Icon = item.icon;
+          const selectedMode = mode === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              title={item.title}
+              aria-label={`${item.title}: ${label}`}
+              aria-pressed={selectedMode}
+              disabled={disabled}
+              onClick={(event) => {
+                event.stopPropagation();
+                onModeChange(selectedMode ? 'none' : key);
+              }}
+              style={{
+                minWidth: 0, width: 22, height: 20, padding: 0, borderRadius: 4,
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                border: `1px solid ${selectedMode ? item.color : 'rgba(255,255,255,0.18)'}`,
+                color: selectedMode ? '#08111F' : item.color,
+                background: selectedMode ? item.color : 'rgba(5,10,20,0.58)',
+                cursor: disabled ? 'default' : 'pointer',
+              }}
+            >
+              <Icon size={12} strokeWidth={2.4} />
+            </button>
+          );
+        })}
+        {mode && PLACEMENT_BADGES[mode] && (
+          <span style={{ fontSize: 8.5, fontWeight: 900, color: PLACEMENT_BADGES[mode].color, whiteSpace: 'nowrap' }}>
+            {PLACEMENT_BADGES[mode].label}
+          </span>
+        )}
       </span>
-    </label>
+    ) : mode && PLACEMENT_BADGES[mode] ? (
+      <span style={{
+        alignSelf: 'flex-end', borderRadius: 4, padding: '1px 3px',
+        fontSize: Math.max(7.5, fontSize - 2), fontWeight: 900,
+        color: '#08111F', background: PLACEMENT_BADGES[mode].color, whiteSpace: 'nowrap',
+      }}>
+        {PLACEMENT_BADGES[mode].label}
+      </span>
+    ) : null}
+  </>;
+
+  if (onModeChange) {
+    return (
+      <div title={`${label}${group.time ? ` · ${group.time}` : ''}`} style={blockStyle}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title={`${label}${group.time ? ` · ${group.time}` : ''}`}
+      onClick={onToggle}
+      onContextMenu={(event) => {
+        if (!onReverseToggle || disabled) return;
+        event.preventDefault();
+        onReverseToggle();
+      }}
+      disabled={disabled}
+      style={blockStyle}
+    >
+      {content}
+    </button>
   );
 }
 

@@ -139,9 +139,13 @@ export function activeHolds(db, now = new Date()) {
 }
 
 export function activeHoldForStudent(db, studentId, now = new Date()) {
+  return activeHoldsForStudent(db, studentId, now)[0] || null;
+}
+
+export function activeHoldsForStudent(db, studentId, now = new Date()) {
   return activeHolds(db, now)
     .filter((hold) => String(hold.student_id) === String(studentId))
-    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0] || null;
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 }
 
 export function activeHoldsForGroup(db, groupId, now = new Date()) {
@@ -266,7 +270,9 @@ async function persistMembership(db, persist, student, groupIds, { primaryGroupI
 }
 
 async function assignHoldToStudent({ db, persist, student, hold }) {
-  let updated = await persistMembership(db, persist, student, hold.group_ids, {
+  const currentIds = studentGroupIds(db.withStudentRelation?.(student) || student);
+  const membershipIds = uniqueStrings([...currentIds, ...uniqueStrings(hold.group_ids)]);
+  let updated = await persistMembership(db, persist, student, membershipIds, {
     primaryGroupId: hold.primary_group_id,
   });
   const status = hold.phase === HOLD_PHASE.AWAITING_CENTRE
@@ -606,49 +612,48 @@ async function removeActiveWaitlistsForStudent({
 }
 
 /**
- * One CRM operation owns all three meanings of "group": a permanent seat, a
- * time-limited hard hold, or a queue position. A trainee cannot accidentally
- * remain in two of those modes after an edit.
+ * One CRM operation reconciles all three meanings of "group": a permanent
+ * seat, a time-limited hard hold, or a queue position. Each group keeps its
+ * own mode, so a trainee may be registered in one group while waiting for
+ * another.
  */
-export async function setStudentGroupPlacement({
+export async function setStudentGroupPlacements({
   db,
   persist,
   student,
   parent = null,
   groups = [],
-  mode,
+  placements = {},
   now = new Date(),
   source = 'crm',
 } = {}) {
   if (!student?.id) return { ok: false, reason: 'student_not_found' };
-  if (!Object.values(GROUP_PLACEMENT_MODE).includes(mode)) {
-    return { ok: false, reason: 'invalid_placement_mode' };
+  const groupMap = new Map((groups || []).filter(Boolean).map((group) => [String(group.id), group]));
+  const requested = new Map();
+  for (const [rawGroupId, rawMode] of Object.entries(placements || {})) {
+    const groupId = String(rawGroupId);
+    const mode = String(rawMode || GROUP_PLACEMENT_MODE.NONE);
+    if (!groupMap.has(groupId)) return { ok: false, reason: 'group_not_found', group_id: groupId };
+    if (!Object.values(GROUP_PLACEMENT_MODE).includes(mode)) return { ok: false, reason: 'invalid_placement_mode' };
+    if (mode !== GROUP_PLACEMENT_MODE.NONE) requested.set(groupId, mode);
   }
-  const selectedGroups = [...new Map((groups || []).filter(Boolean).map((group) => [String(group.id), group])).values()];
-  if (mode !== GROUP_PLACEMENT_MODE.NONE && !selectedGroups.length) {
-    return { ok: false, reason: 'group_required' };
-  }
+
+  const fixedIds = [...requested].filter(([, mode]) => mode === GROUP_PLACEMENT_MODE.FIXED).map(([id]) => id);
+  const holdIds = [...requested].filter(([, mode]) => mode === GROUP_PLACEMENT_MODE.HOLD).map(([id]) => id);
+  const waitlistIds = [...requested].filter(([, mode]) => mode === GROUP_PLACEMENT_MODE.WAITLIST).map(([id]) => id);
 
   const existingHold = activeHoldForStudent(db, student.id, now);
-  const desiredIds = selectedGroups.map((group) => String(group.id));
   const existingHoldIds = uniqueStrings(existingHold?.group_ids).sort();
-  const sameHold = mode === GROUP_PLACEMENT_MODE.HOLD
-    && existingHold
-    && existingHoldIds.join(',') === [...desiredIds].sort().join(',');
-
-  if ([GROUP_PLACEMENT_MODE.FIXED, GROUP_PLACEMENT_MODE.HOLD].includes(mode)) {
-    // A group the student already occupies (through a membership or an active hold)
-    // does not need to pass a fresh capacity check. This keeps editing idempotent and
-    // avoids blocking an existing placement when an old group has no capacity value.
-    const occupiedIds = new Set([
-      ...studentGroupIds(student, db),
-      ...existingHoldIds,
-    ].map(String));
-    const groupsRequiringCapacity = selectedGroups.filter((group) => !occupiedIds.has(String(group.id)));
-    if (groupsRequiringCapacity.length) {
-      const available = capacityCheck(db, groupsRequiringCapacity.map((group) => group.id), student.id, now);
-      if (!available.ok) return available;
-    }
+  const sameHold = Boolean(existingHold)
+    && existingHoldIds.join(',') === [...holdIds].sort().join(',');
+  const occupiedIds = new Set([
+    ...studentGroupIds(db.withStudentRelation?.(student) || student),
+    ...existingHoldIds,
+  ].map(String));
+  const groupsRequiringCapacity = [...fixedIds, ...holdIds].filter((id) => !occupiedIds.has(String(id)));
+  if (groupsRequiringCapacity.length) {
+    const available = capacityCheck(db, groupsRequiringCapacity, student.id, now);
+    if (!available.ok) return available;
   }
 
   if (existingHold && !sameHold) {
@@ -662,69 +667,102 @@ export async function setStudentGroupPlacement({
     });
     if (!released.ok) return released;
   }
+
+  let activeHold = sameHold ? existingHold : null;
+  if (holdIds.length && !activeHold) {
+    const held = await createPlacementHold({
+      db,
+      persist,
+      student: db.getOne('students', student.id),
+      parent,
+      groups: holdIds.map((id) => groupMap.get(id)),
+      phase: HOLD_PHASE.AWAITING_PARENT,
+      source,
+      now,
+      assignStudent: false,
+      expiresAt: existingHold?.expires_at && new Date(existingHold.expires_at).getTime() > new Date(now).getTime()
+        ? existingHold.expires_at
+        : null,
+    });
+    if (!held.ok) return held;
+    activeHold = held.hold;
+  }
+
+  const activeWaitlistGroupIds = rows(db, WAITLIST_COLLECTION)
+    .filter((entry) => String(entry.student_id) === String(student.id))
+    .filter((entry) => ['waiting', 'offered', 'paused_after_acceptance'].includes(String(entry.status)))
+    .map((entry) => String(entry.group_id));
   await removeActiveWaitlistsForStudent({
     db,
     persist,
     studentId: student.id,
-    groupIds: [GROUP_PLACEMENT_MODE.FIXED, GROUP_PLACEMENT_MODE.HOLD].includes(mode) ? desiredIds : null,
+    groupIds: activeWaitlistGroupIds.filter((id) => !waitlistIds.includes(id)),
     now,
   });
 
-  if (mode === GROUP_PLACEMENT_MODE.HOLD) {
-    if (sameHold) {
-      const assigned = await assignHoldToStudent({ db, persist, student: db.getOne('students', student.id), hold: existingHold });
-      return { ok: true, mode, hold: existingHold, student: assigned, duplicate: true };
-    }
-    const currentStudent = db.getOne('students', student.id);
-    const held = await createPlacementHold({
-      db,
-      persist,
-      student: currentStudent,
-      parent,
-      groups: selectedGroups,
-      phase: HOLD_PHASE.AWAITING_PARENT,
-      source,
-      now,
+  const waitlists = [];
+  for (const groupId of waitlistIds) {
+    const waiting = await joinGroupWaitlist({
+      db, persist, student: db.getOne('students', student.id), parent, group: groupMap.get(groupId), now, source,
     });
-    return held.ok ? { ...held, mode } : held;
+    if (!waiting.ok) return waiting;
+    waitlists.push(waiting.entry);
   }
 
-  let updated = db.getOne('students', student.id);
-  if (mode === GROUP_PLACEMENT_MODE.WAITLIST) {
-    updated = await persistMembership(db, persist, updated, [], { primaryGroupId: null });
-    const entries = [];
-    for (const group of selectedGroups) {
-      const waiting = await joinGroupWaitlist({ db, persist, student: db.getOne('students', student.id), parent, group, now, source });
-      if (!waiting.ok) return waiting;
-      entries.push(waiting.entry);
-    }
-    updated = db.getOne('students', student.id);
-    return { ok: true, mode, student: updated, waitlists: entries };
-  }
-
-  if (mode === GROUP_PLACEMENT_MODE.FIXED) {
-    updated = await persistMembership(db, persist, db.getOne('students', student.id), desiredIds, {
-      primaryGroupId: desiredIds[0],
-    });
-    updated = db.update('students', student.id, {
-      status: REGISTRATION_STATUS.REGISTERED,
-      placement_hold_until: null,
-      placement_hold_firm: false,
-      placement_reported_at: null,
-    }) || updated;
-    await requirePersist(persist, 'students', updated);
-    return { ok: true, mode, student: updated };
-  }
-
-  updated = await persistMembership(db, persist, db.getOne('students', student.id), [], { primaryGroupId: null });
+  const membershipIds = uniqueStrings([...fixedIds, ...holdIds]);
+  let updated = await persistMembership(db, persist, db.getOne('students', student.id), membershipIds, {
+    primaryGroupId: fixedIds[0] || holdIds[0] || null,
+  });
+  const holdStatus = activeHold?.phase === HOLD_PHASE.AWAITING_CENTRE
+    ? REGISTRATION_STATUS.AWAITING_CENTRE
+    : (activeHold?.phase === HOLD_PHASE.INTRO_SCHEDULED || activeHold?.phase === HOLD_PHASE.INTRO_DECISION
+      ? REGISTRATION_STATUS.INTRO_SCHEDULED
+      : REGISTRATION_STATUS.AWAITING_PARENT);
+  const status = activeHold
+    ? holdStatus
+    : (fixedIds.length
+      ? REGISTRATION_STATUS.REGISTERED
+      : (waitlistIds.length ? REGISTRATION_STATUS.WAITLIST : REGISTRATION_STATUS.DETAILS_COMPLETED));
   updated = db.update('students', student.id, {
-    status: REGISTRATION_STATUS.DETAILS_COMPLETED,
-    placement_hold_until: null,
-    placement_hold_firm: false,
-    placement_reported_at: null,
+    status,
+    placement_hold_until: activeHold?.expires_at || null,
+    placement_hold_firm: Boolean(activeHold),
+    placement_reported_at: activeHold?.phase === HOLD_PHASE.AWAITING_CENTRE ? activeHold.parent_confirmed_at : null,
   }) || updated;
   await requirePersist(persist, 'students', updated);
-  return { ok: true, mode: GROUP_PLACEMENT_MODE.NONE, student: updated };
+  return { ok: true, placements: Object.fromEntries(requested), hold: activeHold, waitlists, student: updated };
+}
+
+export async function setStudentGroupPlacement({ groups = [], mode, ...options } = {}) {
+  if (!Object.values(GROUP_PLACEMENT_MODE).includes(mode)) return { ok: false, reason: 'invalid_placement_mode' };
+  if (mode !== GROUP_PLACEMENT_MODE.NONE && !groups.length) return { ok: false, reason: 'group_required' };
+  return setStudentGroupPlacements({
+    ...options,
+    groups,
+    placements: Object.fromEntries((groups || []).map((group) => [String(group.id), mode])),
+  });
+}
+
+export function groupPlacementsForStudent(db, student, now = new Date()) {
+  if (!student?.id) return {};
+  const placements = {};
+  const heldIds = new Set();
+  for (const hold of activeHoldsForStudent(db, student.id, now)) {
+    for (const groupId of uniqueStrings(hold.group_ids)) {
+      heldIds.add(groupId);
+      placements[groupId] = GROUP_PLACEMENT_MODE.HOLD;
+    }
+  }
+  for (const groupId of studentGroupIds(db.withStudentRelation?.(student) || student)) {
+    if (!heldIds.has(String(groupId))) placements[String(groupId)] = GROUP_PLACEMENT_MODE.FIXED;
+  }
+  for (const entry of rows(db, WAITLIST_COLLECTION)) {
+    if (String(entry.student_id) !== String(student.id)) continue;
+    if (!['waiting', 'offered', 'paused_after_acceptance'].includes(String(entry.status))) continue;
+    const groupId = String(entry.group_id || '');
+    if (groupId && !placements[groupId]) placements[groupId] = GROUP_PLACEMENT_MODE.WAITLIST;
+  }
+  return placements;
 }
 
 export async function offerNextWaitlistee({ db, persist, group, now = new Date(), isEligible = () => true } = {}) {
@@ -1468,7 +1506,8 @@ export async function runRegistrationLifecycle({
 }
 
 export function lifecycleSnapshotForStudent(db, studentId, now = new Date()) {
-  const hold = activeHoldForStudent(db, studentId, now);
+  const holds = activeHoldsForStudent(db, studentId, now);
+  const hold = holds[0] || null;
   const waitlists = rows(db, WAITLIST_COLLECTION)
     .filter((entry) => String(entry.student_id) === String(studentId))
     .map((entry) => {
@@ -1478,7 +1517,7 @@ export function lifecycleSnapshotForStudent(db, studentId, now = new Date()) {
   const intro = rows(db, INTRO_COLLECTION)
     .filter((booking) => String(booking.student_id) === String(studentId))
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0] || null;
-  return { hold, waitlists, intro };
+  return { hold, holds, waitlists, intro };
 }
 
 export function migrationDryRun({

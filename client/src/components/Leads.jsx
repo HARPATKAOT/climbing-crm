@@ -84,7 +84,7 @@ import {
 } from './communicationQueue.js';
 import { consecutiveAbsences, getGroupDays } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
-import { deriveGroupPlacement } from '../utils/groupPlacement.js';
+import { deriveGroupPlacements } from '../utils/groupPlacement.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
 import { otherGuardians, studentGuardianIds } from '../utils/studentGuardians.js';
 import {
@@ -685,8 +685,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [registrationLifecycleState, setRegistrationLifecycleState] = useState(
     student.registrationLifecycle || {}
   );
-  const initialGroupPlacement = deriveGroupPlacement(student, student.registrationLifecycle || {});
-  const [placementMode, setPlacementMode] = useState(initialGroupPlacement.mode);
+  const [placementModes, setPlacementModes] = useState(() => deriveGroupPlacements(student, student.registrationLifecycle || {}));
   const [groupPlacementError, setGroupPlacementError] = useState('');
 
   // Keep an open card current even when the surrounding customer list still
@@ -718,7 +717,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editStudentNotes, setEditStudentNotes] = useState(student.notes || '');
   const [editSegment, setEditSegment] = useState(student.segment || '');
   const [editNextFollowup, setEditNextFollowup] = useState(student.nextFollowup || '');
-  const [editGroupIds, setEditGroupIds] = useState(() => studentGroupIds(student));
   // Edit Form Fields (parent)
   const initialParentName = parentNameParts(parent);
   const [editParentName, setEditParentName] = useState(initialParentName.firstName);
@@ -810,11 +808,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditStudentNotes(student.notes || '');
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
-    {
-      const placement = deriveGroupPlacement(student, student.registrationLifecycle || {});
-      setEditGroupIds(placement.groupIds);
-      setPlacementMode(placement.mode);
-    }
+    setPlacementModes(deriveGroupPlacements(student, student.registrationLifecycle || {}));
     setGroupPlacementError('');
     setEditEligibleGroupIds(eligibleGroupIdsFromRows(programEligibility, groups));
     const nextParentName = parentNameParts(parent);
@@ -2187,7 +2181,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const res = await fetch(`/api/students/${student.id}/group-placement`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds: editGroupIds, mode: placementMode }),
+        body: JSON.stringify({ placements: placementModes }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.ok) throw new Error(payload.error || 'שמירת השיבוץ נכשלה');
@@ -3026,8 +3020,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const placementHold = registrationLifecycle.hold || null;
   const lifecycleWaitlists = (registrationLifecycle.waitlists || [])
     .filter((entry) => ['waiting', 'offered', 'paused_after_acceptance'].includes(entry.status));
-  const currentGroupPlacement = deriveGroupPlacement(student, registrationLifecycle);
-  const currentPlacementGroups = groups.filter((group) => currentGroupPlacement.groupIds.includes(String(group.id)));
+  const currentGroupPlacements = deriveGroupPlacements(student, registrationLifecycle);
+  const currentPlacementGroups = groups
+    .filter((group) => currentGroupPlacements[String(group.id)])
+    .map((group) => ({ group, mode: currentGroupPlacements[String(group.id)] }));
   const placementModeLabels = {
     fixed: 'שיבוץ קבוע',
     hold: 'מקום שמור',
@@ -3035,7 +3031,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     none: 'לא משויך',
   };
   const groupSummary = currentPlacementGroups.length
-    ? `${placementModeLabels[currentGroupPlacement.mode]} · ${currentPlacementGroups.length === 1 ? currentPlacementGroups[0].name : `${currentPlacementGroups.length} קבוצות`}`
+    ? (currentPlacementGroups.length === 1
+      ? `${placementModeLabels[currentPlacementGroups[0].mode]} · ${currentPlacementGroups[0].group.name}`
+      : `${currentPlacementGroups.length} קבוצות · מצבים שונים`)
     : placementModeLabels.none;
   const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
     .includes(registrationLifecycle.intro?.status)
@@ -3074,9 +3072,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   })();
 
   const openGroupPlacementEditor = () => {
-    const placement = deriveGroupPlacement(student, registrationLifecycleState);
-    setEditGroupIds(placement.groupIds);
-    setPlacementMode(placement.mode);
+    setPlacementModes(deriveGroupPlacements(student, registrationLifecycleState));
     setGroupPlacementError('');
     setEditingGroup(true);
   };
@@ -3095,7 +3091,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditGender(student.gender || '');
     setEditStudentNotes(student.notes || '');
     setEditNextFollowup(student.nextFollowup || '');
-    setEditGroupIds(studentGroupIds(student));
     setEditParentName(nextParentName.firstName);
     setEditParentLastName(nextParentName.lastName);
     setEditParentIdNumber(parent?.idNumber || '');
@@ -5196,10 +5191,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 {editingGroup ? (
                   <GroupPlacementEditor
                     groups={groups}
-                    mode={placementMode}
-                    selectedIds={editGroupIds}
-                    onModeChange={setPlacementMode}
-                    onSelectedIdsChange={setEditGroupIds}
+                    placements={placementModes}
+                    onPlacementsChange={setPlacementModes}
                     onSave={handleSaveGroup}
                     onCancel={() => {
                       setGroupPlacementError('');
@@ -5212,7 +5205,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   <div>
                     {currentPlacementGroups.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {currentPlacementGroups.map((g) => {
+                        {currentPlacementGroups.map(({ group: g, mode }) => {
                           const waitlistEntry = lifecycleWaitlists.find((entry) => String(entry.group_id) === String(g.id));
                           return (
                           <div key={g.id} className="card card-p" style={{ padding: 9 }}>
@@ -5228,29 +5221,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               >
                                 {g.name}
                               </button>
-                              <span className={currentGroupPlacement.mode === 'fixed' ? 'badge badge-green' : currentGroupPlacement.mode === 'hold' ? 'badge badge-amber' : 'badge badge-blue'}>
-                                {placementModeLabels[currentGroupPlacement.mode]}
+                              <span className={mode === 'fixed' ? 'badge badge-green' : mode === 'hold' ? 'badge badge-amber' : 'badge badge-blue'}>
+                                {placementModeLabels[mode]}
                               </span>
                             </div>
                             <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4 }}>
                               {[groupDaysLabel(g), g.time ? `בשעה ${g.time}` : ''].filter(Boolean).join(' ')}
-                              {currentGroupPlacement.mode === 'hold' && placementHold?.expires_at ? ` · בתוקף עד ${lifecycleDate(placementHold.expires_at)}` : ''}
-                              {currentGroupPlacement.mode === 'waitlist' && waitlistEntry?.position ? ` · מקום ${waitlistEntry.position} בתור` : ''}
+                              {mode === 'hold' && placementHold?.expires_at ? ` · בתוקף עד ${lifecycleDate(placementHold.expires_at)}` : ''}
+                              {mode === 'waitlist' && waitlistEntry?.position ? ` · מקום ${waitlistEntry.position} בתור` : ''}
                             </div>
                           </div>
                         );})}
                       </div>
                     ) : (
                       <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
-                    )}
-                    {currentGroupPlacement.mode !== 'waitlist' && lifecycleWaitlists.length > 0 && (
-                      <div style={{ marginTop: 9, display: 'flex', flexDirection: 'column', gap: 5 }}>
-                        {lifecycleWaitlists.map((entry) => (
-                          <div key={entry.id} style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                            רשימת המתנה · {entry.group_name || entry.group_id}{entry.position ? ` · מקום ${entry.position}` : ''}
-                          </div>
-                        ))}
-                      </div>
                     )}
                     {placementHold && canManageBilling && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>

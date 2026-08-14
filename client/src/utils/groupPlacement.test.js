@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveGroupPlacement } from './groupPlacement.js';
+import { deriveGroupPlacement, deriveGroupPlacements } from './groupPlacement.js';
 
 test('group placement prefers an active hold over membership and waitlists', () => {
   const result = deriveGroupPlacement(
@@ -27,4 +27,15 @@ test('a fixed placement stays primary when the trainee also waits for another gr
     { waitlists: [{ status: 'waiting', group_id: 'waiting' }] },
   );
   assert.deepEqual(result, { mode: 'fixed', groupIds: ['fixed'] });
+});
+
+test('every group keeps its own independent placement mode', () => {
+  const result = deriveGroupPlacements(
+    { groupIds: ['fixed', 'held'] },
+    {
+      holds: [{ status: 'active', group_ids: ['held'] }],
+      waitlists: [{ status: 'waiting', group_id: 'waiting' }],
+    },
+  );
+  assert.deepEqual(result, { held: 'hold', fixed: 'fixed', waiting: 'waitlist' });
 });

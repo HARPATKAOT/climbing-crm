@@ -17,6 +17,7 @@ import {
   createIntroBooking,
   createPlacementHold,
   fullDayDeadline,
+  groupPlacementsForStudent,
   joinGroupWaitlist,
   leaveGroupWaitlist,
   migrationDryRun,
@@ -25,6 +26,7 @@ import {
   resolveOtherWaitlists,
   runRegistrationLifecycle,
   setStudentGroupPlacement,
+  setStudentGroupPlacements,
   waitlistEntriesForGroup,
 } from './registrationLifecycle.js';
 
@@ -169,6 +171,32 @@ test('CRM group placement cleanly switches between waitlist, hard hold and fixed
   assert.equal(activeHoldForStudent(db, 's1', now), null);
   assert.equal(capacityForGroup(db, group.id, now).occupied, 0);
   assert.equal(capacityForGroup(db, secondGroup.id, now).occupied, 1);
+});
+
+test('each group keeps an independent fixed, hold or waitlist placement', async () => {
+  const fixedGroup = { ...group, id: 'fixed', maxSlots: 3 };
+  const heldGroup = { ...group, id: 'held', maxSlots: 3 };
+  const waitingGroup = { ...group, id: 'waiting', maxSlots: 3 };
+  const db = memoryDb({
+    groups: [fixedGroup, heldGroup, waitingGroup],
+    students: [{ id: 's1', name: 'child', parentId: parent.id, status: REGISTRATION_STATUS.DETAILS_COMPLETED }],
+    parents: [parent],
+  });
+  const now = new Date('2026-08-13T10:00:00.000Z');
+  const result = await setStudentGroupPlacements({
+    db, persist, student: db.getOne('students', 's1'), parent,
+    groups: db.get('groups'), now,
+    placements: { fixed: 'fixed', held: 'hold', waiting: 'waitlist' },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(groupPlacementsForStudent(db, db.getOne('students', 's1'), now), {
+    held: 'hold', fixed: 'fixed', waiting: 'waitlist',
+  });
+  assert.deepEqual(db.withStudentRelation(db.getOne('students', 's1')).groupIds.sort(), ['fixed', 'held']);
+  assert.equal(capacityForGroup(db, 'fixed', now).occupied, 1);
+  assert.equal(capacityForGroup(db, 'held', now).occupied, 1);
+  assert.equal(capacityForGroup(db, 'waiting', now).occupied, 0);
+  assert.equal(waitlistEntriesForGroup(db, 'waiting')[0].student_id, 's1');
 });
 
 test('CRM cannot create a fixed seat or a hold beyond group capacity', async () => {

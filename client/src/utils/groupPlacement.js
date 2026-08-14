@@ -7,23 +7,34 @@ export function activeWaitlists(lifecycle = {}) {
 }
 
 export function deriveGroupPlacement(student, lifecycle = {}) {
-  const hold = lifecycle.hold || null;
-  if (hold?.status === 'active' || (hold && !hold.status)) {
-    return {
-      mode: 'hold',
-      groupIds: [...new Set((hold.group_ids || []).map(String))],
-    };
+  const placements = deriveGroupPlacements(student, lifecycle);
+  const priority = ['hold', 'fixed', 'waitlist'];
+  const mode = priority.find((candidate) => Object.values(placements).includes(candidate)) || 'none';
+  return {
+    mode,
+    groupIds: Object.entries(placements).filter(([, value]) => value === mode).map(([groupId]) => groupId),
+  };
+}
+
+export function deriveGroupPlacements(student, lifecycle = {}) {
+  const placements = {};
+  const holds = Array.isArray(lifecycle.holds) && lifecycle.holds.length
+    ? lifecycle.holds
+    : (lifecycle.hold ? [lifecycle.hold] : []);
+  const heldIds = new Set();
+  for (const hold of holds) {
+    if (hold?.status && hold.status !== 'active') continue;
+    for (const groupId of hold?.group_ids || []) {
+      heldIds.add(String(groupId));
+      placements[String(groupId)] = 'hold';
+    }
   }
-  const groupIds = studentGroupIds(student);
-  if (groupIds.length) {
-    return { mode: 'fixed', groupIds };
+  for (const groupId of studentGroupIds(student)) {
+    if (!heldIds.has(String(groupId))) placements[String(groupId)] = 'fixed';
   }
-  const waitlists = activeWaitlists(lifecycle);
-  if (waitlists.length) {
-    return {
-      mode: 'waitlist',
-      groupIds: [...new Set(waitlists.map((entry) => String(entry.group_id)).filter(Boolean))],
-    };
+  for (const entry of activeWaitlists(lifecycle)) {
+    const groupId = String(entry.group_id || '');
+    if (groupId && !placements[groupId]) placements[groupId] = 'waitlist';
   }
-  return { mode: 'none', groupIds: [] };
+  return placements;
 }

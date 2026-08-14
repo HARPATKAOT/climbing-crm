@@ -564,6 +564,7 @@ import {
   confirmIntroPayment,
   continueAfterIntro,
   createIntroBooking,
+  groupPlacementsForStudent,
   joinGroupWaitlist,
   leaveGroupWaitlist,
   lifecycleSnapshotForStudent,
@@ -575,6 +576,7 @@ import {
   releasePlacementHold,
   runRegistrationLifecycle,
   setStudentGroupPlacement,
+  setStudentGroupPlacements,
   waitlistEntriesForGroup,
 } from './registrationLifecycle.js';
 import {
@@ -1467,23 +1469,24 @@ app.put('/api/students/:id/group-placement', async (req, res) => {
   const student = db.getOne('students', req.params.id);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const groupsBefore = studentGroupIds(db.withStudentRelation(student));
+  const hasPlacementMap = req.body?.placements && typeof req.body.placements === 'object' && !Array.isArray(req.body.placements);
   const mode = String(req.body?.mode || GROUP_PLACEMENT_MODE.NONE);
   const groupIds = [...new Set((Array.isArray(req.body?.groupIds) ? req.body.groupIds : [])
     .map((id) => String(id || '').trim()).filter(Boolean))];
-  const groups = groupIds.map((id) => db.getOne('groups', id));
+  const groups = hasPlacementMap ? db.get('groups') : groupIds.map((id) => db.getOne('groups', id));
   if (groups.some((group) => !group)) {
     return res.status(404).json({ error: 'אחת הקבוצות שנבחרו אינה קיימת' });
   }
   const parent = student.parentId ? db.getOne('parents', student.parentId) : null;
   let result;
   try {
-    result = await setStudentGroupPlacement({
+    result = await (hasPlacementMap ? setStudentGroupPlacements : setStudentGroupPlacement)({
       db,
       persist: persistCore,
       student,
       parent,
       groups,
-      mode,
+      ...(hasPlacementMap ? { placements: req.body.placements } : { mode }),
       source: 'crm',
     });
   } catch (error) {
@@ -1516,6 +1519,50 @@ app.put('/api/students/:id/group-placement', async (req, res) => {
     student: updated,
     lifecycle: lifecycleSnapshotForStudent(db, student.id),
   });
+});
+
+app.put('/api/students/:id/group-placement/:groupId', async (req, res) => {
+  if (req.crmUser?.role === 'staff' && !accessAtLeast(req.crmUser, 'classes', 'edit')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת עריכת חוגים לשינוי שיבוץ' });
+  }
+  const student = db.getOne('students', req.params.id);
+  const group = db.getOne('groups', req.params.groupId);
+  if (!student || !group) return res.status(404).json({ error: 'המתאמן או הקבוצה לא נמצאו' });
+  const groupsBefore = studentGroupIds(db.withStudentRelation(student));
+  const mode = String(req.body?.mode || GROUP_PLACEMENT_MODE.NONE);
+  const placements = groupPlacementsForStudent(db, student);
+  if (mode === GROUP_PLACEMENT_MODE.NONE) delete placements[String(group.id)];
+  else placements[String(group.id)] = mode;
+  try {
+    const result = await setStudentGroupPlacements({
+      db,
+      persist: persistCore,
+      student,
+      parent: student.parentId ? db.getOne('parents', student.parentId) : null,
+      groups: db.get('groups'),
+      placements,
+      source: 'crm_group_panel',
+    });
+    if (!result.ok) {
+      const errors = {
+        invalid_placement_mode: 'סוג השיבוץ אינו תקין',
+        capacity_unknown: 'לא הוגדרה מכסה לקבוצה ולכן אי אפשר לשמור בה מקום',
+        full: 'אין מקום פנוי בקבוצה',
+      };
+      return res.status(409).json({ ...result, error: errors[result.reason] || 'שמירת השיבוץ נכשלה' });
+    }
+    const updated = db.withStudentRelation(db.getOne('students', student.id));
+    notifyGroupMembershipDiff({
+      student: updated,
+      before: groupsBefore,
+      after: studentGroupIds(updated),
+    }).catch((err) => console.error('single group placement notify failed:', err.message));
+    touchGoogleContacts();
+    return res.json({ ...result, student: updated, lifecycle: lifecycleSnapshotForStudent(db, student.id) });
+  } catch (error) {
+    console.error('single group placement update failed:', error.message);
+    return res.status(error.code === 'durable_write_failed' ? 503 : 500).json({ error: 'שמירת השיבוץ נכשלה' });
+  }
 });
 
 app.get('/api/groups/:id/waitlist', requireOwner, (req, res) => {
