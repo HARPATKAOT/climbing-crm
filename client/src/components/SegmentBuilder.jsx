@@ -1,5 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Users, Save } from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  Users, Save, SlidersHorizontal, CalendarDays, UserCheck, Hash, MapPin,
+  Activity, UsersRound, Tag, MessageSquareText, UserRound, ChevronLeft,
+  Search, X, Check, Eye, RotateCcw, Pencil,
+} from 'lucide-react';
 import { STATUSES, STATUS_PROGRESS_ORDER } from '../mockData.js';
 import { getGroupDays } from '../scheduleUtils.js';
 import { EMPTY_FILTERS } from './segmentFilters.js';
@@ -25,6 +29,131 @@ function nameWithoutDay(name) {
   return short || raw;
 }
 
+const GENDER_OPTIONS = [
+  { value: 'male', label: 'זכר' },
+  { value: 'female', label: 'נקבה' },
+  { value: '', label: 'לא צוין' },
+];
+
+const PICKER_FIELDS = {
+  age: ['ageMin', 'ageMax'],
+  registered: ['registered'],
+  list: ['listKey'],
+  cities: ['cities'],
+  statuses: ['statuses'],
+  groups: ['groupIds', 'groupDays'],
+  genders: ['genders'],
+  interests: ['interests'],
+  delivery: ['marketingOptIn', 'onlyOpenWindow'],
+};
+
+function summaryList(values, emptyLabel) {
+  if (!values?.length) return emptyLabel;
+  if (values.length <= 2) return values.join(' · ');
+  return `${values.slice(0, 2).join(' · ')} ועוד ${values.length - 2}`;
+}
+
+function FilterCard({ icon: Icon, title, summary, count = 0, active = false, disabled = false, onClick }) {
+  return (
+    <button
+      type="button"
+      className={`segment-filter-card ${active ? 'is-active' : ''}`}
+      onClick={onClick}
+      disabled={disabled}
+      aria-haspopup="dialog"
+    >
+      <span className="segment-filter-card-icon"><Icon size={18} /></span>
+      <span className="segment-filter-card-copy">
+        <span className="segment-filter-card-title">{title}</span>
+        <span className="segment-filter-card-summary">{summary}</span>
+      </span>
+      {count > 0 && <span className="segment-filter-card-count" aria-label={`${count} בחירות`}>{count}</span>}
+      <ChevronLeft size={17} className="segment-filter-card-chevron" aria-hidden="true" />
+    </button>
+  );
+}
+
+function PickerOption({ selected, label, description, color, onClick, disabled = false }) {
+  return (
+    <button
+      type="button"
+      className={`segment-picker-option ${selected ? 'is-selected' : ''}`}
+      onClick={onClick}
+      aria-pressed={selected}
+      disabled={disabled}
+    >
+      {color
+        ? <span className="segment-picker-color" style={{ background: color }} aria-hidden="true" />
+        : <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
+      <span className="segment-picker-option-copy">
+        <span>{label}</span>
+        {description && <small>{description}</small>}
+      </span>
+      {color && <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
+    </button>
+  );
+}
+
+function FilterDialog({ title, subtitle, onClose, onApply, onReset, applyLabel = 'החלת הסינון', applyDisabled = false, showCancel = true, children }) {
+  const titleId = useId();
+  const dialogRef = useRef(null);
+  const previousFocus = useRef(document.activeElement);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const focusable = dialog?.querySelector('[data-autofocus]')
+      || dialog?.querySelector('input, button:not([disabled]), select, textarea');
+    focusable?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll('input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus.current?.focus?.();
+    };
+  }, []);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div ref={dialogRef} className="modal slide-up segment-filter-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="modal-header segment-filter-dialog-header">
+          <div>
+            <div className="modal-title" id={titleId}>{title}</div>
+            {subtitle && <div className="segment-filter-dialog-subtitle">{subtitle}</div>}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose} aria-label="סגירת חלון הבחירה"><X size={18} /></button>
+        </div>
+        <div className="modal-body segment-filter-dialog-body">{children}</div>
+        <div className="modal-footer segment-filter-dialog-footer">
+          {onReset && <button type="button" className="btn btn-ghost btn-sm" onClick={onReset}><RotateCcw size={14} /> איפוס</button>}
+          <span className="segment-filter-dialog-footer-spacer" />
+          {showCancel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>ביטול</button>}
+          <button type="button" className="btn btn-primary btn-sm" onClick={onApply} disabled={applyDisabled}>{applyLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SegmentBuilder({
   parents = [],
   students = [],
@@ -32,12 +161,16 @@ export default function SegmentBuilder({
   lists = [],
   filters,
   onChange,
+  onManageLists,
 }) {
   const [preview, setPreview] = useState({ count: 0, recipients: [] });
   const [interestOptions, setInterestOptions] = useState([]);
   const [savedSegments, setSavedSegments] = useState([]);
   const [segmentName, setSegmentName] = useState('');
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [activePicker, setActivePicker] = useState(null);
+  const [pickerDraft, setPickerDraft] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState('');
 
   const f = filters || EMPTY_FILTERS;
 
@@ -105,26 +238,63 @@ export default function SegmentBuilder({
     };
   }, [JSON.stringify(f)]);
 
-  const set = (patch) => onChange({ ...f, ...patch });
+  const cloneFilters = (source) => ({
+    ...EMPTY_FILTERS,
+    ...source,
+    cities: [...(source.cities || [])],
+    statuses: [...(source.statuses || [])],
+    groupIds: [...(source.groupIds || [])],
+    groupDays: [...(source.groupDays || [])],
+    genders: [...(source.genders || [])],
+    interests: [...(source.interests || [])],
+  });
 
-  const toggleInArray = (key, value) => {
-    const arr = Array.isArray(f[key]) ? [...f[key]] : [];
+  const openPicker = (key) => {
+    setPickerDraft(cloneFilters(f));
+    setPickerSearch('');
+    setActivePicker(key);
+  };
+
+  const closePicker = () => {
+    setActivePicker(null);
+    setPickerDraft(null);
+    setPickerSearch('');
+  };
+
+  const applyPicker = () => {
+    if (pickerDraft) onChange(cloneFilters(pickerDraft));
+    closePicker();
+  };
+
+  const setDraft = (patch) => setPickerDraft((current) => ({ ...current, ...patch }));
+
+  const toggleDraftArray = (key, value) => {
+    const arr = Array.isArray(pickerDraft?.[key]) ? [...pickerDraft[key]] : [];
     const idx = arr.indexOf(value);
     if (idx >= 0) arr.splice(idx, 1);
     else arr.push(value);
-    set({ [key]: arr });
+    setDraft({ [key]: arr });
   };
 
-  const toggleDayGroups = (dayGroups) => {
+  const toggleDraftDayGroups = (dayGroups) => {
     const dayIds = dayGroups.map((g) => g.id);
-    const selected = Array.isArray(f.groupIds) ? f.groupIds : [];
+    const selected = Array.isArray(pickerDraft?.groupIds) ? pickerDraft.groupIds : [];
     const allSelected = dayIds.every((id) => selected.includes(id));
     if (allSelected) {
-      set({ groupIds: selected.filter((id) => !dayIds.includes(id)) });
+      setDraft({ groupIds: selected.filter((id) => !dayIds.includes(id)) });
     } else {
-      set({ groupIds: [...new Set([...selected, ...dayIds])] });
+      setDraft({ groupIds: [...new Set([...selected, ...dayIds])] });
     }
   };
+
+  const resetPicker = () => {
+    const fields = PICKER_FIELDS[activePicker] || [];
+    const patch = {};
+    for (const field of fields) patch[field] = Array.isArray(EMPTY_FILTERS[field]) ? [] : EMPTY_FILTERS[field];
+    setDraft(patch);
+  };
+
+  const resetAll = () => onChange(cloneFilters(EMPTY_FILTERS));
 
   const saveCurrent = async () => {
     const name = segmentName.trim() || `קהל ${new Date().toLocaleDateString('he-IL')}`;
@@ -140,264 +310,328 @@ export default function SegmentBuilder({
     }
   };
 
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14, minWidth: 0, maxWidth: '100%' }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Users size={16} />
-        <strong style={{ fontSize: 14 }}>
-          {loadingPreview ? 'מחשב קהל...' : `${preview.count} נמענים`}
-        </strong>
-        {savedSegments.length > 0 && (
-          <AppSelect
-            className="input input-sm"
-            style={{ maxWidth: 220 }}
-            defaultValue=""
-            onChange={(e) => {
-              const seg = savedSegments.find((s) => s.id === e.target.value);
-              if (seg?.filters) onChange({ ...EMPTY_FILTERS, ...seg.filters });
-            }}
-          >
-            <option value="">טען קהל שמור...</option>
-            {savedSegments.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </AppSelect>
-        )}
-      </div>
+  const selectedCityNames = f.cities || [];
+  const selectedStatusNames = (f.statuses || []).map((key) => STATUSES[key]?.label || key);
+  const selectedGroupNames = (f.groupIds || []).map((id) => nameWithoutDay(groups.find((group) => group.id === id)?.name || id));
+  const selectedGenderNames = (f.genders || []).map((value) => GENDER_OPTIONS.find((option) => option.value === value)?.label || value);
+  const selectedListLabel = lists.find((list) => list.key === f.listKey)?.label;
+  const deliverySummary = [
+    f.marketingOptIn === true ? 'מאשרי דיוור' : f.marketingOptIn === false ? 'ללא אישור דיוור' : 'ללא סינון הסכמה',
+    f.onlyOpenWindow ? 'חלון 24 שעות פתוח' : null,
+  ].filter(Boolean).join(' · ');
+  const activeFilterCount = [
+    f.ageMin !== '' || f.ageMax !== '',
+    f.registered !== 'any',
+    !!f.listKey,
+    selectedCityNames.length > 0,
+    selectedStatusNames.length > 0,
+    selectedGroupNames.length > 0,
+    selectedGenderNames.length > 0,
+    (f.interests || []).length > 0,
+    f.marketingOptIn !== EMPTY_FILTERS.marketingOptIn || !!f.onlyOpenWindow,
+  ].filter(Boolean).length;
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-        <label style={{ fontSize: 12 }}>
-          גיל מ־
-          <input className="input input-sm" type="number" value={f.ageMin} onChange={(e) => set({ ageMin: e.target.value })} />
-        </label>
-        <label style={{ fontSize: 12 }}>
-          גיל עד
-          <input className="input input-sm" type="number" value={f.ageMax} onChange={(e) => set({ ageMax: e.target.value })} />
-        </label>
-        <label style={{ fontSize: 12 }}>
-          רשום לחוג
-          <AppSelect className="input input-sm" value={f.registered} onChange={(e) => set({ registered: e.target.value })}>
-            <option value="any">הכל</option>
-            <option value="yes">רשומים</option>
-            <option value="no">לא רשומים</option>
-          </AppSelect>
-        </label>
-        <label style={{ fontSize: 12 }}>
-          רשימת תפוצה
-          <AppSelect
-            className="input input-sm"
-            value={f.listKey || ''}
-            onChange={(e) => set({ listKey: e.target.value || '' })}
-            disabled={Array.isArray(f.groupIds) && f.groupIds.length > 0}
-            title={Array.isArray(f.groupIds) && f.groupIds.length > 0 ? 'כשמסמנים קבוצה — הסינון לפי רשימת תפוצה מבוטל' : undefined}
-          >
-            <option value="">ללא סינון רשימה</option>
-            {lists.map((l) => (
-              <option key={l.key} value={l.key}>{l.label}</option>
-            ))}
-          </AppSelect>
-          {Array.isArray(f.groupIds) && f.groupIds.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-              בוטלה זמנית — מסננים לפי קבוצה
-            </div>
+  const pickerTitles = {
+    age: ['טווח גילאים', 'הגדירו גיל מינימום, גיל מקסימום או את שניהם.'],
+    registered: ['מצב הרשמה לחוג', 'בחרו אם לכלול רשומים, לא רשומים או את כולם.'],
+    list: ['רשימת תפוצה', 'בחרו רשימה אחת או השאירו ללא סינון רשימה.'],
+    cities: ['מקום מגורים', 'אפשר לבחור כמה יישובים. החיפוש לא משנה את הבחירות שכבר סומנו.'],
+    statuses: ['סטטוס מתאמן', 'הסטטוסים מסודרים מלמעלה למטה לפי מסלול ההתקדמות.'],
+    groups: ['קבוצות', 'אפשר לבחור כמה קבוצות או לסמן יום שלם. בחירת קבוצה גוברת על רשימת תפוצה.'],
+    genders: ['מגדר', 'אפשר לבחור ערך אחד או יותר.'],
+    interests: ['תחומי עניין', 'בחרו את התחומים הרלוונטיים לקהל הדיוור.'],
+    delivery: ['זכאות לקבלת ההודעה', 'סננו לפי הסכמה לדיוור וחלון השיחה בוואטסאפ.'],
+    recipients: ['נמענים בתוצאה', 'תצוגה מקדימה של הקהל לפי הסינון הנוכחי.'],
+  };
+
+  const renderSearch = (placeholder) => (
+    <div className="input-icon-wrap segment-picker-search">
+      <Search className="input-icon" size={16} />
+      <input
+        className="input"
+        data-autofocus
+        value={pickerSearch}
+        onChange={(event) => setPickerSearch(event.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
+    </div>
+  );
+
+  const renderPickerContent = () => {
+    const draft = pickerDraft || cloneFilters(f);
+    const query = pickerSearch.trim().toLowerCase();
+
+    if (activePicker === 'age') {
+      return (
+        <div className="segment-picker-fields">
+          <label className="form-label">גיל מינימום
+            <input className="input" data-autofocus type="number" min="0" max="120" value={draft.ageMin} onChange={(event) => setDraft({ ageMin: event.target.value })} placeholder="ללא מינימום" />
+          </label>
+          <label className="form-label">גיל מקסימום
+            <input className="input" type="number" min="0" max="120" value={draft.ageMax} onChange={(event) => setDraft({ ageMax: event.target.value })} placeholder="ללא מקסימום" />
+          </label>
+          {draft.ageMin !== '' && draft.ageMax !== '' && Number(draft.ageMin) > Number(draft.ageMax) && (
+            <div className="alert alert-warning segment-picker-wide">גיל המינימום צריך להיות קטן או שווה לגיל המקסימום.</div>
           )}
-        </label>
-      </div>
+        </div>
+      );
+    }
 
-      <div>
-        <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>מקום מגורים</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {cities.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין ערים במערכת עדיין</span>}
-          {cities.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={`btn btn-xs ${(f.cities || []).includes(c) ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => toggleInArray('cities', c)}
-            >
-              {c}
-            </button>
+    if (activePicker === 'registered') {
+      return (
+        <div className="segment-picker-list">
+          {[
+            ['any', 'כל המתאמנים', 'ללא סינון לפי הרשמה לחוג'],
+            ['yes', 'רשומים לחוג', 'מתאמנים המשויכים לקבוצה פעילה'],
+            ['no', 'לא רשומים לחוג', 'לידים ומתאמנים ללא הרשמה פעילה'],
+          ].map(([value, label, description]) => (
+            <PickerOption key={value} selected={draft.registered === value} label={label} description={description} onClick={() => setDraft({ registered: value })} />
           ))}
         </div>
-      </div>
+      );
+    }
 
-      <div>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 7 }}>
-          <div style={{ fontSize: 12, color: 'var(--text-2)' }}>סטטוס</div>
-          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-            לפי סדר ההתקדמות · אפשר לבחור כמה
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {STATUS_PROGRESS_ORDER.filter((key) => STATUSES[key]).map((key) => {
-            const val = STATUSES[key];
-            const isSelected = (f.statuses || []).includes(key);
-            return (
-            <button
-              key={key}
-              type="button"
-              className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-ghost'}`}
-              style={{ justifyContent: 'flex-start', gap: 8, width: '100%', minHeight: 36 }}
-              onClick={() => toggleInArray('statuses', key)}
-              aria-pressed={isSelected}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: val.color, flexShrink: 0 }} />
-              {val.label || key}
+    if (activePicker === 'list') {
+      const groupsSelected = draft.groupIds?.length > 0;
+      return (
+        <div className="segment-picker-list">
+          {groupsSelected && <div className="alert alert-info">כבר נבחרו קבוצות, ולכן סינון לפי רשימת תפוצה מושבת. איפוס הקבוצות יאפשר לבחור רשימה.</div>}
+          <PickerOption selected={!draft.listKey} label="כל הרשימות" description="ללא סינון לפי רשימת תפוצה" onClick={() => setDraft({ listKey: '' })} />
+          {lists.map((list) => (
+            <PickerOption key={list.key} selected={draft.listKey === list.key} label={list.label} description={list.description} disabled={groupsSelected} onClick={() => setDraft({ listKey: list.key })} />
+          ))}
+          {onManageLists && (
+            <button type="button" className="btn btn-ghost btn-sm segment-picker-manage" onClick={() => { closePicker(); onManageLists(); }}>
+              <Pencil size={14} /> עריכת רשימות תפוצה
             </button>
-            );
-          })}
+          )}
         </div>
-      </div>
+      );
+    }
 
-      <div>
-        <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>קבוצה</div>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.45 }}>
-          כשמסמנים קבוצה — כל ההורים של הרשומים אליה נכללים, גם אם לא מנויים לרשימת התפוצה של החוגים.
+    if (activePicker === 'cities') {
+      const visibleCities = cities.filter((city) => city.toLowerCase().includes(query));
+      return (
+        <>
+          {renderSearch('חיפוש יישוב...')}
+          <div className="segment-picker-grid">
+            {visibleCities.map((city) => <PickerOption key={city} selected={draft.cities.includes(city)} label={city} onClick={() => toggleDraftArray('cities', city)} />)}
+          </div>
+          {!visibleCities.length && <div className="segment-picker-empty">לא נמצאו יישובים מתאימים.</div>}
+        </>
+      );
+    }
+
+    if (activePicker === 'statuses') {
+      return (
+        <div className="segment-picker-list">
+          {STATUS_PROGRESS_ORDER.filter((key) => STATUSES[key]).map((key) => (
+            <PickerOption key={key} selected={draft.statuses.includes(key)} label={STATUSES[key].label} color={STATUSES[key].color} onClick={() => toggleDraftArray('statuses', key)} />
+          ))}
         </div>
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'nowrap',
-            gap: 10,
-            paddingBottom: 4,
-            minWidth: 0,
-            maxWidth: '100%',
-            overflowX: 'auto',
-          }}
-        >
-          {groupsByDay.map((section) => {
-            const dayIds = section.groups.map((g) => g.id);
-            const selected = Array.isArray(f.groupIds) ? f.groupIds : [];
-            const allDaySelected = dayIds.length > 0 && dayIds.every((id) => selected.includes(id));
-            return (
-            <div
-              key={section.day}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                flex: '1 1 0',
-                minWidth: 110,
-                padding: 8,
-                borderRadius: 10,
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => toggleDayGroups(section.groups)}
-                title={allDaySelected ? 'בטל סימון כל הקבוצות של היום' : 'סמן את כל הקבוצות של היום'}
-                className={`btn btn-xs segment-day-btn ${allDaySelected ? 'btn-primary' : 'btn-ghost'}`}
-                style={{
-                  fontSize: 12,
-                  fontWeight: 800,
-                  width: '100%',
-                  marginBottom: 4,
-                  minHeight: 28,
-                  boxSizing: 'border-box',
-                  border: '1px solid var(--border)',
-                  background: allDaySelected ? undefined : 'rgba(255,255,255,0.06)',
-                  boxShadow: 'none',
-                  transform: 'none',
-                }}
-              >
-                יום {section.label}
-              </button>
-              {section.groups.map((g) => (
-                <button
-                  key={`${section.day}-${g.id}`}
-                  type="button"
-                  className={`btn btn-xs segment-group-btn ${(f.groupIds || []).includes(g.id) ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => toggleInArray('groupIds', g.id)}
-                  style={{
-                    width: '100%',
-                    whiteSpace: 'normal',
-                    lineHeight: 1.35,
-                    height: 'auto',
-                    minHeight: 28,
-                    boxSizing: 'border-box',
-                    boxShadow: 'none',
-                    transform: 'none',
-                  }}
-                  title={g.name}
-                >
-                  {nameWithoutDay(g.name)}
-                </button>
+      );
+    }
+
+    if (activePicker === 'groups') {
+      return (
+        <>
+          {renderSearch('חיפוש קבוצה...')}
+          <div className="segment-picker-days">
+            {groupsByDay.map((section) => {
+              const visibleGroups = section.groups.filter((group) => String(group.name || '').toLowerCase().includes(query));
+              if (!visibleGroups.length) return null;
+              const visibleIds = visibleGroups.map((group) => group.id);
+              const allSelected = visibleIds.every((id) => draft.groupIds.includes(id));
+              return (
+                <section key={section.day} className="segment-picker-day">
+                  <div className="segment-picker-day-head">
+                    <strong>יום {section.label}</strong>
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => toggleDraftDayGroups(visibleGroups)}>
+                      {allSelected ? 'ביטול סימון היום' : 'בחירת כל היום'}
+                    </button>
+                  </div>
+                  <div className="segment-picker-list">
+                    {visibleGroups.map((group) => (
+                      <PickerOption key={`${section.day}-${group.id}`} selected={draft.groupIds.includes(group.id)} label={nameWithoutDay(group.name)} description={group.time && !String(group.name || '').includes(group.time) ? group.time : ''} onClick={() => toggleDraftArray('groupIds', group.id)} />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </>
+      );
+    }
+
+    if (activePicker === 'genders') {
+      return (
+        <div className="segment-picker-list">
+          {GENDER_OPTIONS.map((option) => <PickerOption key={option.label} selected={draft.genders.includes(option.value)} label={option.label} onClick={() => toggleDraftArray('genders', option.value)} />)}
+        </div>
+      );
+    }
+
+    if (activePicker === 'interests') {
+      const visibleInterests = interestOptions.filter((interest) => interest.toLowerCase().includes(query));
+      return (
+        <>
+          {renderSearch('חיפוש תחום עניין...')}
+          <div className="segment-picker-grid">
+            {visibleInterests.map((interest) => <PickerOption key={interest} selected={draft.interests.includes(interest)} label={interest} onClick={() => toggleDraftArray('interests', interest)} />)}
+          </div>
+          {!visibleInterests.length && <div className="segment-picker-empty">לא נמצאו תחומי עניין מתאימים.</div>}
+        </>
+      );
+    }
+
+    if (activePicker === 'delivery') {
+      return (
+        <div className="segment-picker-stack">
+          <div>
+            <div className="segment-picker-section-title">אישור דיוור</div>
+            <div className="segment-picker-list">
+              {[
+                [true, 'רק מי שאישר דיוור', 'ברירת המחדל הבטוחה לדיוור'],
+                [null, 'ללא סינון לפי אישור', 'כולל מי שלא הגדירו העדפה'],
+                [false, 'רק מי שלא אישר דיוור', 'לשימוש תפעולי ובדיקה בלבד'],
+              ].map(([value, label, description]) => (
+                <PickerOption key={String(value)} selected={draft.marketingOptIn === value} label={label} description={description} onClick={() => setDraft({ marketingOptIn: value })} />
               ))}
             </div>
-            );
-          })}
+          </div>
+          <div>
+            <div className="segment-picker-section-title">חלון וואטסאפ</div>
+            <PickerOption selected={!!draft.onlyOpenWindow} label="רק חלון 24 שעות פתוח" description="נדרש לשליחת הודעה חופשית שאינה תבנית" onClick={() => setDraft({ onlyOpenWindow: !draft.onlyOpenWindow })} />
+          </div>
         </div>
-      </div>
+      );
+    }
 
-      <div>
-        <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>תחום עניין</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {interestOptions.map((i) => (
-            <button
-              key={i}
-              type="button"
-              className={`btn btn-xs ${(f.interests || []).includes(i) ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => toggleInArray('interests', i)}
-            >
-              {i}
+    if (activePicker === 'recipients') {
+      const matchingRecipients = (preview.recipients || []).filter((recipient) =>
+        [recipient.name, recipient.phone, recipient.city, recipient.studentName]
+          .some((value) => String(value || '').toLowerCase().includes(query))
+      );
+      return (
+        <>
+          {renderSearch('חיפוש שם, טלפון או יישוב...')}
+          <div className="segment-recipient-list">
+            {matchingRecipients.slice(0, 200).map((recipient) => (
+              <div className="segment-recipient-row" key={recipient.id}>
+                <div><strong>{recipient.name}</strong><small>{[recipient.studentName, recipient.city].filter(Boolean).join(' · ')}</small></div>
+                <div className="segment-recipient-contact"><span dir="ltr">{recipient.phone}</span><small className={recipient.windowOpen ? 'is-open' : ''}>{recipient.windowOpen ? 'חלון פתוח' : 'חלון סגור'}</small></div>
+              </div>
+            ))}
+          </div>
+          {!matchingRecipients.length && <div className="segment-picker-empty">לא נמצאו נמענים מתאימים.</div>}
+          {matchingRecipients.length > 200 && <div className="segment-picker-empty">מוצגים 200 מתוך {matchingRecipients.length} נמענים.</div>}
+        </>
+      );
+    }
+
+    return null;
+  };
+
+  const registeredSummary = f.registered === 'yes' ? 'רשומים לחוג' : f.registered === 'no' ? 'לא רשומים לחוג' : 'כולם';
+  const ageSummary = f.ageMin !== '' && f.ageMax !== ''
+    ? `גיל ${f.ageMin}–${f.ageMax}`
+    : f.ageMin !== '' ? `מגיל ${f.ageMin}` : f.ageMax !== '' ? `עד גיל ${f.ageMax}` : 'כל הגילים';
+  const invalidDraftAge = activePicker === 'age'
+    && pickerDraft?.ageMin !== ''
+    && pickerDraft?.ageMax !== ''
+    && Number(pickerDraft.ageMin) > Number(pickerDraft.ageMax);
+
+  return (
+    <div className="segment-builder">
+      <div className="segment-audience-summary">
+        <div className="segment-audience-summary-main">
+          <span className="segment-audience-icon"><Users size={20} /></span>
+          <div>
+            <strong>{loadingPreview ? 'מחשב קהל...' : `${preview.count} נמענים`}</strong>
+            <small>{activeFilterCount ? `${activeFilterCount} מסננים פעילים` : 'ללא סינון נוסף'}</small>
+          </div>
+        </div>
+        <div className="segment-audience-actions">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => openPicker('recipients')} disabled={loadingPreview || preview.count === 0}>
+            <Eye size={15} /> צפייה בנמענים
+          </button>
+          {activeFilterCount > 0 && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={resetAll}>
+              <RotateCcw size={14} /> איפוס מסננים
             </button>
-          ))}
+          )}
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={f.marketingOptIn === true}
-            onChange={(e) => set({ marketingOptIn: e.target.checked ? true : null })}
-          />
-          רק מי שאישר דיוור
-        </label>
-        <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={!!f.onlyOpenWindow}
-            onChange={(e) => set({ onlyOpenWindow: e.target.checked })}
-          />
-          רק חלון 24ש פתוח
-        </label>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <input
-          className="input input-sm"
-          placeholder="שם לקהל שמור"
-          value={segmentName}
-          onChange={(e) => setSegmentName(e.target.value)}
-        />
-        <button type="button" className="btn btn-ghost btn-sm" onClick={saveCurrent}>
-          <Save size={13} /> שמור קהל
-        </button>
-      </div>
-
-      {preview.recipients?.length > 0 && (
-        <div style={{ fontSize: 12, color: 'var(--text-2)', maxHeight: 120, overflowY: 'auto' }}>
-          {preview.recipients.slice(0, 30).map((r) => (
-            <div key={r.id}>{r.name} · {r.phone} {r.city ? `· ${r.city}` : ''} {r.windowOpen ? '· חלון פתוח' : '· חלון סגור'}</div>
-          ))}
-          {preview.recipients.length > 30 && <div>...ועוד {preview.recipients.length - 30}</div>}
+      {savedSegments.length > 0 && (
+        <div className="segment-saved-row">
+          <span>קהל שמור</span>
+          <AppSelect
+            className="input input-sm"
+            defaultValue=""
+            onChange={(event) => {
+              const segment = savedSegments.find((item) => item.id === event.target.value);
+              if (segment?.filters) onChange(cloneFilters(segment.filters));
+            }}
+          >
+            <option value="">בחירת קהל שמור...</option>
+            {savedSegments.map((segment) => <option key={segment.id} value={segment.id}>{segment.name}</option>)}
+          </AppSelect>
         </div>
       )}
 
-      {!loadingPreview && preview.count === 0 && (
-        <div style={{ fontSize: 12, color: '#FBBF24', lineHeight: 1.45 }}>
-          אין נמענים לפי הסינון הנוכחי.
-          בדקו קבוצה/סטטוס, עיר, ואישור דיוור.
-          {!(Array.isArray(f.groupIds) && f.groupIds.length) && (
-            <>
-              {' '}
-              אם נבחרה רשימת תפוצה — ייתכן שההורה לא מנוי אליה.
-            </>
-          )}
+      <div className="segment-filter-heading">
+        <div>
+          <SlidersHorizontal size={17} />
+          <strong>בחירת קהל</strong>
         </div>
+        <span>פתחו מסנן ובחרו את האפשרויות הרצויות</span>
+      </div>
+
+      <div className="segment-filter-grid">
+        <FilterCard icon={CalendarDays} title="גיל" summary={ageSummary} active={f.ageMin !== '' || f.ageMax !== ''} onClick={() => openPicker('age')} />
+        <FilterCard icon={UserCheck} title="מצב הרשמה" summary={registeredSummary} active={f.registered !== 'any'} onClick={() => openPicker('registered')} />
+        <FilterCard icon={Hash} title="רשימת תפוצה" summary={f.groupIds?.length ? 'מושבת בעת סינון לפי קבוצה' : (selectedListLabel || 'כל הרשימות')} active={!!f.listKey} onClick={() => openPicker('list')} />
+        <FilterCard icon={MapPin} title="מקום מגורים" summary={summaryList(selectedCityNames, 'כל היישובים')} count={selectedCityNames.length} active={selectedCityNames.length > 0} onClick={() => openPicker('cities')} />
+        <FilterCard icon={Activity} title="סטטוס" summary={summaryList(selectedStatusNames, 'כל הסטטוסים')} count={selectedStatusNames.length} active={selectedStatusNames.length > 0} onClick={() => openPicker('statuses')} />
+        <FilterCard icon={UsersRound} title="קבוצות" summary={summaryList(selectedGroupNames, 'כל הקבוצות')} count={selectedGroupNames.length} active={selectedGroupNames.length > 0} onClick={() => openPicker('groups')} />
+        <FilterCard icon={UserRound} title="מגדר" summary={summaryList(selectedGenderNames, 'כולם')} count={selectedGenderNames.length} active={selectedGenderNames.length > 0} onClick={() => openPicker('genders')} />
+        <FilterCard icon={Tag} title="תחום עניין" summary={summaryList(f.interests || [], 'כל תחומי העניין')} count={(f.interests || []).length} active={(f.interests || []).length > 0} onClick={() => openPicker('interests')} />
+        <FilterCard icon={MessageSquareText} title="זכאות לשליחה" summary={deliverySummary} active={f.marketingOptIn !== EMPTY_FILTERS.marketingOptIn || !!f.onlyOpenWindow} onClick={() => openPicker('delivery')} />
+      </div>
+
+      <div className="segment-save-panel">
+        <div>
+          <strong>שמירת הקהל לשימוש חוזר</strong>
+          <small>השמירה כוללת את כל המסננים שבחרתם כרגע.</small>
+        </div>
+        <div className="segment-save-controls">
+          <input className="input input-sm" placeholder="שם לקהל השמור" value={segmentName} onChange={(event) => setSegmentName(event.target.value)} />
+          <button type="button" className="btn btn-ghost btn-sm" onClick={saveCurrent}><Save size={14} /> שמירה</button>
+        </div>
+      </div>
+
+      {!loadingPreview && preview.count === 0 && (
+        <div className="alert alert-warning segment-empty-audience">
+          <strong>לא נמצאו נמענים לפי הסינון הנוכחי.</strong>
+          <span>פתחו את כרטיסי הסינון ועדכנו קבוצה, סטטוס, יישוב או זכאות לשליחה.</span>
+        </div>
+      )}
+
+      {activePicker && (
+        <FilterDialog
+          title={pickerTitles[activePicker]?.[0] || 'בחירת מסנן'}
+          subtitle={pickerTitles[activePicker]?.[1]}
+          onClose={closePicker}
+          onApply={activePicker === 'recipients' ? closePicker : applyPicker}
+          onReset={activePicker === 'recipients' ? null : resetPicker}
+          applyLabel={activePicker === 'recipients' ? 'סגירה' : 'החלת הסינון'}
+          applyDisabled={invalidDraftAge}
+          showCancel={activePicker !== 'recipients'}
+        >
+          {renderPickerContent()}
+        </FilterDialog>
       )}
     </div>
   );
