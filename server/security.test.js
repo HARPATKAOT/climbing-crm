@@ -2,11 +2,33 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   allowedCorsOrigins,
+  issueEmployeeOnboardInvite,
   issueOAuthState,
   requireCronSecret,
   safeIcountDocumentUrl,
+  securityLogRef,
+  verifyEmployeeOnboardInvite,
   verifyOAuthState,
 } from './security.js';
+
+test('security log references are stable and do not reveal their input', () => {
+  const reference = securityLogRef('+972501234567');
+  assert.equal(reference, securityLogRef('+972501234567'));
+  assert.equal(reference.includes('1234567'), false);
+  assert.equal(reference.length, 12);
+});
+
+test('employee onboarding invites are signed, expiring and purpose-bound', () => {
+  const secret = 'employee-test-secret';
+  const now = 1_800_000_000_000;
+  const invite = issueEmployeeOnboardInvite({ secret, now, nonce: 'e'.repeat(24) });
+  const verified = verifyEmployeeOnboardInvite(invite.token, { secret, now });
+  assert.equal(typeof verified?.inviteId, 'string');
+  assert.equal(verified?.inviteId.length, 64);
+  assert.equal(verified?.expiresAt, invite.expiresAt);
+  assert.equal(verifyEmployeeOnboardInvite(`${invite.token}x`, { secret, now }), null);
+  assert.equal(verifyEmployeeOnboardInvite(invite.token, { secret, now: invite.expiresAt + 1 }), null);
+});
 
 test('OAuth state is provider-bound, expiring and tamper evident', () => {
   const secret = 'test-secret';

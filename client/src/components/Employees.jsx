@@ -2416,18 +2416,41 @@ function EmployeeOnboardFieldsModal({ onClose }) {
 }
 
 // ─── Tab: Employee Onboarding Link ─────────────────────────────────────────────
-// One static link for every new hire (like /onboard for members) — lives in
-// its own tab so it doesn't compete for space with the employee table.
+// A fresh, one-time invite for each new hire. It lives in its own tab so it
+// does not compete for space with the employee table.
 function EmployeeOnboardingLinkPanel() {
   const [copied, setCopied] = useState(false);
+  const [inviteToken, setInviteToken] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(true);
+  const [inviteError, setInviteError] = useState('');
   const [showFieldsModal, setShowFieldsModal] = useState(false);
-  const [savingReply, setSavingReply] = useState(false);
-  const [replyMsg, setReplyMsg] = useState('');
   // טופס 101 נחתם באתר חיצוני; הקישור מוצג לעובד במסך הסיום של הטופס.
   const [form101Url, setForm101Url] = useState('');
   const [form101Msg, setForm101Msg] = useState('');
   const [savingForm101, setSavingForm101] = useState(false);
-  const link = `${window.location.origin}/staff-onboard`;
+  const link = inviteToken
+    ? `${window.location.origin}/staff-onboard#${encodeURIComponent(inviteToken)}`
+    : '';
+
+  const createInvite = async () => {
+    setInviteLoading(true);
+    setInviteError('');
+    try {
+      const response = await fetch('/api/employees/onboard-invite', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.token) throw new Error(data.error || 'יצירת הקישור נכשלה');
+      setInviteToken(data.token);
+    } catch (error) {
+      setInviteToken('');
+      setInviteError(error.message || 'יצירת הקישור נכשלה');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    createInvite();
+  }, []);
 
   useEffect(() => {
     fetch('/api/settings/employee-onboard-form101')
@@ -2458,6 +2481,7 @@ function EmployeeOnboardingLinkPanel() {
   };
 
   const copyLink = async () => {
+    if (!link) return;
     try {
       await navigator.clipboard.writeText(link);
       setCopied(true);
@@ -2467,40 +2491,11 @@ function EmployeeOnboardingLinkPanel() {
     }
   };
 
-  // Name is the marker: a second click updates the same saved reply instead
-  // of piling up duplicates in the "הודעות שמורות" list.
-  const REPLY_NAME = 'קישור לקליטת עובד חדש';
-  const createOrUpdateSavedReply = async () => {
-    setSavingReply(true);
-    setReplyMsg('');
-    try {
-      const listRes = await fetch('/api/saved-replies');
-      const list = listRes.ok ? await listRes.json() : [];
-      const existing = Array.isArray(list) ? list.find((r) => r.name === REPLY_NAME) : null;
-      const body = `היי! מוזמנ/ת למלא פרטים לקליטה כעובד/ת חדש/ה כאן:\n${link}`;
-      const res = await fetch(
-        existing ? `/api/saved-replies/${existing.id}` : '/api/saved-replies',
-        {
-          method: existing ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: REPLY_NAME, body }),
-        }
-      );
-      if (!res.ok) throw new Error();
-      setReplyMsg(existing ? 'ההודעה השמורה עודכנה' : 'ההודעה השמורה נוצרה — זמינה תחת "הודעות שמורות"');
-    } catch {
-      setReplyMsg('שמירת ההודעה נכשלה — נסו שוב');
-    } finally {
-      setSavingReply(false);
-      setTimeout(() => setReplyMsg(''), 5000);
-    }
-  };
-
   return (
     <div className="card card-p" style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          שלחו לעובד/ת חדש/ה למילוי פרטים עצמאי — הרשומה נוצרת כלא-פעילה עד לאישור צוות.
+          שלחו לעובד/ת חדש/ה קישור אישי. הקישור חד־פעמי ותקף ל־7 ימים; הרשומה נוצרת כלא־פעילה עד לאישור צוות.
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowFieldsModal(true)}>
           <Settings2 size={13} /> עריכת שדות הטופס
@@ -2510,18 +2505,18 @@ function EmployeeOnboardingLinkPanel() {
         <input
           className="input input-sm"
           readOnly
-          value={link}
+          value={inviteLoading ? 'יוצר קישור מאובטח…' : link}
           style={{ flex: '1 1 260px', fontFamily: 'monospace' }}
           onFocus={(e) => e.target.select()}
         />
-        <button type="button" className="btn btn-ghost btn-sm" onClick={copyLink}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={!link} onClick={copyLink}>
           <Copy size={13} /> {copied ? 'הועתק!' : 'העתקה'}
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={savingReply} onClick={createOrUpdateSavedReply}>
-          <MessageCircle size={13} /> {savingReply ? 'שומר...' : 'הודעה שמורה עם הקישור'}
+        <button type="button" className="btn btn-ghost btn-sm" disabled={inviteLoading} onClick={createInvite}>
+          <RefreshCw size={13} /> קישור חדש
         </button>
       </div>
-      {replyMsg && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{replyMsg}</div>}
+      {inviteError && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{inviteError}</div>}
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 2 }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>

@@ -690,7 +690,10 @@ export async function submitTemplateToMeta(id) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    console.error('Meta template submit failed:', JSON.stringify({ payload, data }, null, 2));
+    console.error('Meta template submit failed:', JSON.stringify({
+      status: res.status,
+      error: data?.error?.message || data?.error || 'unknown',
+    }));
     throw new Error(formatMetaError(data));
   }
 

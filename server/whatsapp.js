@@ -1,4 +1,5 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
+import { securityLogRef } from './security.js';
 import { supa } from './supa.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
@@ -645,7 +646,7 @@ async function callMetaWhatsAppAPI(phone, payload) {
   const token = String(process.env.META_WA_ACCESS_TOKEN || settings.metaWaAccessToken || '').trim();
 
   if (!phoneId || phoneId.includes('YOUR_PHONE_NUMBER_ID') || !token || token.includes('YOUR_META_WA_ACCESS_TOKEN')) {
-    console.log(`[WhatsApp Mock Mode] Sending to ${phone}:`, JSON.stringify(payload, null, 2));
+    console.log(`[WhatsApp Mock Mode] Sending to contact=${securityLogRef(phone)} type=${payload?.type || 'message'}`);
     return { mock: true, status: 'sent', messageId: `mock_wa_${Date.now()}` };
   }
 
@@ -674,17 +675,16 @@ async function callMetaWhatsAppAPI(phone, payload) {
       const metaCode = data.error?.code;
       const metaType = data.error?.type;
       console.error(
-        `❌ Meta WhatsApp API failed for ${phone}:`,
+        `❌ Meta WhatsApp API failed for contact=${securityLogRef(phone)}:`,
         metaMessage,
-        `| code=${metaCode || '?'} type=${metaType || '?'}`,
-        `| tokenLen=${token.length} phoneId=${phoneId} token=${token.slice(0, 6)}…${token.slice(-4)}`
+        `| code=${metaCode || '?'} type=${metaType || '?'}`
       );
       throw new Error(metaMessage);
     }
     return { success: true, messageId: data.messages?.[0]?.id };
   } catch (error) {
     if (!String(error.message || '').includes('Authentication Error') && !String(error.message || '').includes('Meta')) {
-      console.error(`❌ Meta WhatsApp API failed for ${phone}:`, error.message);
+      console.error(`❌ Meta WhatsApp API failed for contact=${securityLogRef(phone)}:`, error.message);
     }
     throw error;
   }

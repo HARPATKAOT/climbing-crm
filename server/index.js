@@ -131,11 +131,14 @@ import {
 import { apiAuth, requireOwner } from './auth.js';
 import {
   allowedCorsOrigins,
+  issueEmployeeOnboardInvite,
   issueOAuthState,
   requireCronSecret,
   safeIcountDocumentUrl,
   secureCompare,
+  securityLogRef,
   securityHeaders,
+  verifyEmployeeOnboardInvite,
   verifyOAuthState,
 } from './security.js';
 import { financeRouter } from './financeRoutes.js';
@@ -519,6 +522,8 @@ import {
   saveForm101Url,
 } from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
+import { validateUploadedDocument } from './uploadedDocument.js';
+import { unsupportedStudentEditFields } from './studentUpdateSecurity.js';
 import {
   applyBusinessBrand,
   isOptedOut,
@@ -1536,6 +1541,9 @@ app.put('/api/students/:id/status', async (req, res) => {
   const { id } = req.params;
   const requested = String(req.body?.status || '').trim();
   const status = requested === 'health_signed' ? REGISTRATION_STATUS.DETAILS_COMPLETED : requested;
+  if (!Object.values(REGISTRATION_STATUS).includes(status)) {
+    return res.status(400).json({ error: 'סטטוס המתאמן אינו תקין' });
+  }
   const current = db.getOne('students', id);
   if (!current) return res.status(404).json({ error: 'Student not found' });
   if (status === REGISTRATION_STATUS.REGISTERED) {
@@ -1592,7 +1600,7 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
   }
 
   const leadSource = source || defaultSource;
-  console.log(`📥 Lead intake (${leadSource}): Parent: ${parentName}, Phone: ${phone}, Children: ${childList.join(', ')}`);
+  console.log(`📥 Lead intake (${leadSource}): contact=${securityLogRef(phone)} children=${childList.length}`);
 
   const { parent, students: createdStudents } = await db.createLeadFromForm({
     parentName,
@@ -1642,7 +1650,30 @@ app.post('/api/leads', async (req, res) => {
 });
 
 // ─── Employee onboarding link (public) ────────────────────────────────────
-app.get('/api/public/employee-onboard-fields', publicFormRateLimit, async (_req, res) => {
+app.post('/api/employees/onboard-invite', (req, res) => {
+  try {
+    res.status(201).json(issueEmployeeOnboardInvite());
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Employee onboarding signing is not configured' });
+  }
+});
+
+function requireEmployeeOnboardInvite(req, res) {
+  try {
+    const invite = verifyEmployeeOnboardInvite(req.get('x-employee-onboard-token'));
+    if (!invite) {
+      res.status(403).json({ error: 'קישור הקליטה אינו תקף או שפג תוקפו' });
+      return null;
+    }
+    return invite;
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Employee onboarding signing is not configured' });
+    return null;
+  }
+}
+
+app.get('/api/public/employee-onboard-fields', publicFormRateLimit, async (req, res) => {
+  if (!requireEmployeeOnboardInvite(req, res)) return;
   try {
     const config = await getEmployeeOnboardConfig();
     res.json({
@@ -1662,6 +1693,11 @@ app.get('/api/public/employee-onboard-fields', publicFormRateLimit, async (_req,
 
 app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) => {
   try {
+    const invite = requireEmployeeOnboardInvite(req, res);
+    if (!invite) return;
+    if ((db.get('employees') || []).some((employee) => employee.onboard_invite_id === invite.inviteId)) {
+      return res.status(409).json({ error: 'קישור הקליטה כבר נוצל' });
+    }
     const config = await getEmployeeOnboardConfig();
     const { employee, error } = buildEmployeeFromSubmission(req.body?.answers, config);
     if (error) return res.status(400).json({ error });
@@ -1669,11 +1705,14 @@ app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) =
     // תמונות של תעודות מטלפון חורגות בקלות ממגבלת גוף הבקשה אם שולחים הכול יחד.
     employee.onboard_upload_token = crypto.randomUUID();
     employee.onboard_upload_expires = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    employee.onboard_invite_id = invite.inviteId;
 
     const created = db.insert('employees', employee);
     const durable = await persistCore('employees', created);
     if (!durable.ok) {
       console.error('employee onboarding durable write failed:', durable.error);
+      db.delete('employees', created.id);
+      return res.status(503).json({ error: 'שמירת הפרטים נכשלה — נסו שוב' });
     }
     res.status(201).json({ success: true, uploadToken: created.onboard_upload_token });
   } catch (error) {
@@ -2099,7 +2138,7 @@ app.put('/api/whatsapp/capabilities', requireOwner, async (req, res) => {
   try {
     // saveSettings merges, so an untouched switch keeps its value.
     const saved = db.saveSettings({ ...db.getSettings(), ...patch });
-    console.log(`🤖 Bot capabilities updated by ${req.crmUser?.email || 'unknown'}:`, JSON.stringify(patch));
+    console.log(`🤖 Bot capabilities updated by actor=${securityLogRef(req.crmUser?.id || req.crmUser?.email)}`);
     res.json({ capabilities: capabilityState(saved) });
   } catch (error) {
     console.error('capabilities update failed:', error.message);
@@ -2112,7 +2151,7 @@ app.post('/api/whatsapp/bot-enabled', async (req, res) => {
   const enabled = !!req.body?.enabled;
   try {
     const settings = await setBotEnabledDurable(enabled);
-    console.log(`🤖 Bot auto-reply ${enabled ? 'enabled' : 'disabled'} by ${req.crmUser?.email || 'unknown'}`);
+    console.log(`🤖 Bot auto-reply ${enabled ? 'enabled' : 'disabled'} by actor=${securityLogRef(req.crmUser?.id || req.crmUser?.email)}`);
     res.json({
       aiResponderEnabled: !!settings.aiResponderEnabled,
       message: enabled ? 'הבוט הופעל' : 'הבוט כובה',
@@ -2711,7 +2750,7 @@ app.post('/api/whatsapp/broadcast', async (req, res) => {
       }
       successCount++;
     } catch (err) {
-      console.error(`Failed to send broadcast to ${parent.phone}:`, err.message);
+      console.error(`Failed to send broadcast to contact=${securityLogRef(parent.phone)}:`, err.message);
     }
   }
 
@@ -3027,7 +3066,7 @@ async function processWhatsAppWebhookChange(change = {}) {
       const text = whatsappConnectService.extractMessageText(message);
       if (!phone) continue;
       if (!text && !message.type) continue;
-      console.log(`💬 Processing WhatsApp message from ${phone}: "${text}"`);
+      console.log(`💬 Processing WhatsApp message: contact=${securityLogRef(phone)} type=${message.type || 'text'}`);
       const leadResult = await whatsappService.handleIncomingMessage(phone, text || `[${message.type || 'media'}]`, false, {
         messageId: message.id,
         type: message.type,
@@ -3039,7 +3078,7 @@ async function processWhatsAppWebhookChange(change = {}) {
       }
       if (leadResult?.parent) {
         console.log(
-          `🎉 WhatsApp lead ${leadResult.isNew ? 'created' : 'updated'}: parent=${leadResult.parent.id} phone=${phone}${leadResult.student ? ` student=${leadResult.student.id}` : ' (contact only)'}`
+          `🎉 WhatsApp lead ${leadResult.isNew ? 'created' : 'updated'}: parent=${leadResult.parent.id} contact=${securityLogRef(phone)}${leadResult.student ? ` student=${leadResult.student.id}` : ' (contact only)'}`
         );
       }
     }
@@ -3051,7 +3090,7 @@ async function processWhatsAppWebhookChange(change = {}) {
       if (applyWhatsAppEditOrRevoke(echo)) continue;
       const phone = echo.to;
       const text = whatsappConnectService.extractMessageText(echo);
-      console.log(`📱 Phone echo to ${phone}: "${text}"`);
+      console.log(`📱 Phone echo: contact=${securityLogRef(phone)} type=${echo.type || 'text'}`);
       await whatsappService.handlePhoneEcho({
         phone,
         text,
@@ -3108,7 +3147,7 @@ async function processWhatsAppWebhookChange(change = {}) {
   }
 
   if (field === 'account_update') {
-    console.log('ℹ️ WhatsApp account_update webhook:', JSON.stringify(value));
+    console.log('ℹ️ WhatsApp account_update webhook received');
   }
 
   // Template review result (APPROVED / REJECTED / …)
@@ -3497,7 +3536,7 @@ app.get('/api/ai/assistant-settings', (req, res) => {
 app.put('/api/ai/assistant-settings', async (req, res) => {
   try {
     const saved = await saveAssistantSettings({ db, persist: persistCore, patch: req.body || {} });
-    console.log(`🧠 AI assistant settings updated by ${req.crmUser?.email || 'unknown'}`);
+    console.log(`🧠 AI assistant settings updated by actor=${securityLogRef(req.crmUser?.id || req.crmUser?.email)}`);
     res.json(saved);
   } catch (err) {
     if (!err.status) console.error('save assistant settings error:', err.message);
@@ -4056,6 +4095,21 @@ app.put('/api/students/:id', async (req, res) => {
   const hasAdd = Object.prototype.hasOwnProperty.call(body, 'addGroupId');
   const hasRemove = Object.prototype.hasOwnProperty.call(body, 'removeGroupId');
   const hasGroupId = Object.prototype.hasOwnProperty.call(body, 'groupId');
+  const hasMembershipUpdate = hasAdd || hasRemove || hasGroupIds || hasGroupId;
+
+  if (req.crmUser?.role === 'staff') {
+    if (hasMembershipUpdate && !accessAtLeast(req.crmUser, 'classes', 'edit')) {
+      return res.status(403).json({ error: 'נדרשת הרשאת עריכת חוגים לשינוי שיוך לקבוצה' });
+    }
+    if (Object.keys(rest).length && !accessAtLeast(req.crmUser, 'customers', 'edit')) {
+      return res.status(403).json({ error: 'נדרשת הרשאת עריכת לקוחות לשינוי פרטי מתאמן' });
+    }
+  }
+
+  const unsupportedFields = unsupportedStudentEditFields(rest);
+  if (unsupportedFields.length) {
+    return res.status(400).json({ error: 'הבקשה כוללת שדות מתאמן שאינם ניתנים לעריכה' });
+  }
 
   // Strip membership fields from a plain field update; they are handled below.
   const fieldUpdates = { ...rest };
@@ -12699,24 +12753,13 @@ async function storeEmployeeDocument(employeeId, { docType, fileBase64, fileName
   const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
   if (!emp) return { status: 404, error: 'העובד לא נמצא' };
   if (!isEmployeeDocType(docType)) return { status: 400, error: 'סוג מסמך לא תקין' };
-  if (!fileBase64 || typeof fileBase64 !== 'string') return { status: 400, error: 'חסר קובץ' };
-
-  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
-  let buffer;
-  try {
-    buffer = Buffer.from(raw, 'base64');
-  } catch {
-    return { status: 400, error: 'קובץ לא תקין' };
-  }
-  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    return { status: 400, error: 'גודל הקובץ לא תקין' };
-  }
-
-  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
-  const safeName = String(fileName || `${docType}.${extFromMime(safeMime, fileName)}`)
+  const validated = validateUploadedDocument(fileBase64);
+  if (validated.error) return { status: 400, error: validated.error };
+  const { buffer, mimeType: safeMime, ext } = validated;
+  const baseName = String(fileName || docType).replace(/\.[^.]+$/, '');
+  const safeName = `${baseName}.${ext}`
     .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
     .slice(0, 120);
-  const ext = extFromMime(safeMime, safeName);
   const storagePath = `${emp.id}/${docType}_${Date.now()}.${ext}`;
 
   const prev = emp.documents?.[docType];
@@ -13615,20 +13658,16 @@ async function savePayrollDocument(req, employee, source) {
   if (cleanPeriod && !/^\d{4}-(0[1-9]|1[0-2])$/.test(cleanPeriod)) {
     throw Object.assign(new Error('תקופת המסמך חייבת להיות בפורמט YYYY-MM'), { statusCode: 400 });
   }
-  if (!fileBase64 || typeof fileBase64 !== 'string') {
-    throw Object.assign(new Error('חסר קובץ'), { statusCode: 400 });
+  const validated = validateUploadedDocument(fileBase64);
+  if (validated.error) {
+    throw Object.assign(new Error(validated.error), { statusCode: 400 });
   }
-  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
-  const buffer = Buffer.from(raw, 'base64');
-  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    throw Object.assign(new Error('גודל הקובץ אינו תקין'), { statusCode: 400 });
-  }
-  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
-  const safeName = String(fileName || `${cleanType}.${extFromMime(safeMime, fileName)}`)
+  const { buffer, mimeType: safeMime, ext: extension } = validated;
+  const baseName = String(fileName || cleanType).replace(/\.[^.]+$/, '');
+  const safeName = `${baseName}.${extension}`
     .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
     .slice(0, 120);
   const id = `paydoc-${crypto.randomUUID()}`;
-  const extension = extFromMime(safeMime, safeName);
   const storagePath = `${employee.id}/payroll/${cleanPeriod || 'general'}/${id}.${extension}`;
   const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
   if (!uploaded.ok) throw new Error(uploaded.error || 'שמירת הקובץ נכשלה');
@@ -13985,17 +14024,14 @@ app.post('/api/company-payments/:id/document', async (req, res) => {
   const payment = db.getOne('company_payments', req.params.id);
   if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
   const { fileBase64, fileName, mimeType } = req.body || {};
-  if (!fileBase64 || typeof fileBase64 !== 'string') return res.status(400).json({ error: 'חסר קובץ' });
-  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
-  const buffer = Buffer.from(raw, 'base64');
-  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'גודל הקובץ אינו תקין' });
-  }
-  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
-  const safeName = String(fileName || `${payment.type}.${extFromMime(safeMime, fileName)}`)
+  const validated = validateUploadedDocument(fileBase64);
+  if (validated.error) return res.status(400).json({ error: validated.error });
+  const { buffer, mimeType: safeMime, ext } = validated;
+  const baseName = String(fileName || payment.type).replace(/\.[^.]+$/, '');
+  const safeName = `${baseName}.${ext}`
     .replace(/[^\w֐-׿.\-]+/g, '_')
     .slice(0, 120);
-  const storagePath = `company/${payment.type}/${payment.period}/${payment.id}.${extFromMime(safeMime, safeName)}`;
+  const storagePath = `company/${payment.type}/${payment.period}/${payment.id}.${ext}`;
   try {
     if (payment.document?.storage_path) await supa.removeEmployeeDocument(payment.document.storage_path);
     const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
@@ -17160,7 +17196,7 @@ app.post('/api/pos/documents-link', async (req, res) => {
       }
     }
 
-    console.log(`📝 [POS] documents link ${token} for ${names} total=${total}`);
+    console.log(`📝 [POS] documents link created: id=${link.id} participants=${gaps.length} total=${total}`);
     res.status(201).json({
       link: posCheckoutLinkRow(link, req),
       pageUrl,
@@ -17459,7 +17495,7 @@ app.delete('/api/form-templates/:id', (req, res) => {
 });
 
 // Public: load template by slug (or "default")
-app.get('/api/public/form-templates/:slug', (req, res) => {
+app.get('/api/public/form-templates/:slug', publicFormRateLimit, (req, res) => {
   const slugParam = req.params.slug;
   const template = slugParam === 'default'
     ? findDefaultFormTemplate()
@@ -18440,7 +18476,7 @@ app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
       { buttonUrlParams: [issued.code], source: 'otp' }
     );
     if (result && result.error) {
-      console.error('otp send failed:', JSON.stringify(result.error).slice(0, 300));
+      console.error(`otp send failed for contact=${securityLogRef(phone)}`);
       if (localTestOtpEnabled) {
         return completeLocalTestOtp(phone, issued, res, 'WhatsApp provider rejected the test message');
       }
@@ -19045,16 +19081,11 @@ async function storeHealthDeclarationPdf(req, res, { publicUpload = true } = {})
     return res.json({ success: true, document: already, existing: true });
   }
 
-  const raw = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
-  let buffer;
-  try {
-    buffer = Buffer.from(raw, 'base64');
-  } catch {
+  const validatedPdf = validateUploadedDocument(pdfBase64);
+  if (validatedPdf.error || validatedPdf.ext !== 'pdf') {
     return res.status(400).json({ error: 'קובץ PDF לא תקין' });
   }
-  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
-  }
+  const { buffer } = validatedPdf;
   const fileHash = sha256(buffer);
 
   const safeName = String(fileName || `health-declaration_${declarationId}.pdf`)
@@ -19174,16 +19205,11 @@ app.post('/api/public/onboard/waivers/:waiverId/pdf', publicFormRateLimit, async
   ));
   if (already) return res.json({ success: true, document: already, existing: true });
 
-  const raw = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
-  let buffer;
-  try {
-    buffer = Buffer.from(raw, 'base64');
-  } catch {
+  const validatedPdf = validateUploadedDocument(pdfBase64);
+  if (validatedPdf.error || validatedPdf.ext !== 'pdf') {
     return res.status(400).json({ error: 'קובץ PDF לא תקין' });
   }
-  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
-  }
+  const { buffer } = validatedPdf;
   const fileHash = sha256(buffer);
 
   const studentId = waiver.student_id || waiver.studentId || null;

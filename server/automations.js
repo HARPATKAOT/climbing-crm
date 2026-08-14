@@ -12,6 +12,7 @@ import { studentGroupIds } from './studentGroups.js';
 import { alertRecipients } from './staffAlerts.js';
 import { persistCore } from './db.js';
 import { recordBotAction } from './botActivityLog.js';
+import { securityLogRef } from './security.js';
 import {
   isOptedOut,
   isBotPaused,
@@ -412,7 +413,7 @@ export const automationsService = {
             enriched,
             automation.action_payload?.templateVarKeysWall || ['parentName', 'name']
           );
-          console.log(`🤖 Sending wall-scope template "${wallTemplate}" to ${phone}`);
+        console.log(`🤖 Sending wall-scope template "${wallTemplate}" to contact=${securityLogRef(phone)}`);
           await whatsappService.sendTemplateMessage(phone, wallTemplate, wallVars, {
             parentId: parent?.id || enriched.parentId,
             language: automation.action_payload?.language,
@@ -421,14 +422,14 @@ export const automationsService = {
           return { sent: true, via: 'template', scope: 'wall' };
         }
         if (!windowOpen) {
-          console.warn(`🤖 Automation skipped for ${phone}: wall-scope form and no wall template`);
+          console.warn(`🤖 Automation skipped for contact=${securityLogRef(phone)}: wall-scope form and no wall template`);
           return { sent: false, reason: 'wall_scope_no_template' };
         }
         const wallText = fillMessageTemplate(
           automation.action_payload?.messageWall || WALL_FORM_RECEIVED_MESSAGE,
           enriched
         );
-        console.log(`🤖 Sending wall-scope form confirmation to ${phone}`);
+        console.log(`🤖 Sending wall-scope form confirmation to contact=${securityLogRef(phone)}`);
         await whatsappService.sendTextMessage(phone, wallText, true);
         return { sent: true, via: 'freeform', scope: 'wall' };
       }
@@ -441,7 +442,7 @@ export const automationsService = {
         // carry on by itself. Only once Meta has approved it.
         const nextTemplate = automation.action_payload?.templateNameNext;
         if (nextTemplate && templateIsApproved(nextTemplate)) {
-          console.log(`🤖 Sending automated WhatsApp template "${nextTemplate}" to ${phone}`);
+          console.log(`🤖 Sending automated WhatsApp template "${nextTemplate}" to contact=${securityLogRef(phone)}`);
           await whatsappService.sendTemplateMessage(phone, nextTemplate, vars, {
             parentId: parent?.id || enriched.parentId,
             language: automation.action_payload?.language,
@@ -463,7 +464,7 @@ export const automationsService = {
             enriched,
             automation.action_payload?.templateVarKeysSelf || ['parentName']
           );
-          console.log(`🤖 Sending automated WhatsApp template "${selfTemplate}" to ${phone}`);
+          console.log(`🤖 Sending automated WhatsApp template "${selfTemplate}" to contact=${securityLogRef(phone)}`);
           await whatsappService.sendTemplateMessage(phone, selfTemplate, selfVars, {
             parentId: parent?.id || enriched.parentId,
             language: automation.action_payload?.language,
@@ -471,7 +472,7 @@ export const automationsService = {
           });
           return { sent: true, via: 'template' };
         }
-        console.log(`🤖 Sending automated WhatsApp template "${templateName}" to ${phone}`);
+        console.log(`🤖 Sending automated WhatsApp template "${templateName}" to contact=${securityLogRef(phone)}`);
         await whatsappService.sendTemplateMessage(phone, templateName, vars, {
           parentId: parent?.id || enriched.parentId,
           language: automation.action_payload?.language,
@@ -495,7 +496,7 @@ export const automationsService = {
         return { sent: false, reason: 'empty_message' };
       }
 
-      console.log(`🤖 Sending automated WhatsApp message to ${phone}`);
+      console.log(`🤖 Sending automated WhatsApp message to contact=${securityLogRef(phone)}`);
       await whatsappService.sendTextMessage(phone, message, true);
       return { sent: true, via: 'freeform' };
     } catch (err) {

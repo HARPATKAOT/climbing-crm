@@ -86,6 +86,16 @@ const TEAM_RULES = [
   // בלעדיה מי שמגיע בלי טפסים נתקע במסוף בלי דרך קדימה. זו שליחת קישור בלבד,
   // ולכן היא נפתחת למי שמפעיל את מסוף הכניסה בלי לפתוח לו את תיקי הלקוחות.
   { methods: WRITE, pattern: /^\/leads\/[^/]+\/send-health-form$/, anyModules: ['customers', 'checkin', 'health'], level: 'edit' },
+  // Nested student resources have their own permission domains. These rules
+  // must precede the broad customer-file rule below.
+  { methods: READ, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment' },
+  { methods: WRITE, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment', level: 'edit' },
+  { methods: READ, pattern: /^\/students\/[^/]+\/(wall-documents|documents|participation-waivers)(\/|$)/, module: 'health' },
+  { methods: WRITE, pattern: /^\/students\/[^/]+\/(documents|participation-waiver|health-declaration)(\/|$)/, module: 'health', level: 'edit' },
+  { methods: READ, pattern: /^\/students\/[^/]+\/activity-registrations(\/|$)/, module: 'activity_registrations' },
+  { methods: READ, pattern: /^\/students\/[^/]+\/program-eligibility$/, module: 'classes' },
+  { methods: WRITE, pattern: /^\/students\/[^/]+\/program-eligibility$/, module: 'classes', level: 'edit' },
+  { methods: ['PUT', 'PATCH'], pattern: /^\/students\/[^/]+$/, anyModules: ['customers', 'classes'], level: 'edit' },
   { methods: READ, pattern: /^\/(parents|students|leads)(\/|$)/, module: 'customers' },
   { methods: WRITE, pattern: /^\/(parents|students|leads)(\/|$)/, module: 'customers', level: 'edit' },
   { methods: READ, pattern: /^\/groups\/[^/]+\/staff-attendance$/, module: 'attendance' },
@@ -110,8 +120,6 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
   { methods: READ, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment' },
   { methods: WRITE, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment', level: 'edit' },
-  { methods: READ, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment' },
-  { methods: WRITE, pattern: /^\/students\/[^/]+\/equipment(\/|$)/, module: 'equipment', level: 'edit' },
 
   { methods: [...READ, ...WRITE], pattern: /^\/activities\/[^/]+\/(host-payment|host-customer|registration-link|send-registration-link|registrations\/[^/]+\/refund)(\/|$)/, module: 'activity_registrations', level: 'edit', sensitive: 'finance' },
   { methods: READ, pattern: /^\/activities\/[^/]+\/(registrations|interested|attendance)(\/|$)/, module: 'activity_registrations' },
@@ -146,6 +154,7 @@ const TEAM_RULES = [
   { methods: [...READ, ...WRITE], pattern: /^\/level-tests(\/|$)/, anyModules: ['level_tests', 'safety_tests', 'lead_tests'], writeLevel: true },
 
   { methods: [...READ, ...WRITE], pattern: /^\/employees\/[^/]+\/(documents|payroll-documents|attendance-summary|shift-journal)(\/|$)/, module: 'hr', sensitive: 'hr' },
+  { methods: WRITE, pattern: /^\/employees\/onboard-invite$/, module: 'employees', level: 'edit' },
   { methods: READ, pattern: /^\/employees\/onboard-fields$/, module: 'employees' },
   { methods: READ, pattern: /^\/employees(\/|$)/, module: 'employees' },
   { methods: WRITE, pattern: /^\/employees(\/|$)/, module: 'employees', level: 'edit' },

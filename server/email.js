@@ -5,6 +5,7 @@
  */
 
 import { getBusinessProfile } from './businessProfile.js';
+import { securityLogRef } from './security.js';
 
 async function brandLabel() {
   try {
@@ -39,9 +40,7 @@ export async function sendEmail({ to, subject, text, html } = {}) {
   const brandName = await brandLabel();
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
   if (!apiKey) {
-    console.log(
-      `📧 [email stub] to=${recipient} subject="${subject}"\n${text || ''}`
-    );
+    console.log(`📧 [email stub] recipient=${securityLogRef(recipient)}`);
     return { sent: false, stub: true };
   }
 

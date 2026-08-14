@@ -58,6 +58,20 @@ function readFileAsDataUrl(file) {
  * hire sees without a client deploy.
  */
 export default function PublicEmployeeOnboardForm() {
+  const [token] = useState(() => {
+    let invite = '';
+    try {
+      invite = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+    } catch {
+      invite = '';
+    }
+    if (invite) {
+      window.sessionStorage.setItem('employee-onboard-invite', invite);
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      return invite;
+    }
+    return window.sessionStorage.getItem('employee-onboard-invite') || '';
+  });
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
@@ -76,18 +90,29 @@ export default function PublicEmployeeOnboardForm() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/public/employee-onboard-fields')
-      .then((r) => (r.ok ? r.json() : { fields: [] }))
+    fetch('/api/public/employee-onboard-fields', {
+      headers: { 'x-employee-onboard-token': token },
+    })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'קישור הקליטה אינו תקף');
+        return data;
+      })
       .then((data) => {
         if (cancelled) return;
         setFields(Array.isArray(data.fields) ? data.fields : []);
         setDocs(Array.isArray(data.docs) ? data.docs : []);
         setForm101Url(typeof data.form101Url === 'string' ? data.form101Url : '');
       })
-      .catch(() => { if (!cancelled) setFields([]); })
+      .catch((err) => {
+        if (!cancelled) {
+          setFields([]);
+          setError(err.message || 'קישור הקליטה אינו תקף');
+        }
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [token]);
 
   const setAnswer = (key, value) => setAnswers((prev) => ({ ...prev, [key]: value }));
 
@@ -164,7 +189,10 @@ export default function PublicEmployeeOnboardForm() {
     try {
       const res = await fetch('/api/public/employee-onboard', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-employee-onboard-token': token,
+        },
         body: JSON.stringify({ answers }),
       });
       const data = await res.json().catch(() => ({}));
@@ -178,6 +206,7 @@ export default function PublicEmployeeOnboardForm() {
           setDocWarning(`הפרטים נשמרו, אבל הקבצים הבאים לא נקלטו: ${failed.join(', ')}. הצוות יבקש אותם שוב.`);
         }
       }
+      window.sessionStorage.removeItem('employee-onboard-invite');
       setDone(true);
     } catch {
       setError('שגיאת רשת — נסו שוב');

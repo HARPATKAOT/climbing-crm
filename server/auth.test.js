@@ -67,6 +67,47 @@ test('module levels and sensitive grants are both enforced', () => {
   assert.equal(isStaffRequestAllowed('GET', '/api/activities/a1/host-payment/invoice', context), false);
 });
 
+test('customer access does not inherit nested student permission domains', () => {
+  const customersOnly = {
+    role: 'staff',
+    modules: { customers: 'edit' },
+    sensitive: { finance: false, hr: false },
+  };
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1', customersOnly), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/equipment', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/students/s1/equipment/payment-link', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/wall-documents', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/documents', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('DELETE', '/api/students/s1/health-declaration', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/activity-registrations', customersOnly), false);
+  assert.equal(isStaffRequestAllowed('PUT', '/api/students/s1/program-eligibility', customersOnly), false);
+
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/equipment', {
+    ...customersOnly,
+    modules: { equipment: 'view' },
+  }), true);
+  assert.equal(isStaffRequestAllowed('DELETE', '/api/students/s1/participation-waiver', {
+    ...customersOnly,
+    modules: { health: 'edit' },
+  }), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/s1/activity-registrations', {
+    ...customersOnly,
+    modules: { activity_registrations: 'view' },
+  }), true);
+  assert.equal(isStaffRequestAllowed('PUT', '/api/students/s1', {
+    ...customersOnly,
+    modules: { classes: 'edit' },
+  }), true);
+  assert.equal(isStaffRequestAllowed('DELETE', '/api/students/s1', {
+    ...customersOnly,
+    modules: { classes: 'edit' },
+  }), false);
+  assert.equal(isStaffRequestAllowed('PUT', '/api/students/s1/program-eligibility', {
+    ...customersOnly,
+    modules: { classes: 'edit' },
+  }), true);
+});
+
 test('self employee routes require an employee link', () => {
   const base = { role: 'staff', modules: {}, sensitive: {} };
   assert.equal(isStaffRequestAllowed('GET', '/api/me/employee', base), false);
