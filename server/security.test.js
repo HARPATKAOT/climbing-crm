@@ -4,11 +4,15 @@ import {
   allowedCorsOrigins,
   issueEmployeeOnboardInvite,
   issueOAuthState,
+  issuePublicRedirectToken,
   requireCronSecret,
+  resolvePublicRedirectRecordId,
   safeIcountDocumentUrl,
+  safeHttpsRedirectUrl,
   securityLogRef,
   verifyEmployeeOnboardInvite,
   verifyOAuthState,
+  verifyPublicRedirectToken,
 } from './security.js';
 
 test('security log references are stable and do not reveal their input', () => {
@@ -40,12 +44,39 @@ test('OAuth state is provider-bound, expiring and tamper evident', () => {
   assert.equal(verifyOAuthState(state, 'google-calendar', { secret, now: now + 10 * 60 * 1000 + 1 }), false);
 });
 
+test('public redirect tokens are purpose-bound and tamper evident', () => {
+  const secret = 'redirect-test-secret';
+  const token = issuePublicRedirectToken('payment', 'pa1786685901000', { secret });
+  assert.notEqual(token, 'pa1786685901000');
+  assert.equal(verifyPublicRedirectToken(token, 'payment', { secret }), 'pa1786685901000');
+  assert.equal(verifyPublicRedirectToken(token, 'sale-document', { secret }), null);
+  assert.equal(verifyPublicRedirectToken(`${token}x`, 'payment', { secret }), null);
+  assert.equal(verifyPublicRedirectToken('pa1786685901000', 'payment', { secret }), null);
+  assert.equal(resolvePublicRedirectRecordId(token, 'payment', { secret }), 'pa1786685901000');
+  assert.equal(resolvePublicRedirectRecordId('pa1786685901000', 'payment', {
+    legacyCutoffMs: 1786685901000,
+  }), 'pa1786685901000');
+  assert.equal(resolvePublicRedirectRecordId('pa1786685901001', 'payment', {
+    legacyCutoffMs: 1786685901000,
+  }), null);
+  assert.equal(resolvePublicRedirectRecordId('po1786685901000', 'payment', {
+    legacyCutoffMs: 1786685901000,
+  }), null);
+});
+
 test('iCount document downloads cannot target internal or untrusted hosts', () => {
   assert.equal(safeIcountDocumentUrl('https://app.icount.co.il/doc/1')?.startsWith('https://app.icount.co.il/'), true);
   assert.equal(safeIcountDocumentUrl('http://app.icount.co.il/doc/1'), null);
   assert.equal(safeIcountDocumentUrl('https://127.0.0.1/admin'), null);
   assert.equal(safeIcountDocumentUrl('https://icount.co.il.attacker.example/doc'), null);
   assert.equal(safeIcountDocumentUrl('https://trusted-cdn.example/doc', 'trusted-cdn.example')?.startsWith('https://trusted-cdn.example/'), true);
+});
+
+test('stored public redirects allow only credential-free HTTPS targets', () => {
+  assert.equal(safeHttpsRedirectUrl('https://signup.example.test/form')?.startsWith('https://'), true);
+  assert.equal(safeHttpsRedirectUrl('http://signup.example.test/form'), null);
+  assert.equal(safeHttpsRedirectUrl('javascript:alert(1)'), null);
+  assert.equal(safeHttpsRedirectUrl('https://user:pass@signup.example.test/form'), null);
 });
 
 test('production CORS never trusts localhost or insecure configured origins', () => {

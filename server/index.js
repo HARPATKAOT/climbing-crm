@@ -133,8 +133,11 @@ import {
   allowedCorsOrigins,
   issueEmployeeOnboardInvite,
   issueOAuthState,
+  issuePublicRedirectToken,
   requireCronSecret,
+  resolvePublicRedirectRecordId,
   safeIcountDocumentUrl,
+  safeHttpsRedirectUrl,
   secureCompare,
   securityLogRef,
   securityHeaders,
@@ -784,6 +787,40 @@ async function businessBrand() {
 }
 
 /** Short public redirect: WhatsApp template button → iCount payment URL */
+const publicRedirectWindows = new Map();
+const PUBLIC_REDIRECT_WINDOW_MS = 15 * 60 * 1000;
+const PUBLIC_REDIRECT_MAX = 30;
+const PUBLIC_LEGACY_REDIRECT_CUTOFF_MS = Date.parse(
+  process.env.PUBLIC_LEGACY_LINK_CUTOFF || '2026-08-14T07:03:23.582Z'
+);
+
+function publicRedirectRateLimit(req, res, next) {
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const current = publicRedirectWindows.get(key);
+  if (!current || current.resetAt <= now) {
+    if (publicRedirectWindows.size > 5000) {
+      for (const [storedKey, value] of publicRedirectWindows) {
+        if (value.resetAt <= now) publicRedirectWindows.delete(storedKey);
+      }
+    }
+    publicRedirectWindows.set(key, { count: 1, resetAt: now + PUBLIC_REDIRECT_WINDOW_MS });
+    return next();
+  }
+  current.count += 1;
+  if (current.count > PUBLIC_REDIRECT_MAX) {
+    res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)));
+    return res.status(429).send('Too many link requests');
+  }
+  return next();
+}
+
+function signedOrLegacyRedirectId(value, purpose) {
+  return resolvePublicRedirectRecordId(value, purpose, {
+    legacyCutoffMs: PUBLIC_LEGACY_REDIRECT_CUTOFF_MS,
+  }) || '';
+}
+
 function resolveStoredPaymentUrl(paymentId) {
   const id = String(paymentId || '').trim();
   if (!id) return { url: '', expired: false };
@@ -803,8 +840,8 @@ function resolveStoredPaymentUrl(paymentId) {
 }
 
 function redirectPaymentLink(req, res) {
-  const paymentId = String(req.params.paymentId || '').trim();
-  if (!paymentId) return res.status(400).send('חסר מזהה תשלום');
+  const paymentId = signedOrLegacyRedirectId(req.params.paymentId, 'payment');
+  if (!paymentId) return res.status(404).send('קישור התשלום לא נמצא');
   const { url: payUrl, expired } = resolveStoredPaymentUrl(paymentId);
   if (!payUrl) {
     return res
@@ -817,6 +854,8 @@ function redirectPaymentLink(req, res) {
           `<p>פנו לצוות ${DEFAULT_BRAND_NAME} לקבלת קישור חדש.</p></body></html>`
       );
   }
+  const safePayUrl = safeIcountDocumentUrl(payUrl);
+  if (!safePayUrl) return res.status(404).send('קישור התשלום אינו זמין');
   // Heal payments row if the URL only lived on the sale (older / partial writes).
   try {
     const payment = db.getOne('payments', paymentId);
@@ -829,10 +868,11 @@ function redirectPaymentLink(req, res) {
   } catch {
     /* non-fatal */
   }
-  return res.redirect(302, payUrl);
+  res.set('Cache-Control', 'no-store');
+  return res.redirect(302, safePayUrl);
 }
-app.get('/r/:paymentId', redirectPaymentLink);
-app.get('/api/r/:paymentId', redirectPaymentLink);
+app.get('/r/:paymentId', publicRedirectRateLimit, redirectPaymentLink);
+app.get('/api/r/:paymentId', publicRedirectRateLimit, redirectPaymentLink);
 
 /**
  * Short link behind the approved equipment template button. Meta freezes the
@@ -856,15 +896,16 @@ app.get('/api/e/:token', redirectEquipmentCheckout);
  * שולח משם לכתובת האמיתית.
  */
 function redirectSaleDocument(req, res) {
-  const saleId = String(req.params.saleId || '').trim();
-  if (!saleId) return res.status(400).send('חסר מזהה מכירה');
+  const saleId = signedOrLegacyRedirectId(req.params.saleId, 'sale-document');
+  if (!saleId) return res.status(404).send('קישור החשבונית לא נמצא');
   const sale = db.getOne('pos_sales', saleId);
-  const url = sale?.icount_doc_url;
+  const url = safeIcountDocumentUrl(sale?.icount_doc_url);
   if (!url) return res.status(404).send('לא נמצאה חשבונית למכירה הזאת');
+  res.set('Cache-Control', 'no-store');
   return res.redirect(302, url);
 }
-app.get('/d/:saleId', redirectSaleDocument);
-app.get('/api/d/:saleId', redirectSaleDocument);
+app.get('/d/:saleId', publicRedirectRateLimit, redirectSaleDocument);
+app.get('/api/d/:saleId', publicRedirectRateLimit, redirectSaleDocument);
 
 /**
  * Short link to a group's registration page.
@@ -880,9 +921,9 @@ function redirectGroupSignup(req, res) {
   const twice = String(req.params.freq || '').toLowerCase() === '2';
   const group = db.getOne('groups', id);
   if (!group) return res.status(404).send('הקבוצה לא נמצאה');
-  const target = twice
+  const target = safeHttpsRedirectUrl(twice
     ? (group.signupLinkTwice || group.signupLinkWeek)
-    : (group.signupLinkWeek || group.signupLinkTwice);
+    : (group.signupLinkWeek || group.signupLinkTwice));
   if (!target) return res.status(404).send('אין קישור הרשמה לקבוצה הזו');
   return res.redirect(302, target);
 }
@@ -16295,13 +16336,19 @@ app.post('/api/pos/sale', async (req, res) => {
         );
         const invoiceTplApproved =
           invoiceTpl && String(invoiceTpl.status).toUpperCase() === 'APPROVED';
-        if (invoiceTplApproved && doc?.docnum) {
+        let invoiceButtonToken = '';
+        try {
+          invoiceButtonToken = issuePublicRedirectToken('sale-document', sale.id);
+        } catch {
+          // Without a signing secret, use the free-text delivery path below.
+        }
+        if (invoiceTplApproved && doc?.docnum && invoiceButtonToken) {
           try {
             const waResult = await whatsappService.sendTemplateMessage(
               phone,
               POS_INVOICE_TEMPLATE_NAME,
               [syncedParent?.name || 'לקוח', String(total), String(doc.docnum)],
-              { fallbackName: syncedParent?.name, parentId: syncedParent?.id, buttonUrlParam: sale.id }
+              { fallbackName: syncedParent?.name, parentId: syncedParent?.id, buttonUrlParam: invoiceButtonToken }
             );
             invoiceWhatsappSent = !!waResult?.success;
             if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת תבנית החשבונית נכשלה';
@@ -16674,7 +16721,8 @@ async function sendPaymentLinkWhatsapp({
   // Meta template button is fixed to the live /r/ host. Never use it from local
   // (the payment only exists on this machine, and localhost short links fail on phones).
   const runningLocally = icount.isLocalPublicApiBase();
-  const canUseMetaTemplate = tplApproved && !runningLocally;
+  const paymentButtonToken = icount.buildPaymentRedirectToken(paymentId);
+  const canUseMetaTemplate = tplApproved && !runningLocally && !!paymentButtonToken;
 
   // Why the reliable path was skipped — the screen has to say this, otherwise a
   // message Meta accepted but never delivered looks like a success.
@@ -16684,7 +16732,9 @@ async function sendPaymentLinkWhatsapp({
       ? `לא נמצאה תבנית בשם „${tplName}” במערכת`
       : !tplApproved
         ? `התבנית „${tplName}” עדיין לא מאושרת במטא`
-        : 'השרת רץ מקומית, ולכן הכפתור בתבנית היה מוביל לכתובת שלא זמינה מהטלפון';
+        : runningLocally
+          ? 'השרת רץ מקומית, ולכן הכפתור בתבנית היה מוביל לכתובת שלא זמינה מהטלפון'
+          : 'אין סוד חתימה לקישורים ציבוריים';
 
   if (canUseMetaTemplate) {
     try {
@@ -16692,7 +16742,7 @@ async function sendPaymentLinkWhatsapp({
         phone,
         tplName,
         [customerName, description || 'רכישה', String(amount)],
-        { fallbackName: customerName, parentId, buttonUrlParam: paymentId }
+        { fallbackName: customerName, parentId, buttonUrlParam: paymentButtonToken }
       );
       whatsappSent = !!waResult?.success;
       if (whatsappSent) via = 'template';

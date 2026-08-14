@@ -39,6 +39,73 @@ function employeeOnboardKey(explicitSecret = '') {
   return crypto.createHmac('sha256', 'crm.employee-onboard.v1').update(source).digest();
 }
 
+function publicRedirectKey(explicitSecret = '') {
+  const source = String(
+    explicitSecret
+      || process.env.PUBLIC_LINK_SECRET
+      || process.env.ICOUNT_WEBHOOK_SECRET
+      || process.env.EMPLOYEE_ONBOARD_SECRET
+      || process.env.OAUTH_STATE_SECRET
+      || process.env.SUPABASE_SERVICE_ROLE_KEY
+      || ''
+  ).trim();
+  if (!source) throw new Error('Public redirect signing is not configured');
+  return crypto.createHmac('sha256', 'crm.public-redirect.v1').update(source).digest();
+}
+
+/** Purpose-bound signed suffix for public WhatsApp template buttons. */
+export function issuePublicRedirectToken(purpose, recordId, { secret = '' } = {}) {
+  const cleanPurpose = String(purpose || '').trim();
+  const cleanId = String(recordId || '').trim();
+  if (!cleanPurpose || !cleanId || cleanPurpose.length > 80 || cleanId.length > 240) return '';
+  const payload = Buffer.from(cleanId, 'utf8').toString('base64url');
+  const mac = crypto
+    .createHmac('sha256', publicRedirectKey(secret))
+    .update(`${cleanPurpose}:${payload}`)
+    .digest('base64url');
+  return `${payload}.${mac}`;
+}
+
+export function verifyPublicRedirectToken(token, purpose, { secret = '' } = {}) {
+  const [payload, suppliedMac, extra] = String(token || '').split('.');
+  const cleanPurpose = String(purpose || '').trim();
+  if (!payload || !suppliedMac || extra || !cleanPurpose || payload.length > 400) return null;
+  let expectedMac;
+  try {
+    expectedMac = crypto
+      .createHmac('sha256', publicRedirectKey(secret))
+      .update(`${cleanPurpose}:${payload}`)
+      .digest('base64url');
+  } catch {
+    return null;
+  }
+  if (!secureCompare(suppliedMac, expectedMac)) return null;
+  try {
+    const recordId = Buffer.from(payload, 'base64url').toString('utf8').trim();
+    return recordId && recordId.length <= 240 ? recordId : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolvePublicRedirectRecordId(
+  value,
+  purpose,
+  { secret = '', legacyCutoffMs = 0 } = {}
+) {
+  const supplied = String(value || '').trim();
+  if (!supplied) return null;
+  if (supplied.includes('.')) return verifyPublicRedirectToken(supplied, purpose, { secret });
+
+  // Legacy template buttons used the generated pa<epoch-ms>/po<epoch-ms> id.
+  // Only a finite historical set is accepted; newer records must be signed.
+  const prefix = purpose === 'payment' ? 'pa' : purpose === 'sale-document' ? 'po' : '';
+  if (!prefix || !Number.isFinite(Number(legacyCutoffMs))) return null;
+  const match = supplied.match(new RegExp(`^${prefix}(\\d{13})$`));
+  if (!match) return null;
+  return Number(match[1]) <= Number(legacyCutoffMs) ? supplied : null;
+}
+
 export function issueEmployeeOnboardInvite({
   secret = '',
   now = Date.now(),
@@ -173,4 +240,16 @@ export function safeIcountDocumentUrl(value, configuredHosts = process.env.ICOUN
     // Invalid URLs are never fetched by the API.
   }
   return null;
+}
+
+export function safeHttpsRedirectUrl(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw || raw.length > 2048) return null;
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }

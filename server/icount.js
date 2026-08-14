@@ -5,6 +5,7 @@
  */
 
 import crypto from 'crypto';
+import { issuePublicRedirectToken } from './security.js';
 import { VAT_RATE, chargeAmount, icountVatType, roundMoney } from './vat.js';
 
 const BASE_URL = 'https://api.icount.co.il/api/v3.php';
@@ -754,7 +755,16 @@ export function getPaymentRedirectBase() {
 
 export function buildPaymentRedirectUrl(paymentId) {
   if (!paymentId) return '';
-  return `${getPaymentRedirectBase()}/r/${encodeURIComponent(String(paymentId))}`;
+  const token = buildPaymentRedirectToken(paymentId);
+  return token ? `${getPaymentRedirectBase()}/r/${encodeURIComponent(token)}` : '';
+}
+
+export function buildPaymentRedirectToken(paymentId) {
+  try {
+    return issuePublicRedirectToken('payment', paymentId);
+  } catch {
+    return '';
+  }
 }
 
 /** Default Meta template name for POS payment links. */
@@ -856,6 +866,7 @@ export const icount = {
   isLocalHostname,
   getPaymentRedirectBase,
   buildPaymentRedirectUrl,
+  buildPaymentRedirectToken,
   getPaymentTemplateName,
   getPayPage,
   getPayBaseUrl,

@@ -19,6 +19,9 @@
 | `META_APP_SECRET` | משמש לאימות חתימות של הודעות נכנסות |
 | `META_WEBHOOK_VERIFY_TOKEN` | סוד אימות החיבור מול Meta |
 | `ICOUNT_WEBHOOK_SECRET` | סוד אימות הודעות נכנסות מ-iCount |
+| `OAUTH_STATE_SECRET` | סוד חתימה חד־פעמי למצבי OAuth |
+| `EMPLOYEE_ONBOARD_SECRET` | סוד חתימה להזמנות קליטת עובדים |
+| `PUBLIC_LINK_SECRET` | סוד חתימה לקישורי תשלום וחשבוניות ציבוריים |
 
 השרת לא משתמש יותר במפתח הציבורי כתחליף למפתח השרת.
 

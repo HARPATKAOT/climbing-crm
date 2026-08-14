@@ -4,9 +4,11 @@ import {
   getPublicApiBase,
   isLocalPublicApiBase,
   buildPaymentRedirectUrl,
+  buildPaymentRedirectToken,
   buildPaymentUrl,
   extractCcClearing,
 } from './icount.js';
+import { verifyPublicRedirectToken } from './security.js';
 
 const ENV_KEYS = [
   'PUBLIC_API_URL',
@@ -14,6 +16,7 @@ const ENV_KEYS = [
   'NODE_ENV',
   'PORT',
   'ICOUNT_EVENT_PAY_PAGE_URL',
+  'PUBLIC_LINK_SECRET',
 ];
 
 function snapshotEnv() {
@@ -48,9 +51,13 @@ describe('getPublicApiBase matches environment', () => {
     delete process.env.RENDER_EXTERNAL_URL;
     delete process.env.NODE_ENV;
     process.env.PORT = '5001';
+    process.env.PUBLIC_LINK_SECRET = 'public-link-test-secret';
     assert.equal(getPublicApiBase(), 'http://localhost:5001');
     assert.equal(isLocalPublicApiBase(), true);
-    assert.equal(buildPaymentRedirectUrl('pa1'), 'http://localhost:5001/r/pa1');
+    const token = buildPaymentRedirectToken('pa1');
+    assert.notEqual(token, 'pa1');
+    assert.equal(verifyPublicRedirectToken(token, 'payment'), 'pa1');
+    assert.equal(buildPaymentRedirectUrl('pa1'), `http://localhost:5001/r/${encodeURIComponent(token)}`);
   });
 
   it('falls back to live API in production', () => {
