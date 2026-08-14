@@ -24,8 +24,11 @@ export const DIGEST_HOUR = 8;
 
 import {
   confirmParentRegistration,
+  createPlacementHold,
+  HOLD_PHASE,
   REGISTRATION_STATUS,
 } from './registrationLifecycle.js';
+import { studentGroupIds } from './studentGroups.js';
 
 function israelParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -77,12 +80,41 @@ async function markPlacementReported({ db, persist, student, now }) {
   if (updated && typeof persist === 'function') await persist('students', updated);
 }
 
+/**
+ * מי שכבר יושב בקבוצה, בלי „מקום שמור” פעיל מאחוריו.
+ *
+ * שני שינברג שובצה לפני שהמנגנון קיים; אביה כתב „נרשמנו במתנ״ס”, הדיווח נרשם,
+ * והסטטוס נשאר „ממתין להרשמה” — כי המעבר ל„ממתין לאישור המתנ״ס” היה תלוי
+ * ברשומת החזקה שמעולם לא נוצרה. מי שהסתכל בכרטיס לא יכול היה להבדיל בינה לבין
+ * הורה ששותק. הכיסא תפוס בפועל ממילא, ולכן הדיווח פותח עליו עכשיו את ההחזקה
+ * של עשרת הימים — עם אותה תפוגה ואותה משימה לצוות כמו כל דיווח אחר.
+ */
+async function openCentreHoldForSeatedStudent({ db, persist, student, parent, now }) {
+  const related = db.withStudentRelation?.(student) || student;
+  const groups = studentGroupIds(related)
+    .map((groupId) => db.getOne('groups', groupId))
+    .filter(Boolean);
+  if (!groups.length) return { ok: false, reason: 'no_group' };
+  return createPlacementHold({
+    db,
+    persist,
+    student,
+    parent,
+    groups,
+    phase: HOLD_PHASE.AWAITING_CENTRE,
+    source: 'parent_report',
+    now,
+  });
+}
+
 export async function recordParentReport({ db, persist, student, parent, now = new Date() } = {}) {
   if (!student?.id) return { ok: false, error: 'אין מתאמן' };
-  const advanced = await confirmParentRegistration({ db, persist, student, now });
-  // Legacy pending rows are converted by the production migration. Until it
-  // runs, keep recording the report but never pretend that a 10-day hold was
-  // created when there was no atomic seat claim behind it.
+  let advanced = await confirmParentRegistration({ db, persist, student, now });
+  if (!advanced.ok && advanced.reason === 'no_active_hold') {
+    advanced = await openCentreHoldForSeatedStudent({ db, persist, student, parent, now });
+  }
+  // A trainee with no seat at all keeps only the report: there is nothing to
+  // hold, and inventing one would promise a place nobody gave them.
   if (!advanced.ok && String(student.status || '') === 'pending_signup') {
     await markPlacementReported({ db, persist, student, now });
   } else if (!advanced.ok) {

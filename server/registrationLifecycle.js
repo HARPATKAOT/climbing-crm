@@ -332,6 +332,9 @@ export async function createPlacementHold({
       ? reminderAtDeadlineMorning(expiry)
       : null,
     reminder_sent_at: null,
+    // A hold that opens straight into the centre phase was opened *by* the
+    // parent's report, so the report time is now.
+    ...(phase === HOLD_PHASE.AWAITING_CENTRE ? { parent_confirmed_at: createdAt } : {}),
     source,
     idempotency_key: `placement:${student.id}:${[...groupIds].sort().join(',')}:${phase}`,
     metadata,

@@ -40,6 +40,23 @@ function testDb(seed = []) {
   };
 }
 
+/** מתאמנת שכבר משובצת בקבוצה, כמו שני שינברג — בלי שום רשומת החזקה מאחוריה. */
+function seatedDb() {
+  const db = testDb();
+  db.store.students = [{
+    id: 'st-shani', name: 'שני שינברג', status: 'pending_signup', groupId: 'g-1', groupIds: ['g-1'],
+  }];
+  db.store.groups = [{ id: 'g-1', name: 'נבחרת בוגרת', maxSlots: 13 }];
+  db.store.group_placement_holds = [];
+  db.getOne = (table, id) => (db.store[table] || []).find((row) => String(row.id) === String(id)) || null;
+  db.withStudentRelation = (student) => student;
+  db.withStudentRelations = (students) => students;
+  db.setStudentGroups = (studentId, ids) => db.update('students', studentId, {
+    groupIds: ids, groupId: ids[0] || null,
+  });
+  return db;
+}
+
 const SUNDAY_8 = new Date('2026-08-09T08:05:00+03:00');
 const SUNDAY_10 = new Date('2026-08-09T10:05:00+03:00');
 const TUESDAY_8 = new Date('2026-08-11T08:05:00+03:00');
@@ -120,6 +137,28 @@ test('ילד שלא חזר בתשובה — קודם שואלים את ההור�
 test('רשימה ריקה אינה הודעה', () => {
   assert.equal(buildDigestMessage([]), '');
   assert.equal(buildDigestMessage([{ student_name: '  ' }]), '');
+});
+
+test('מתאמן שכבר יושב בקבוצה בלי החזקה — הדיווח מעביר אותו לממתין לאישור המתנ״ס', async () => {
+  const db = seatedDb();
+  const shani = db.get('students')[0];
+
+  const result = await recordParentReport({ db, student: shani, parent: MOTHER, now: SUNDAY_8 });
+
+  assert.equal(result.ok, true);
+  assert.equal(db.getOne('students', shani.id).status, 'awaiting_centre_confirmation');
+  const [hold] = db.get('group_placement_holds');
+  assert.equal(hold.phase, 'awaiting_centre');
+  assert.ok(hold.expires_at, 'להחזקה יש תפוגה, כדי שלא תישאר פתוחה לנצח');
+  assert.ok(db.getOne('students', shani.id).placement_reported_at, 'נשמר מתי ההורה דיווח');
+});
+
+test('בלי קבוצה אין מה להחזיק — הדיווח נרשם והסטטוס לא זז', async () => {
+  const db = testDb();
+  const result = await recordParentReport({ db, student: RANI, parent: MOTHER, now: SUNDAY_8 });
+
+  assert.equal(result.ok, true);
+  assert.equal(db.get('group_placement_holds').length, 0);
 });
 
 test('אחרי שהורה דיווח שנרשם לא שואלים אותו שוב אם נרשם', async () => {
