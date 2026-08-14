@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Copy, CreditCard, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
+  Copy, CreditCard, Download, ExternalLink, FileCheck2, FileX2, Loader2, Pencil, Plus, RefreshCw,
   CalendarDays, Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
 } from 'lucide-react';
 import InfoHint from '../utils/InfoHint.jsx';
@@ -1738,7 +1738,8 @@ export default function ActivityRegistrationPanel({
                     </div>
                   ) : (
                     <>
-                      <span className="registration-participant-main">
+                      <span className="registration-participant-main registration-participant-identity">
+                        <span className="registration-participant-field-label">משתתף:</span>
                         {openId ? (
                           <button
                             type="button"
@@ -1762,35 +1763,29 @@ export default function ActivityRegistrationPanel({
                             {r.attending_dates.length} ימים
                           </span>
                         )}
-                        <small className="registration-participant-meta">
-                          {r.participant_type === 'adult' ? 'מבוגר' : 'ילד'}
-                          {r.parent_name && parentOpenId ? (
-                            <>
-                              {' · '}
-                              <button
-                                type="button"
-                                className="registration-participant-link registration-participant-link--inline"
-                                onClick={() => openLeadFile(parentOpenId)}
-                                title="פתיחת תיק לקוח"
-                              >
-                                לקוח: {r.parent_name}
-                              </button>
-                            </>
-                          ) : r.parent_name ? (
-                            ` · לקוח: ${r.parent_name}`
-                          ) : null}
-                        </small>
                       </span>
-                      <span className="registration-participant-status">
-                        {r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
-                        <small>
-                          {r.status === 'confirmed' || r.status === 'active' ? 'הרשמה מאושרת' : 'ממתין לתשלום'}
-                          {r.payment_status === 'paid'
-                            ? ' · שולם'
-                            : r.payment_status === 'pending'
-                              ? ' · תשלום ממתין'
-                              : ' · ללא תשלום'}
-                        </small>
+                      <span className="registration-participant-customer">
+                        <span className="registration-participant-field-label">לקוח:</span>
+                        {r.parent_name && parentOpenId ? (
+                          <button
+                            type="button"
+                            className="registration-participant-link registration-participant-link--inline"
+                            onClick={() => openLeadFile(parentOpenId)}
+                            title="פתיחת תיק לקוח"
+                          >
+                            <span>{r.parent_name}</span>
+                          </button>
+                        ) : (
+                          <span className="registration-participant-customer-name">{r.parent_name || '—'}</span>
+                        )}
+                      </span>
+                      <span
+                        className={`registration-declaration-status registration-declaration-status--${r.declaration_signed ? 'signed' : 'missing'}`}
+                        role="img"
+                        aria-label={r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
+                        title={r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
+                      >
+                        {r.declaration_signed ? <FileCheck2 size={18} /> : <FileX2 size={18} />}
                       </span>
                       {/* מי שלא נרשם ליום שמסומן כרגע מקבל הערה במקום מתג —
                           עדיף שיֵראה בשורה ויוסבר, מאשר שייעלם ויֵראה כאילו
@@ -1803,6 +1798,7 @@ export default function ActivityRegistrationPanel({
                               busy={attendance.busyFor(r.id)}
                               disabled={readOnly}
                               onMark={(status) => attendance.mark(r.id, status)}
+                              size="xs"
                             />
                           </span>
                         ) : (
