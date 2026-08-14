@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 import CounterRecordDialog from './CounterRecordDialog.jsx';
+import { canConductSafetyTest, employeesFor } from '../../utils/operationalEmployees.js';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -64,7 +65,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
 
   // רק מי שהוסמך להעביר תדריך ומבחן. הרשימה מגיעה מהשרת כבר מסוננת, וזו
   // הרשת השנייה: מבחן לא נחתם על שם מי שלא מורשה לו.
-  const staff = employees.filter((e) => e.is_active !== false && e.can_test_safety !== false);
+  const staff = employeesFor(employees, canConductSafetyTest);
   const pickedFor = (row) => byRow[row.id] || staff[0]?.id || '';
 
   const signSafety = async (row) => {

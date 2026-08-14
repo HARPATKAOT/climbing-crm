@@ -4,6 +4,7 @@ import StepRow from './StepRow.jsx';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 import CashCountModal from '../CashCountModal.jsx';
 import { CheckIcon } from '../safetyCheckIcons.jsx';
+import { canOpenWall, employeesFor } from '../../utils/operationalEmployees.js';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -33,7 +34,7 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
   const dueSafety = state?.safety?.due || [];
   const pendingSafety = state?.safety?.pending || [];
   const safetySigners = state?.safety?.signers || [];
-  const operators = (state?.available || []).filter((e) => e.can_open_wall);
+  const operators = employeesFor(state?.available, canOpenWall);
   const confirmMessage = state?.settings?.wall_open_confirm_message || 'המקום מסודר ונקי?';
   const nameOf = (id) => operators.find((e) => e.id === id)?.name || 'עובד';
 

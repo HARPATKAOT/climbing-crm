@@ -10,6 +10,7 @@ import PendingQueue from './checkin/PendingQueue.jsx';
 import PrinterControls from './checkin/PrinterControls.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
 import PosSale from './PosSale.jsx';
+import { canOperateCash, employeesFor } from '../utils/operationalEmployees.js';
 
 // מסך עבודה אחד: בחירת הלקוח, מצב המסמכים והכרטיסייה שלו, המכירה, מי שנתקע
 // בלי מבחן אבטחה ויומן היום — הכול על אותו מסך ומול אותה קופה. הדלפקיסט לא
@@ -191,10 +192,19 @@ export default function CheckInConsole({
     );
   }
 
-  // ברירת המחדל נקבעת פעם אחת, כשידוע מי פתח; החלפה ידנית גוברת עליה.
-  const cashier = state.staff.find((row) => row.employee_id === cashierId)
-    || state.staff.find((row) => row.employee_id === state.opener?.employee_id)
-    || state.staff[0]
+  const cashOperators = employeesFor(employees, canOperateCash);
+  const cashOperatorIds = new Set(cashOperators.map((employee) => employee.id));
+  const cashStaff = state.staff.filter((row) => cashOperatorIds.has(row.employee_id));
+  const cashStaffOptions = cashStaff.map((row) => ({
+    ...cashOperators.find((employee) => employee.id === row.employee_id),
+    id: row.employee_id,
+    name: row.name,
+  }));
+
+  // ברירת המחדל היא הפותח רק אם הוא גם מורשה קופה; אחרת העובד המורשה הראשון במשמרת.
+  const cashier = cashStaff.find((row) => row.employee_id === cashierId)
+    || cashStaff.find((row) => row.employee_id === state.opener?.employee_id)
+    || cashStaff[0]
     || null;
 
   const banners = (
@@ -288,7 +298,7 @@ export default function CheckInConsole({
           <div style={{ minWidth: 170 }}>
             <EmployeeSelect
               className="input select input-sm"
-              employees={state.staff.map((row) => ({ id: row.employee_id, name: row.name, is_active: true }))}
+              employees={cashStaffOptions}
               value={cashier?.employee_id || ''}
               placeholder="בחירת עובד"
               aria-label="אחראי הקופה במשמרת"
@@ -335,7 +345,7 @@ export default function CheckInConsole({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {canSell ? (
             <PosSale
-              employees={employees}
+              employees={cashOperators}
               requireSeller
               sellerEmployeeId={cashier?.employee_id || ''}
               hideInvoiceContactEditor

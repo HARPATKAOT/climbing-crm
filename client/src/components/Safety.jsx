@@ -6,6 +6,11 @@ import EntityLink from '../utils/entityLinks.jsx';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import AppSelect from './AppSelect.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
+import {
+  canSignSafetyChecks,
+  employeesFor,
+  isActiveWallEmployee,
+} from '../utils/operationalEmployees.js';
 
 const HEB_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const FREQUENCIES = ['יומי', 'שבועי', 'דו שבועי', 'חודשי', 'דו חודשי', 'חצי שנתי', 'שנתי'];
@@ -77,7 +82,7 @@ function addDays(dateStr, days) {
 function SignCheckModal({ check, employees, initialLog = null, onSave, onClose }) {
   // בדיקת בטיחות היא בדיקת בטיחות — מי שלא הוסמך לחתום עליה לא חותם גם על
   // בדיקה חודשית. עד היום הסינון חל רק על היומיות, ובשאר הופיעו כל העובדים.
-  const eligible = employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true);
+  const eligible = employeesFor(employees, canSignSafetyChecks);
   const [testerId, setTesterId] = useState(initialLog?.completed_by_employee_id || eligible[0]?.id || '');
   const [status, setStatus] = useState(initialLog?.status || 'תקין');
   const [notes, setNotes] = useState(initialLog?.description || '');
@@ -269,16 +274,17 @@ function CheckTypeModal({ initial, onSave, onClose }) {
 
 // ─── Modal: Add Safety Incident ──────────────────────────────────────────
 function AddIncidentModal({ employees, onSave, onClose }) {
+  const reporters = employeesFor(employees, isActiveWallEmployee);
   const [climberName, setClimberName] = useState('');
   const [gearUsed, setGearUsed] = useState('autobelay');
   const [description, setDescription] = useState('');
   const [injuryDescription, setInjuryDetails] = useState('');
   const [actionTaken, setActionTaken] = useState('');
-  const [employeeId, setEmployeeId] = useState(employees[0]?.id || '');
+  const [employeeId, setEmployeeId] = useState(reporters[0]?.id || '');
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!climberName.trim() || !description.trim()) return;
+    if (!climberName.trim() || !description.trim() || !employeeId) return;
     onSave({
       climber_name: climberName.trim(),
       gear_used: gearUsed,
@@ -331,19 +337,24 @@ function AddIncidentModal({ employees, onSave, onClose }) {
               <div className="form-group">
                 <label className="form-label">מדריך מדווח *</label>
                 <EmployeeSelect
-                  employees={employees}
+                  employees={reporters}
                   value={employeeId}
                   placeholder="בחר עובד..."
                   aria-label="מדריך מדווח"
                   onChange={(emp) => setEmployeeId(emp?.id || '')}
                 />
+                {reporters.length === 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 6 }}>
+                    אין עובד קיר פעיל שיכול לדווח על האירוע.
+                  </div>
+                )}
               </div>
             </div>
           </form>
         </div>
         <div className="modal-footer">
           <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
-          <button form="incident-form" type="submit" className="btn btn-primary">שמור דיווח</button>
+          <button form="incident-form" type="submit" className="btn btn-primary" disabled={!employeeId}>שמור דיווח</button>
         </div>
       </div>
     </div>

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, Eraser, Wallet } from 'lucide-react';
 import CashDenominationPad from './CashDenominationPad.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
-import { isWallStaff } from '../utils/employeeScope.js';
+import { canOperateCash, employeesFor } from '../utils/operationalEmployees.js';
 import { CASH_DENOMS, sumDenoms } from './cashDenoms.js';
 
 async function readJson(res) {
@@ -91,7 +91,7 @@ export default function CashCountModal({
   // כל נגיעה במגירה — פתיחה, סגירה, הפקדה ומשיכה — היא אותה הרשאה בתיק
   // העובד. עד היום הסינון חל רק על פתיחה וסגירה, ובהפקדה הופיעו כל העובדים.
   const selectableEmployees = useMemo(
-    () => (employees || []).filter((e) => e.is_active !== false && isWallStaff(e) && e.can_operate_cash === true),
+    () => employeesFor(employees, canOperateCash),
     [employees]
   );
 

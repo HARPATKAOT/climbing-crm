@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Award, RefreshCw, ShieldAlert } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
+import { canConductSafetyTest, employeesFor } from '../../utils/operationalEmployees.js';
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -36,7 +37,7 @@ export default function SafetyTestQueue({ employees = [], onDone, refreshKey = 0
   // נטען מחדש אחרי כל כניסה חדשה — מי שנכנס עכשיו בלי מבחן צריך להופיע מיד.
   useEffect(() => { load(); }, [refreshKey]);
 
-  const examiners = employees.filter((e) => e.is_active !== false);
+  const examiners = employeesFor(employees, canConductSafetyTest);
 
   const sign = async (row) => {
     const examinerId = examinerByStudent[row.student_id] || examiners[0]?.id;

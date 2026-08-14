@@ -7,6 +7,7 @@ import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
   fetchRoleCatalog, roleLabelOf,
 } from '../utils/staffRoles.js';
+import { canConductSafetyTest, employeesFor } from '../utils/operationalEmployees.js';
 import AppSelect from './AppSelect.jsx';
 
 /** התוויות העדכניות של „מדריך” ו„עוזר מדריך”, שניתנות לשינוי בקטלוג. */
@@ -637,11 +638,24 @@ function SafetyPill({ safety, onClick, size: box = 24 }) {
  * הבוחן היא חובה — המבחן נרשם בשמו, בדיוק כמו בתיק הלקוח.
  */
 function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, onSaved, onClose }) {
-  const [examinerId, setExaminerId] = useState(defaultExaminerId || employees[0]?.id || '');
+  const eligibleExaminers = useMemo(
+    () => employeesFor(employees, canConductSafetyTest),
+    [employees]
+  );
+  const defaultEligibleId = eligibleExaminers.some((employee) => employee.id === defaultExaminerId)
+    ? defaultExaminerId
+    : eligibleExaminers[0]?.id || '';
+  const [examinerId, setExaminerId] = useState(defaultEligibleId);
   const [passed, setPassed] = useState(true);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!eligibleExaminers.some((employee) => employee.id === examinerId)) {
+      setExaminerId(defaultEligibleId);
+    }
+  }, [defaultEligibleId, eligibleExaminers, examinerId]);
 
   const save = async () => {
     if (!examinerId) {
@@ -651,7 +665,7 @@ function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, on
     setSaving(true);
     setError('');
     try {
-      const examiner = employees.find((e) => e.id === examinerId);
+      const examiner = eligibleExaminers.find((e) => e.id === examinerId);
       const res = await fetch('/api/level-tests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -707,10 +721,15 @@ function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, on
               onChange={(e) => setExaminerId(e.target.value)}
             >
               <option value="">בחרו מדריך</option>
-              {employees.map((emp) => (
+              {eligibleExaminers.map((emp) => (
                 <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
             </AppSelect>
+            {eligibleExaminers.length === 0 && (
+              <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 6 }}>
+                אין עובד שמורשה להעביר מבחן אבטחה — סמנו את ההרשאה בתיק העובד.
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 8 }}>

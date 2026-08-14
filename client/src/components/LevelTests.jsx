@@ -11,6 +11,11 @@ import {
 import { studentInGroup } from '../utils/studentGroups.js';
 import AppSelect from './AppSelect.jsx';
 import { useAuth } from './AuthGate.jsx';
+import {
+  canConductSafetyTest,
+  employeesFor,
+  isActiveWallEmployee,
+} from '../utils/operationalEmployees.js';
 
 const ROUTE_TYPES = Object.values(ROUTE_STYLE);
 
@@ -60,11 +65,20 @@ function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS,
   const [testType, setTestType]       = useState(initial?.test_type || allowedKinds[0]?.key || 'level');
   const [level, setLevel]             = useState(initial?.level || initial?.grade || '5A');
   const [routeStyle, setRouteStyle]   = useState(initial?.route_style || initial?.route_type || 'top-rope');
+  const eligibleExaminers = useMemo(
+    () => employeesFor(
+      employees,
+      testType === 'security' ? canConductSafetyTest : isActiveWallEmployee
+    ),
+    [employees, testType]
+  );
+  const initialExaminerId = initial?.examinerId
+    || eligibleExaminers.find((employee) => employee.name === initial?.examiner)?.id
+    || '';
   const [examinerId, setExaminerId]   = useState(
-    initial?.examinerId
-      || employees.find((e) => e.name === initial?.examiner)?.id
-      || employees[0]?.id
-      || ''
+    eligibleExaminers.some((employee) => employee.id === initialExaminerId)
+      ? initialExaminerId
+      : eligibleExaminers[0]?.id || ''
   );
   const [date, setDate]               = useState(initial?.date || new Date().toISOString().split('T')[0]);
   const [status, setStatus]           = useState(initial?.status || (initial?.passed === false ? 'failed' : 'passed'));
@@ -72,8 +86,10 @@ function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS,
   const [notes, setNotes]             = useState(initial?.notes || '');
 
   useEffect(() => {
-    if (!examinerId && employees[0]?.id) setExaminerId(employees[0].id);
-  }, [employees, examinerId]);
+    if (!eligibleExaminers.some((employee) => employee.id === examinerId)) {
+      setExaminerId(eligibleExaminers[0]?.id || '');
+    }
+  }, [eligibleExaminers, examinerId]);
 
   const handleSubmit = e => {
     e.preventDefault();
@@ -83,7 +99,7 @@ function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS,
       return;
     }
     const student = students.find(s => s.id === studentId);
-    const examinerName = employees.find(emp => emp.id === examinerId)?.name || null;
+    const examinerName = eligibleExaminers.find(emp => emp.id === examinerId)?.name || null;
     onSave({
       studentId,
       studentName: student?.name,
@@ -206,11 +222,16 @@ function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS,
           <label className="form-label">בוחן *</label>
           <AppSelect className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
             <option value="">בחר בוחן...</option>
-            {employees.length === 0 && <option value="" disabled>אין עובדים במערכת</option>}
-            {employees.map(emp => (
+            {eligibleExaminers.length === 0 && <option value="" disabled>אין עובד שמוסמך למבחן הזה</option>}
+            {eligibleExaminers.map(emp => (
               <option key={emp.id} value={emp.id}>{emp.name}</option>
             ))}
           </AppSelect>
+          {testType === 'security' && eligibleExaminers.length === 0 && (
+            <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 6 }}>
+              סמנו בתיק העובד הרשאה להעברת מבחני אבטחה.
+            </div>
+          )}
         </div>
 
         <div className="form-grid-2">
