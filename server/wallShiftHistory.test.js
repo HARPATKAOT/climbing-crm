@@ -19,10 +19,13 @@ test('מרכז פתיחה, קופה, בדיקות וסגירה ברשומת מש
     cashSessions: [{
       id: 'cash-1', status: 'closed', opened_at: '2026-08-13T05:10:00.000Z',
       closed_at: '2026-08-13T13:50:00.000Z', opened_by_id: 'e1', opened_by_name: 'פותח המשמרת',
-      closed_by_id: 'e3', closed_by_name: 'סוגר המשמרת', discrepancy: -5,
+      closed_by_id: 'e3', closed_by_name: 'סוגר המשמרת', opening_float: 170,
+      closing_actual: 215, expected_at_close: 220, discrepancy: -5,
     }],
     cashLedger: [
       { session_id: 'cash-1', action_type: 'open', notes: 'סכום פתיחה נספר' },
+      { id: 'sale-1', session_id: 'cash-1', action_type: 'sale_cash', amount: 50, expected_after: 220, employee_name: 'פותח המשמרת', created_at: '2026-08-13T07:00:00.000Z' },
+      { id: 'empty-1', session_id: 'cash-1', action_type: 'empty', amount: 5, expected_after: 215, employee_name: 'סוגר המשמרת', notes: 'העברה לכספת', created_at: '2026-08-13T12:00:00.000Z' },
       { session_id: 'cash-1', action_type: 'close', notes: 'חסר מטבע' },
     ],
     safetyInspections: [{
@@ -38,6 +41,13 @@ test('מרכז פתיחה, קופה, בדיקות וסגירה ברשומת מש
   assert.equal(entry.opening_note, 'הדלפק לא מסודר');
   assert.equal(entry.cash.opening_notes, 'סכום פתיחה נספר');
   assert.equal(entry.cash.closing_notes, 'חסר מטבע');
+  assert.equal(entry.cash.opening_amount, 170);
+  assert.equal(entry.cash.closing_amount, 215);
+  assert.equal(entry.cash.expected_at_close, 220);
+  assert.deepEqual(entry.cash.movements.map((movement) => [movement.action_type, movement.amount, movement.direction]), [
+    ['sale_cash', 50, 'in'],
+    ['empty', 5, 'out'],
+  ]);
   assert.equal(entry.safety[0].tester_name, 'בודקת בטיחות');
   assert.equal(entry.safety[0].notes, 'חבל 3 דורש מעקב');
 });

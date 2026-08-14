@@ -40,6 +40,40 @@ function ledgerNote(ledger, sessionId, action) {
   return ledger.find((row) => row.session_id === sessionId && row.action_type === action)?.notes || '';
 }
 
+const CASH_MOVEMENT_LABELS = {
+  fill: 'הוספת מזומן',
+  empty: 'הוצאת מזומן',
+  reset: 'איפוס קופה',
+  sale_cash: 'מכירה במזומן',
+  refund_cash: 'זיכוי במזומן',
+};
+
+function cashMovementRows(ledger, sessionId) {
+  return ledger
+    .filter((row) => row.session_id === sessionId && CASH_MOVEMENT_LABELS[row.action_type])
+    .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+    .map((row) => {
+      const amount = Number(row.amount) || 0;
+      const direction = row.action_type === 'reset'
+        ? 'reset'
+        : ['empty', 'refund_cash'].includes(row.action_type) ? 'out' : 'in';
+      return {
+        id: row.id,
+        action_type: row.action_type,
+        label: CASH_MOVEMENT_LABELS[row.action_type],
+        amount,
+        direction,
+        balance_after: row.action_type === 'reset'
+          ? (row.actual_after ?? amount)
+          : (row.expected_after ?? null),
+        performed_at: row.created_at || null,
+        employee_id: row.employee_id || null,
+        employee_name: row.employee_name || 'לא תועד',
+        notes: row.notes || '',
+      };
+    });
+}
+
 export function buildWallShiftHistory({
   shiftHours = [],
   cashSessions = [],
@@ -141,11 +175,20 @@ export function buildWallShiftHistory({
         opened_by_id: cash.opened_by_id || null,
         opened_by_name: cash.opened_by_name || employeeName(byId, cash.opened_by_id),
         opening_notes: cash.opening_notes || ledgerNote(cashLedger, cash.id, 'open'),
+        opening_amount: cash.opening_float
+          ?? cashLedger.find((row) => row.session_id === cash.id && row.action_type === 'open')?.amount
+          ?? null,
         closed_at: cash.closed_at || null,
         closed_by_id: cash.closed_by_id || null,
         closed_by_name: cash.closed_by_name || (cash.closed_by_id ? employeeName(byId, cash.closed_by_id) : ''),
         closing_notes: cash.closing_notes || ledgerNote(cashLedger, cash.id, 'close'),
+        closing_amount: cash.closing_actual
+          ?? cashLedger.find((row) => row.session_id === cash.id && row.action_type === 'close')?.actual_after
+          ?? cashLedger.find((row) => row.session_id === cash.id && row.action_type === 'close')?.amount
+          ?? null,
+        expected_at_close: cash.expected_at_close ?? null,
         discrepancy: cash.discrepancy ?? null,
+        movements: cashMovementRows(cashLedger, cash.id),
       } : null,
       safety: inspections,
     };
