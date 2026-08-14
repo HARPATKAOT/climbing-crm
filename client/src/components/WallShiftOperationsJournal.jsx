@@ -26,11 +26,11 @@ function timeLabel(value) {
 function DetailSection({ icon: Icon, title, children, accent = 'var(--blue)', order = 0 }) {
   return (
     <section style={{
-      padding: 14, borderRadius: 10, border: '1px solid var(--border)',
+      padding: 10, borderRadius: 8, border: '1px solid var(--border)',
       background: 'var(--bg-input)', minWidth: 0, order,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontWeight: 800, fontSize: 13 }}>
-        <Icon size={15} style={{ color: accent }} /> {title}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7, fontWeight: 800, fontSize: 12 }}>
+        <Icon size={14} style={{ color: accent, flexShrink: 0 }} /> {title}
       </div>
       {children}
     </section>
@@ -38,11 +38,11 @@ function DetailSection({ icon: Icon, title, children, accent = 'var(--blue)', or
 }
 
 function Note({ children }) {
-  if (!children) return <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>ללא הערה</div>;
+  if (!children) return <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>ללא הערה</div>;
   return (
     <div style={{
-      fontSize: 12, lineHeight: 1.55, marginTop: 7, padding: '7px 9px',
-      borderRadius: 7, background: 'rgba(255,255,255,0.035)', color: 'var(--text-2)',
+      fontSize: 11, lineHeight: 1.4, marginTop: 5, padding: '5px 7px',
+      borderRadius: 6, background: 'rgba(255,255,255,0.035)', color: 'var(--text-2)',
       whiteSpace: 'pre-wrap',
     }}>
       {children}
@@ -73,7 +73,7 @@ export default function WallShiftOperationsJournal() {
   }, [month]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div className="card card-p" style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontWeight: 800, fontSize: 14 }}>יומן פתיחות וסגירות קיר</div>
@@ -102,12 +102,12 @@ export default function WallShiftOperationsJournal() {
       {!loading && !error && entries.map((entry) => (
         <article key={entry.id} className="card" style={{ overflow: 'hidden' }}>
           <header style={{
-            padding: '13px 16px', borderBottom: '1px solid var(--border)',
+            padding: '10px 13px', borderBottom: '1px solid var(--border)',
             display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap',
           }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 900 }}>{dateLabel(entry.date)}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>
+              <div style={{ fontSize: 14, fontWeight: 900 }}>{dateLabel(entry.date)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
                 {timeLabel(entry.opened_at)}–{entry.closed_at ? timeLabel(entry.closed_at) : 'עכשיו'}
                 {entry.staff?.length ? ` · ${entry.staff.length} אנשי צוות במשמרת` : ''}
               </div>
@@ -117,11 +117,10 @@ export default function WallShiftOperationsJournal() {
             </span>
           </header>
 
-          <div style={{ overflowX: 'auto' }}>
-            <div style={{ padding: 14, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(230px, 1fr))', gap: 10, minWidth: 1000 }}>
+          <div style={{ padding: 10, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
             <DetailSection icon={LogIn} title="פתיחת משמרת" accent="#38BDF8" order={1}>
-              <div style={{ fontSize: 12 }}><strong>{entry.opener?.name || 'לא תועד'}</strong> · {timeLabel(entry.opened_at)}</div>
-              <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11 }}><strong>{entry.opener?.name || 'לא תועד'}</strong> · {timeLabel(entry.opened_at)}</div>
+              <div style={{ marginTop: 6 }}>
                 {entry.place_orderly === true && <span className="badge badge-green">המקום דווח כמסודר</span>}
                 {entry.place_orderly === false && <span className="badge badge-danger">המקום דווח כלא מסודר</span>}
                 {entry.place_orderly == null && <span className="badge">מצב הסדר לא תועד</span>}
@@ -131,18 +130,18 @@ export default function WallShiftOperationsJournal() {
 
             <DetailSection icon={ClipboardCheck} title="בדיקות בטיחות" accent="#A78BFA" order={3}>
               {entry.safety?.length ? entry.safety.map((check) => (
-                <div key={check.id} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+                <div key={check.id} style={{ paddingBottom: 6, marginBottom: 6, borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 11 }}>
                     <strong>{check.title}</strong>
                     <span style={{ color: check.status === 'תקין' ? 'var(--green)' : 'var(--amber)', fontWeight: 700 }}>{check.status}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
                     {check.tester_name} · {timeLabel(check.performed_at)}
                   </div>
                   <Note>{check.notes}</Note>
                 </div>
               )) : (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
                   <AlertTriangle size={13} /> לא תועדו בדיקות במשמרת
                 </div>
               )}
@@ -151,11 +150,11 @@ export default function WallShiftOperationsJournal() {
             <DetailSection icon={Banknote} title="קופה" accent="#34D399" order={2}>
               {entry.cash ? (
                 <>
-                  <div style={{ fontSize: 12 }}>
+                  <div style={{ fontSize: 11 }}>
                     <strong>פתיחה:</strong> {entry.cash.opened_by_name || 'לא תועד'} · {timeLabel(entry.cash.opened_at)}
                   </div>
                   <Note>{entry.cash.opening_notes}</Note>
-                  <div style={{ fontSize: 12, marginTop: 10 }}>
+                  <div style={{ fontSize: 11, marginTop: 7 }}>
                     <strong>סגירה:</strong>{' '}
                     {entry.cash.closed_at
                       ? `${entry.cash.closed_by_name || 'לא תועד'} · ${timeLabel(entry.cash.closed_at)}`
@@ -169,14 +168,14 @@ export default function WallShiftOperationsJournal() {
                     </div>
                   )}
                 </>
-              ) : <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא נמצאה פתיחת קופה במשמרת</div>}
+              ) : <div style={{ fontSize: 11, color: 'var(--text-3)' }}>לא נמצאה פתיחת קופה במשמרת</div>}
             </DetailSection>
 
             <DetailSection icon={LogOut} title="סגירת משמרת" accent="#FB7185" order={4}>
               {entry.closed_at ? (
                 <>
-                  <div style={{ fontSize: 12 }}><strong>{entry.closer?.name || 'לא תועד'}</strong> · {timeLabel(entry.closed_at)}</div>
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 11 }}><strong>{entry.closer?.name || 'לא תועד'}</strong> · {timeLabel(entry.closed_at)}</div>
+                  <div style={{ marginTop: 6 }}>
                     {entry.close_checklist_confirmed
                       ? <span className="badge badge-green"><CheckCircle2 size={11} /> צ׳ק־ליסט סגירה הושלם</span>
                       : <span className="badge">צ׳ק־ליסט לא תועד</span>}
@@ -184,16 +183,15 @@ export default function WallShiftOperationsJournal() {
                   <Note>{entry.closing_note}</Note>
                 </>
               ) : (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
                   <Clock3 size={13} /> המשמרת עדיין פתוחה
                 </div>
               )}
             </DetailSection>
-            </div>
           </div>
 
           {entry.staff?.length > 0 && (
-            <footer style={{ borderTop: '1px solid var(--border)', padding: '9px 15px', display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-3)', flexWrap: 'wrap' }}>
+            <footer style={{ borderTop: '1px solid var(--border)', padding: '7px 12px', display: 'flex', gap: 7, alignItems: 'center', fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap' }}>
               <Users size={13} /> צוות במשמרת:
               {entry.staff.map((person) => <span key={person.employee_id} className="badge">{person.name}</span>)}
             </footer>
