@@ -11,7 +11,8 @@ const LEGEND = [
 
 function cycleMode(current, direction) {
   const index = Math.max(0, MODE_ORDER.indexOf(current || 'none'));
-  return MODE_ORDER[(index + direction + MODE_ORDER.length) % MODE_ORDER.length];
+  const nextIndex = Math.min(MODE_ORDER.length - 1, Math.max(0, index + direction));
+  return MODE_ORDER[nextIndex];
 }
 
 export default function GroupPlacementEditor({
@@ -30,7 +31,7 @@ export default function GroupPlacementEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontSize: 11.5, color: 'var(--text-2)', lineHeight: 1.55 }}>
-        לחצו על קבוצה כדי לעבור בין המתנה, מקום שמור ורשום. לחיצה רביעית מבטלת.
+        לחיצה שמאלית מקדמת: המתנה, מקום שמור, רשום. לחיצה ימנית חוזרת שלב עד לביטול.
       </div>
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
         {LEGEND.map(({ key, label, icon: Icon, color }) => (
