@@ -39,6 +39,7 @@ export default function GroupPickerCards({
   activeId = null,
   onReverseToggle = null,
   onModeChange = null,
+  fitWidth = false,
 }) {
   const selected = useMemo(
     () => new Set(selectedIds.map((id) => String(id))),
@@ -86,14 +87,24 @@ export default function GroupPickerCards({
   const hourH = 60 * scale;
 
   return (
-    <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: maxHeight || 'none', opacity: disabled ? 0.6 : 1 }}>
-      <div style={{ minWidth: GUTTER_W + board.days.length * minColWidth, paddingBottom: HOUR_LABEL_H }}>
+    <div data-testid="group-picker-board" style={{
+      overflowX: fitWidth ? 'hidden' : 'auto',
+      overflowY: fitWidth ? 'hidden' : 'auto',
+      maxHeight: fitWidth ? 'none' : (maxHeight || 'none'),
+      width: '100%',
+      opacity: disabled ? 0.6 : 1,
+    }}>
+      <div style={{
+        width: '100%',
+        minWidth: fitWidth ? 0 : GUTTER_W + board.days.length * minColWidth,
+        paddingBottom: HOUR_LABEL_H,
+      }}>
         {/* Day headers */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
           <div style={{ width: GUTTER_W, flexShrink: 0 }} />
           {board.days.map(([day], pos) => (
             <div key={day} style={{
-              flex: 1, padding: '4px 2px', fontSize: scale >= 1 ? 12 : 10, fontWeight: 600,
+              flex: 1, minWidth: 0, padding: '4px 1px', fontSize: scale >= 1 ? 12 : 10, fontWeight: 600,
               color: 'var(--text-2)', textAlign: 'center',
               borderLeft: pos > 0 ? '1px solid var(--border)' : 'none',
             }}>
@@ -117,7 +128,7 @@ export default function GroupPickerCards({
 
           {board.days.map(([day, dayGroups]) => (
             <div key={day} style={{
-              flex: 1, position: 'relative', height: gridH,
+              flex: 1, minWidth: 0, position: 'relative', height: gridH, overflow: 'hidden',
               borderLeft: '1px solid var(--border)',
             }}>
               {board.hours.map((h, i) => (
@@ -149,6 +160,7 @@ export default function GroupPickerCards({
                   onToggle={() => onToggle(String(g.id))}
                   onReverseToggle={onReverseToggle ? () => onReverseToggle(String(g.id)) : null}
                   onModeChange={onModeChange ? (mode) => onModeChange(String(g.id), mode) : null}
+                  compact={fitWidth}
                 />
               ))}
             </div>
@@ -166,7 +178,7 @@ const PLACEMENT_BADGES = {
   fixed: { label: 'רשום', title: 'שיבוץ קבוע', color: '#34D399', icon: ShieldCheck },
 };
 
-function MiniBlock({ group, top, height, checked, mode, active, disabled, onToggle, onReverseToggle, onModeChange, scale = 0.75 }) {
+function MiniBlock({ group, top, height, checked, mode, active, disabled, onToggle, onReverseToggle, onModeChange, compact = false, scale = 0.75 }) {
   const c = groupColor(group);
   const label = shortGroupLabel(group.name) || group.name;
   // A roomier board carries a roomier caption; the tiny one stays at 9px.
@@ -179,7 +191,7 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
     background: c.bg,
     border: `1.5px solid ${mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].color : (checked ? c.text : c.border)}`,
     borderRadius: 5,
-    padding: '3px 4px',
+    padding: compact ? '2px' : '3px 4px',
     cursor: disabled ? 'default' : 'pointer',
     overflow: 'hidden',
     boxShadow: active
@@ -201,7 +213,15 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
       {label}
     </span>
     {onModeChange ? (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 2, direction: 'rtl' }}>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        <span style={{
+          height: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontSize: 8, lineHeight: '10px', fontWeight: 900,
+          color: mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].color : 'var(--text-3)',
+        }}>
+          {mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].label : 'ללא שיבוץ'}
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, direction: 'rtl' }}>
         {Object.entries(PLACEMENT_BADGES).map(([key, item]) => {
           const Icon = item.icon;
           const selectedMode = mode === key;
@@ -218,7 +238,7 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
                 onModeChange(selectedMode ? 'none' : key);
               }}
               style={{
-                minWidth: 0, width: 22, height: 20, padding: 0, borderRadius: 4,
+                minWidth: 0, width: compact ? 18 : 22, height: compact ? 17 : 20, padding: 0, borderRadius: 4,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 border: `1px solid ${selectedMode ? item.color : 'rgba(255,255,255,0.18)'}`,
                 color: selectedMode ? '#08111F' : item.color,
@@ -226,15 +246,11 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
                 cursor: disabled ? 'default' : 'pointer',
               }}
             >
-              <Icon size={12} strokeWidth={2.4} />
+              <Icon size={compact ? 10 : 12} strokeWidth={2.4} />
             </button>
           );
         })}
-        {mode && PLACEMENT_BADGES[mode] && (
-          <span style={{ fontSize: 8.5, fontWeight: 900, color: PLACEMENT_BADGES[mode].color, whiteSpace: 'nowrap' }}>
-            {PLACEMENT_BADGES[mode].label}
-          </span>
-        )}
+        </span>
       </span>
     ) : mode && PLACEMENT_BADGES[mode] ? (
       <span style={{

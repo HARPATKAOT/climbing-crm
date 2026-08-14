@@ -40,9 +40,9 @@ export default function GroupPlacementEditor({
           onToggle={() => {}}
           onModeChange={change}
           disabled={saving}
-          maxHeight={430}
-          minColWidth={92}
+          minColWidth={0}
           fitHeight={390}
+          fitWidth
         />
       </div>
       {error && <div style={{ color: 'var(--red)', fontSize: 12 }}>{error}</div>}
