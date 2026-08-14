@@ -552,6 +552,7 @@ import { countEnrolled } from './groupCapacity.js';
 import { enrichStudentsWithGroupIds, studentGroupIds, studentInGroup } from './studentGroups.js';
 import {
   HOLD_COLLECTION,
+  GROUP_PLACEMENT_MODE,
   INTRO_COLLECTION,
   WAITLIST_COLLECTION,
   REGISTRATION_STATUS,
@@ -564,6 +565,7 @@ import {
   continueAfterIntro,
   createIntroBooking,
   joinGroupWaitlist,
+  leaveGroupWaitlist,
   lifecycleSnapshotForStudent,
   markPlacementRegistered,
   migrationDryRun,
@@ -572,6 +574,7 @@ import {
   requeueUndeliveredWaitlistOffer,
   releasePlacementHold,
   runRegistrationLifecycle,
+  setStudentGroupPlacement,
   waitlistEntriesForGroup,
 } from './registrationLifecycle.js';
 import {
@@ -1452,6 +1455,64 @@ app.get('/api/students/:id/registration-lifecycle', (req, res) => {
   return res.json(lifecycleSnapshotForStudent(db, student.id));
 });
 
+app.put('/api/students/:id/group-placement', async (req, res) => {
+  if (req.crmUser?.role === 'staff' && !accessAtLeast(req.crmUser, 'classes', 'edit')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת עריכת חוגים לשינוי שיבוץ' });
+  }
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const groupsBefore = studentGroupIds(db.withStudentRelation(student));
+  const mode = String(req.body?.mode || GROUP_PLACEMENT_MODE.NONE);
+  const groupIds = [...new Set((Array.isArray(req.body?.groupIds) ? req.body.groupIds : [])
+    .map((id) => String(id || '').trim()).filter(Boolean))];
+  const groups = groupIds.map((id) => db.getOne('groups', id));
+  if (groups.some((group) => !group)) {
+    return res.status(404).json({ error: 'אחת הקבוצות שנבחרו אינה קיימת' });
+  }
+  const parent = student.parentId ? db.getOne('parents', student.parentId) : null;
+  let result;
+  try {
+    result = await setStudentGroupPlacement({
+      db,
+      persist: persistCore,
+      student,
+      parent,
+      groups,
+      mode,
+      source: 'crm',
+    });
+  } catch (error) {
+    console.error('group placement update failed:', error.message);
+    return res.status(error.code === 'durable_write_failed' ? 503 : 500).json({
+      error: error.code === 'durable_write_failed'
+        ? 'השיבוץ לא נשמר במסד הנתונים. יש לרענן ולנסות שוב.'
+        : 'שמירת השיבוץ נכשלה',
+    });
+  }
+  if (!result.ok) {
+    const errors = {
+      invalid_placement_mode: 'סוג השיבוץ אינו תקין',
+      group_required: 'יש לבחור לפחות קבוצה אחת',
+      capacity_unknown: 'לא הוגדרה מכסה לקבוצה ולכן אי אפשר לשמור בה מקום',
+      full: 'אין מקום פנוי באחת הקבוצות שנבחרו',
+      student_already_holding: 'למתאמן כבר קיים מקום שמור בקבוצה אחרת',
+    };
+    return res.status(409).json({ ...result, error: errors[result.reason] || 'שמירת השיבוץ נכשלה' });
+  }
+  const updated = db.withStudentRelation(db.getOne('students', student.id));
+  notifyGroupMembershipDiff({
+    student: updated,
+    before: groupsBefore,
+    after: studentGroupIds(updated),
+  }).catch((err) => console.error('group placement notify failed:', err.message));
+  touchGoogleContacts();
+  return res.json({
+    ...result,
+    student: updated,
+    lifecycle: lifecycleSnapshotForStudent(db, student.id),
+  });
+});
+
 app.get('/api/groups/:id/waitlist', requireOwner, (req, res) => {
   const group = db.getOne('groups', req.params.id);
   if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -1469,6 +1530,19 @@ app.post('/api/groups/:id/waitlist', requireOwner, async (req, res) => {
   const parent = student.parentId ? db.getOne('parents', student.parentId) : null;
   const result = await joinGroupWaitlist({ db, persist: persistCore, group, student, parent, source: 'crm' });
   return res.status(result.ok ? 201 : 409).json(result);
+});
+
+app.delete('/api/groups/:id/waitlist/:studentId', requireOwner, async (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  const student = db.getOne('students', req.params.studentId);
+  if (!group || !student) return res.status(404).json({ error: 'Group or student not found' });
+  try {
+    const result = await leaveGroupWaitlist({ db, persist: persistCore, group, student, source: 'crm' });
+    return res.json(result);
+  } catch (error) {
+    console.error('waitlist removal failed:', error.message);
+    return res.status(error.code === 'durable_write_failed' ? 503 : 500).json({ error: 'ההסרה מרשימת ההמתנה לא נשמרה' });
+  }
 });
 
 app.post('/api/groups/:id/waitlist/offer-next', requireOwner, async (req, res) => {
