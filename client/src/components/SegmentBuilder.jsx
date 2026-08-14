@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Users, Save } from 'lucide-react';
-import { STATUSES } from '../mockData.js';
+import { STATUSES, STATUS_PROGRESS_ORDER } from '../mockData.js';
 import { getGroupDays } from '../scheduleUtils.js';
 import { EMPTY_FILTERS } from './segmentFilters.js';
 import AppSelect from './AppSelect.jsx';
@@ -222,18 +222,30 @@ export default function SegmentBuilder({
       </div>
 
       <div>
-        <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>סטטוס</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {Object.entries(STATUSES).map(([key, val]) => (
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 7 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-2)' }}>סטטוס</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            לפי סדר ההתקדמות · אפשר לבחור כמה
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {STATUS_PROGRESS_ORDER.filter((key) => STATUSES[key]).map((key) => {
+            const val = STATUSES[key];
+            const isSelected = (f.statuses || []).includes(key);
+            return (
             <button
               key={key}
               type="button"
-              className={`btn btn-xs ${(f.statuses || []).includes(key) ? 'btn-primary' : 'btn-ghost'}`}
+              className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ justifyContent: 'flex-start', gap: 8, width: '100%', minHeight: 36 }}
               onClick={() => toggleInArray('statuses', key)}
+              aria-pressed={isSelected}
             >
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: val.color, flexShrink: 0 }} />
               {val.label || key}
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 

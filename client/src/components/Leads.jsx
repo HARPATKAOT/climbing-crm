@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
-import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS, DAYS_FULL } from '../mockData.js';
+import { STATUSES, STATUS_PROGRESS_ORDER, LEAD_SOURCES, LEAD_SEGMENTS, DAYS_FULL } from '../mockData.js';
 import { icountClientUrl } from '../utils/icountLinks.js';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
@@ -659,7 +659,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const showFamilyProfile = profileMode === 'parent' || profileMode === 'combined' || parentOnly;
   const showStudentProfile = !parentOnly && (profileMode === 'student' || profileMode === 'combined');
   const parentArchived = isArchivedParent(parent);
-  const statusKeys = Object.keys(STATUSES);
+  const statusKeys = STATUS_PROGRESS_ORDER.filter((key) => STATUSES[key]);
   const navigate = useNavigate();
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([

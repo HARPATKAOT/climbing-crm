@@ -16,6 +16,24 @@ export const STATUSES = {
   archived:         { label: 'ארכיון', badge: 'badge-gray',   color: '#5A6380' },
 };
 
+// The customer journey has one deliberate order everywhere it is presented.
+// Keeping the order separate from the object makes filters and pickers immune
+// to future metadata edits or alphabetic sorting.
+export const STATUS_PROGRESS_ORDER = [
+  'lead_new',
+  'details_completed',
+  'health_signed',
+  'pending_signup',
+  'awaiting_parent_confirmation',
+  'awaiting_centre_confirmation',
+  'intro_scheduled',
+  'intro_paid',
+  'registered',
+  'past_registered',
+  'waitlist',
+  'archived',
+];
+
 export const DAYS_HEB = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳'];
 export const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי'];
 
