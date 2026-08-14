@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, Clock3,
-  LogIn, LogOut, Users,
+  Users,
 } from 'lucide-react';
 
 function currentMonth() {
@@ -47,6 +47,94 @@ function Note({ children }) {
     }}>
       {children}
     </div>
+  );
+}
+
+function moneyLabel(value) {
+  if (value == null || value === '') return 'לא תועד';
+  return `₪${Number(value).toLocaleString('he-IL', { maximumFractionDigits: 2 })}`;
+}
+
+function summarizeCashMovements(movements = []) {
+  const rows = [];
+  const grouped = new Map();
+  movements.forEach((movement) => {
+    if (['sale_cash', 'refund_cash'].includes(movement.action_type)) {
+      const current = grouped.get(movement.action_type) || {
+        ...movement, amount: 0, count: 0, notes: '', aggregated: true,
+      };
+      current.amount += Number(movement.amount) || 0;
+      current.count += 1;
+      grouped.set(movement.action_type, current);
+      return;
+    }
+    rows.push({ ...movement, count: 1 });
+  });
+  return [...rows, ...grouped.values()]
+    .sort((a, b) => String(a.performed_at || '').localeCompare(String(b.performed_at || '')));
+}
+
+function CashDetails({ cash }) {
+  const movements = summarizeCashMovements(cash.movements);
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, fontSize: 11 }}>
+        <span><strong>פתיחת קופה:</strong> {cash.opened_by_name || 'לא תועד'} · {timeLabel(cash.opened_at)}</span>
+        <strong style={{ color: 'var(--green)', whiteSpace: 'nowrap' }}>{moneyLabel(cash.opening_amount)}</strong>
+      </div>
+      {cash.opening_notes && <Note>{cash.opening_notes}</Note>}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, fontSize: 11, marginTop: 7 }}>
+        <span>
+          <strong>סגירת קופה:</strong>{' '}
+          {cash.closed_at ? `${cash.closed_by_name || 'לא תועד'} · ${timeLabel(cash.closed_at)}` : 'הקופה עדיין פתוחה'}
+        </span>
+        <strong style={{ color: 'var(--blue)', whiteSpace: 'nowrap' }}>
+          {cash.closed_at ? moneyLabel(cash.closing_amount) : '—'}
+        </strong>
+      </div>
+      {cash.closed_at && cash.expected_at_close != null && (
+        <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
+          סכום צפוי בסגירה: {moneyLabel(cash.expected_at_close)}
+        </div>
+      )}
+      {cash.closing_notes && <Note>{cash.closing_notes}</Note>}
+
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: 7, paddingTop: 6 }}>
+        <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-2)', marginBottom: 4 }}>תנועות מזומן במשמרת</div>
+        {movements.length ? movements.map((movement) => {
+          const isOut = movement.direction === 'out';
+          const isReset = movement.direction === 'reset';
+          const amount = isReset ? movement.balance_after : movement.amount;
+          return (
+            <div key={`${movement.action_type}-${movement.id || movement.performed_at}`} style={{ marginTop: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10 }}>
+                <span>
+                  {movement.label}{movement.aggregated ? ` (${movement.count})` : ''}
+                  {!movement.aggregated && movement.performed_at ? ` · ${timeLabel(movement.performed_at)}` : ''}
+                </span>
+                <strong style={{ color: isReset ? 'var(--blue)' : isOut ? 'var(--danger)' : 'var(--green)', whiteSpace: 'nowrap' }}>
+                  {isReset ? '' : isOut ? '−' : '+'}{moneyLabel(amount)}
+                </strong>
+              </div>
+              {!movement.aggregated && (movement.employee_name || movement.notes) && (
+                <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 1 }}>
+                  {[movement.employee_name, movement.notes].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+          );
+        }) : (
+          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>לא נרשמו תנועות מזומן נוספות.</div>
+        )}
+      </div>
+
+      {cash.discrepancy != null && Number(cash.discrepancy) !== 0 && (
+        <div style={{ color: 'var(--amber)', fontSize: 10, fontWeight: 700, marginTop: 6 }}>
+          {Number(cash.discrepancy) < 0 ? 'חסר בקופה' : 'עודף בקופה'}: {moneyLabel(Math.abs(Number(cash.discrepancy)))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -117,15 +205,33 @@ export default function WallShiftOperationsJournal() {
             </span>
           </header>
 
-          <div style={{ padding: 10, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
-            <DetailSection icon={LogIn} title="פתיחת משמרת" accent="#38BDF8" order={1}>
-              <div style={{ fontSize: 11 }}><strong>{entry.opener?.name || 'לא תועד'}</strong> · {timeLabel(entry.opened_at)}</div>
+          <div style={{ padding: 10, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+            <DetailSection icon={Clock3} title="פתיחה וסגירת משמרת" accent="#38BDF8" order={1}>
+              <div style={{ fontSize: 11 }}><strong>פתיחה:</strong> {entry.opener?.name || 'לא תועד'} · {timeLabel(entry.opened_at)}</div>
               <div style={{ marginTop: 6 }}>
                 {entry.place_orderly === true && <span className="badge badge-green">המקום דווח כמסודר</span>}
                 {entry.place_orderly === false && <span className="badge badge-danger">המקום דווח כלא מסודר</span>}
                 {entry.place_orderly == null && <span className="badge">מצב הסדר לא תועד</span>}
               </div>
-              <Note>{entry.opening_note}</Note>
+              {entry.opening_note && <Note>{entry.opening_note}</Note>}
+
+              <div style={{ borderTop: '1px solid var(--border)', marginTop: 7, paddingTop: 7 }}>
+                {entry.closed_at ? (
+                  <>
+                    <div style={{ fontSize: 11 }}><strong>סגירה:</strong> {entry.closer?.name || 'לא תועד'} · {timeLabel(entry.closed_at)}</div>
+                    <div style={{ marginTop: 6 }}>
+                      {entry.close_checklist_confirmed
+                        ? <span className="badge badge-green"><CheckCircle2 size={11} /> צ׳ק־ליסט סגירה הושלם</span>
+                        : <span className="badge">צ׳ק־ליסט לא תועד</span>}
+                    </div>
+                    {entry.closing_note && <Note>{entry.closing_note}</Note>}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <Clock3 size={13} /> המשמרת עדיין פתוחה
+                  </div>
+                )}
+              </div>
             </DetailSection>
 
             <DetailSection icon={ClipboardCheck} title="בדיקות בטיחות" accent="#A78BFA" order={3}>
@@ -138,7 +244,7 @@ export default function WallShiftOperationsJournal() {
                   <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
                     {check.tester_name} · {timeLabel(check.performed_at)}
                   </div>
-                  <Note>{check.notes}</Note>
+                  {check.notes && <Note>{check.notes}</Note>}
                 </div>
               )) : (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -148,45 +254,9 @@ export default function WallShiftOperationsJournal() {
             </DetailSection>
 
             <DetailSection icon={Banknote} title="קופה" accent="#34D399" order={2}>
-              {entry.cash ? (
-                <>
-                  <div style={{ fontSize: 11 }}>
-                    <strong>פתיחה:</strong> {entry.cash.opened_by_name || 'לא תועד'} · {timeLabel(entry.cash.opened_at)}
-                  </div>
-                  <Note>{entry.cash.opening_notes}</Note>
-                  <div style={{ fontSize: 11, marginTop: 7 }}>
-                    <strong>סגירה:</strong>{' '}
-                    {entry.cash.closed_at
-                      ? `${entry.cash.closed_by_name || 'לא תועד'} · ${timeLabel(entry.cash.closed_at)}`
-                      : 'הקופה עדיין פתוחה'}
-                  </div>
-                  {entry.cash.closed_at && <Note>{entry.cash.closing_notes}</Note>}
-                  {entry.cash.discrepancy != null && Number(entry.cash.discrepancy) !== 0 && (
-                    <div style={{ color: 'var(--amber)', fontSize: 11, fontWeight: 700, marginTop: 7 }}>
-                      {Number(entry.cash.discrepancy) < 0 ? 'חסר בקופה' : 'עודף בקופה'}: ₪
-                      {Math.abs(Number(entry.cash.discrepancy)).toLocaleString('he-IL')}
-                    </div>
-                  )}
-                </>
-              ) : <div style={{ fontSize: 11, color: 'var(--text-3)' }}>לא נמצאה פתיחת קופה במשמרת</div>}
-            </DetailSection>
-
-            <DetailSection icon={LogOut} title="סגירת משמרת" accent="#FB7185" order={4}>
-              {entry.closed_at ? (
-                <>
-                  <div style={{ fontSize: 11 }}><strong>{entry.closer?.name || 'לא תועד'}</strong> · {timeLabel(entry.closed_at)}</div>
-                  <div style={{ marginTop: 6 }}>
-                    {entry.close_checklist_confirmed
-                      ? <span className="badge badge-green"><CheckCircle2 size={11} /> צ׳ק־ליסט סגירה הושלם</span>
-                      : <span className="badge">צ׳ק־ליסט לא תועד</span>}
-                  </div>
-                  <Note>{entry.closing_note}</Note>
-                </>
-              ) : (
-                <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <Clock3 size={13} /> המשמרת עדיין פתוחה
-                </div>
-              )}
+              {entry.cash
+                ? <CashDetails cash={entry.cash} />
+                : <div style={{ fontSize: 11, color: 'var(--text-3)' }}>לא נמצאה פתיחת קופה במשמרת</div>}
             </DetailSection>
           </div>
 
