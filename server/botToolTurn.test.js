@@ -12,6 +12,7 @@ import {
   separateMultiChildGradeQuestion,
   directRestrictedEligibility,
   contradictsDirectEligibility,
+  isExplicitCentreRegistrationReport,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
@@ -297,6 +298,30 @@ test('generic squad rule gives stored returning or approved eligibility priority
   assert.match(CUSTOMER_TOOL_RULES, /בדוק קודם את הזכאות האישית ב-getFamilyCard/);
   assert.match(CUSTOMER_TOOL_RULES, /אין לומר שנדרש אישור צוות נוסף/);
   assert.doesNotMatch(CUSTOMER_TOOL_RULES, /כששואלים על הנבחרת — אמור תמיד/);
+});
+
+test('only the current message can report completed community-centre registration', async () => {
+  assert.equal(isExplicitCentreRegistrationReport('נרשמנו במתנ״ס'), true);
+  assert.equal(isExplicitCentreRegistrationReport('הוא נרשם במתנס'), true);
+  assert.equal(isExplicitCentreRegistrationReport('השלמתי את ההרשמה'), true);
+  assert.equal(isExplicitCentreRegistrationReport('בוצע התשלום על הציוד'), false);
+  assert.equal(isExplicitCentreRegistrationReport('איך נרשמים במתנ״ס?'), false);
+
+  const turn = await runCustomerToolTurn({
+    history: [
+      { role: 'user', parts: [{ text: 'נרשמנו במתנ״ס' }] },
+      { role: 'model', parts: [{ text: 'תודה, הדיווח התקבל' }] },
+    ],
+    incomingText: 'באיזה יום היא משובצת?',
+    apiKey: 'test-key',
+    callModel: scriptedModel([
+      toolCall('reportCentreRegistration', { childName: 'קרני' }),
+      textReply('קרני משובצת ביום ראשון בשעה 17:30.'),
+    ]),
+  });
+
+  assert.equal(turn.text, 'קרני משובצת ביום ראשון בשעה 17:30.');
+  assert.equal(turn.toolsUsed.includes('reportCentreRegistration'), false);
 });
 
 test('only a successful durable hold may be described as a reserved place', () => {

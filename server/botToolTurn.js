@@ -51,7 +51,7 @@ export const CUSTOMER_TOOL_RULES = [
   'אחרי קבלה לקבוצה אחת המערכת עשויה לשאול אם להשאיר את הילד ברשימות ההמתנה האחרות. כשההורה עונה במפורש, קרא ל-resolveOtherWaitlists עם ההחלטה; עד אז אל תציע לילד מקום נוסף.',
   'בחירת קבוצה לבדה אינה שומרת מקום. רק שמירת מקום קשיחה שהוחזרה מכלי מאפשרת לכתוב «המקום שמור», ובאותה הודעה חובה לציין שיש להשלים הרשמה במתנ״ס ולאשר לנו בתוך 3 ימים. שליחת קישור אינה אישור הרשמה סופי.',
   'בקשה שאין לך כלי לבצע — «תשבצו אותו לנבחרת אם תיפתח», «נשמח ליום אחר», «תעדכנו אותנו כשיהיה מקום» — אל תאמר «רשמנו לפנינו» או «רשום אצלנו». שום דבר לא נרשם. כתוב HANDOFF ואז משפט שמעביר את הבקשה לצוות, כדי שיהיה מי שמחזיק אותה.',
-  'רק כשהלקוח אומר בבירור שהשלים את ההרשמה במתנ״ס («נרשמתי», «השלמתי הרשמה») קרא ל-reportCentreRegistration עם שם הילד. «התחלנו», «נעשה», «נטפל» או כוונה עתידית אינן השלמה. אחרי דיווח ברור אמור שהדיווח התקבל לבדיקה — לא שההרשמה אושרה. אם הכלי מחזיר ציוד במצב «טרם נסגר», המשך מיד לסגירת הציוד עם הקישור שהוחזר. גם מי שיש לו ציוד מהבית חייב להיכנס ולסמן מה כבר קיים. רק אם הציוד סגור מותר לומר שאין כרגע פעולה נוספת. אל תטען שהסטטוס הפנימי בכרטיס כבר הסתנכרן.',
+  'רק כשההודעה הנוכחית של הלקוח אומרת בבירור שהרישום במתנ״ס הושלם («נרשמתי», «נרשמנו», «השלמתי הרשמה») קרא ל-reportCentreRegistration עם שם הילד. «התחלנו», «נעשה», «נטפל» או כוונה עתידית אינן השלמה. אין להסיק השלמה מהודעה ישנה בהיסטוריה, ו«בוצע התשלום» על ציוד אינו דיווח הרשמה. אחרי הצלחת הכלי, אם המתאמן כבר משובץ אצלנו, אמור: «<שם> משובץ אצלנו וקיבלנו את העדכון שנרשמתם במתנ״ס. מבחינת ההרשמה הכול מסודר». אין צורך להעמיס על הלקוח את תהליך האימות הפנימי מול המתנ״ס, אך אסור לומר שהמתנ״ס עצמו כבר אימת. אם שדה הציוד מציג «טרם נסגר», המשך מיד לסגירת הציוד עם הקישור שהוחזר.',
   'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
   `שאלה על הצהרת בריאות, הסרת אחריות או טפסים: בדוק ב-getHealthDeclarations. למי שאין ${FORM_SHORT} בתוקף — שלח את הקישור למילוי וציין את שם המתאמן. למי שיש — אמור עד מתי הוא בתוקף, בלי לשלוח קישור.`,
   `טופס בתוקף אינו חדשה ואין להזכיר אותו. אל תסיים תשובה על שעות, מחיר או כל נושא אחר במשפט כמו «${FORM_SHORT} שלכם בתוקף, אפשר להגיע» — הלקוח לא שאל, וזה מוסיף רעש. מזכירים את הטופס רק כששאלו עליו, או כשהוא חסר או פג.`,
@@ -93,6 +93,7 @@ export const CUSTOMER_TOOL_RULES = [
   'כששואלים באופן כללי על הנבחרת אפשר להסביר שקבלה של מועמד חדש דורשת אישור צוות וניסיון מתאים. כשמדובר במתאמן מזוהה או שנזכר בשמו, בדוק קודם את הזכאות האישית ב-getFamilyCard: סטטוס returning או approved במסלול המבוקש הוא אישור קיים, ולכן אין לומר שנדרש אישור צוות נוסף ויש להמשיך בתהליך ההרשמה.',
   'אם מדובר בילד שרק מתחיל לטפס — אמור במפורש שהנבחרת אינה מתאימה לו בשלב הזה, והפנה לקבוצות הרגילות. עדיף לומר את זה מראש מאשר להשאיר הורה עם ציפייה שתישבר.',
   'כשקבוצה חוזרת עם ימי_אימון, אלה כל הימים שבהם אותה קבוצה מתאמנת. חובה לציין את כולם; אין להתייחס רק לשדה יום או ליום האחרון.',
+  'כששואלים מתי החוג מתחיל, השתמש בשדה תחילת_עונת_החוגים שחזר מ-listClasses. שעת האימון השבועית אינה תאריך התחלה, ואסור לומר שהחוג «כבר פועל» או «פועל באופן שוטף» בלי נתון כזה מהכלי.',
   'הודעה בהיסטוריה שמתחילה ב-[לפני X שעות] או [לפני X ימים] היא שיחה קודמת: אל תגיב עליה עכשיו. ענה רק על ההודעה הנוכחית.',
   'שעות פתיחה: אל תאמר «היום» אלא אם getOpeningHours החזיר שהיום פתוח. כשהיום סגור — אמור מתי הימים הפתוחים הקרובים, בתאריכים שהכלי החזיר. לקוחה כמעט הגיעה להחזיר ציוד ביום שהקיר סגור.',
   'זו וואטסאפ: הדגשה היא בכוכבית אחת (*טקסט*), בלי כוכביות כפולות ובלי כותרות Markdown.',
@@ -390,6 +391,13 @@ export function contradictsDirectEligibility(replyText, eligibility) {
     .test(String(replyText || ''));
 }
 
+export function isExplicitCentreRegistrationReport(text) {
+  const value = String(text || '').trim();
+  if (!/(?:מתנ[״"']?ס|הרשמ)/u.test(value)) return false;
+  return /(?:נרש(?:ם|מ(?:תי|נו|ה|ו))|השלמ(?:תי|נו|ה|ו).{0,30}הרשמ|הרשמ.{0,30}(?:הושלמ|בוצע|סודר)|רשמנו\s+(?:אותו|אותה|את))/u
+    .test(value);
+}
+
 function directEligibilityInstruction(eligibility) {
   if (!eligibility) return '';
   const program = eligibility.program === 'advanced'
@@ -399,6 +407,19 @@ function directEligibilityInstruction(eligibility) {
       : 'נבחרת בוגרת';
   const group = eligibility.groupName ? ` לקבוצה «${eligibility.groupName}»` : '';
   return `## זכאות אישית מאומתת\n${eligibility.childName} מאושר/ת להרשמה ל${program}${group} (סטטוס ${eligibility.status}). זו זכאות קיימת. אסור לומר שנדרש אישור צוות נוסף; המשך בסדר ההרשמה הרגיל.`;
+}
+
+function centreRegistrationAcknowledgement(result) {
+  const lines = [String(result?.אישור_ללקוח || '').trim()].filter(Boolean);
+  if (result?.מסמכים?.מצב && result.מסמכים.מצב !== 'חתומים ובתוקף') {
+    lines.push(String(result.מסמכים.הסבר || result.מסמכים.מצב).trim());
+    if (result.מסמכים.קישור) lines.push(String(result.מסמכים.קישור));
+  }
+  if (result?.ציוד?.מצב === 'טרם נסגר') {
+    lines.push(String(result.ציוד.הסבר || 'נשאר להסדיר את הציוד.').trim());
+    if (result.ציוד.קישור) lines.push(String(result.ציוד.קישור));
+  }
+  return lines.filter(Boolean).join('\n');
 }
 
 function textOf(content) {
@@ -591,6 +612,7 @@ export async function runCustomerToolTurn({
   }
 
   let eligibilityCorrectionSent = false;
+  let registrationAckCorrectionSent = false;
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
       contents,
@@ -598,6 +620,9 @@ export async function runCustomerToolTurn({
         instruction,
         eligibilityCorrectionSent
           ? 'התשובה הקודמת נפסלה כי דרשה אישור צוות למרות זכאות קיימת. נסח מחדש בלי לדרוש אישור נוסף והמשך בשלב ההרשמה הנכון.'
+          : '',
+        registrationAckCorrectionSent
+          ? 'התשובה הקודמת נפסלה כי חשפה ללקוח תהליך אימות פנימי. השתמש בנוסח אישור_ללקוח שהכלי החזיר, ואל תכתוב שהצוות יאמת או שהדיווח נשמר לבדיקה.'
           : '',
       ].filter(Boolean).join('\n\n'),
       declarations,
@@ -623,6 +648,23 @@ export async function runCustomerToolTurn({
       const text = separateMultiChildGradeQuestion(
         whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''))
       );
+
+      const centreReport = [...successfulCalls].reverse()
+        .find((item) => item.name === 'reportCentreRegistration' && item.result?.משובץ_אצלנו);
+      if (centreReport && /(?:הצוות.{0,20}יאמת|נשמר.{0,20}לבדיקה|נרשם.{0,20}לבדיקה)/u.test(text)) {
+        console.error(`bot exposed internal centre verification for ${centreReport.result?.נרשם_לבדיקה || 'participant'}`);
+        if (!registrationAckCorrectionSent) {
+          registrationAckCorrectionSent = true;
+          continue;
+        }
+        return {
+          text: centreRegistrationAcknowledgement(centreReport.result),
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'centre_registration_ack_guard',
+        };
+      }
 
       if (contradictsDirectEligibility(text, directEligibility)) {
         console.error(`bot contradicted direct eligibility for ${directEligibility.childName}`);
@@ -719,6 +761,19 @@ export async function runCustomerToolTurn({
       if (!tool) {
         responseParts.push({
           functionResponse: { name: call.name, response: { error: 'אין כלי כזה' } },
+        });
+        continue;
+      }
+      if (call.name === 'reportCentreRegistration' && !isExplicitCentreRegistrationReport(incoming)) {
+        responseParts.push({
+          functionResponse: {
+            name: call.name,
+            response: {
+              error: 'ההודעה הנוכחית אינה דיווח מפורש שההרשמה במתנ״ס הושלמה',
+              הודעה_נוכחית: incoming,
+              הנחיה: 'ענה רק על ההודעה הנוכחית ואל תשנה את סטטוס ההרשמה לפי הודעה ישנה בהיסטוריה.',
+            },
+          },
         });
         continue;
       }
