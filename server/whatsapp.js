@@ -73,6 +73,7 @@ import {
   normalizeHistoryLimit,
   isStaffPhone,
   BOT_BOUNDS_RULES,
+  FREE_CLIMBING_POLICY,
   studentsForParent,
   findPrimaryParent,
   isIdentifiedParent,
@@ -106,14 +107,6 @@ export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 const inboundCustomerBursts = new InboundBurstCoordinator();
-const FREE_CLIMBING_POLICY = [
-  'מדיניות טיפוס חופשי:',
-  '- מגיל 11 ניתן להגיע ללא מבוגר בשעות פתיחת הקיר.',
-  '- מתחת לגיל 11 ניתן להגיע עם מבוגר.',
-  '- גם הילד וגם המבוגר המלווים חייבים למלא טופס השתתפות.',
-  '- לחוגים ניתן להגיע ללא מבוגר מכיתה ג׳.',
-].join('\n');
-
 /**
  * What a staff number may ask over WhatsApp: who a customer is, when a trainee
  * started, what the classes are. Deliberately narrower than the CRM screen —

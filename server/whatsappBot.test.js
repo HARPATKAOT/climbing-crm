@@ -25,6 +25,7 @@ import {
   parseCustomerFullName,
   isClosingAcknowledgement,
   hasOpenBotHandoff,
+  FREE_CLIMBING_POLICY,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -49,6 +50,12 @@ test('applyBusinessBrand replaces legacy gym name', () => {
   assert.equal(branded.aiGreetingMenu, 'היי מ-הרפתקאות');
   assert.equal(branded.aiHandoffAckMessage, 'צוות הרפתקאות');
   assert.doesNotMatch(branded.aiGreetingMenu, /My Wall/i);
+});
+
+test('free climbing keeps the adult rules and states the minimum age', () => {
+  assert.match(FREE_CLIMBING_POLICY, /הכניסה מגיל 6 ומעלה/);
+  assert.match(FREE_CLIMBING_POLICY, /מגיל 11 ניתן להגיע ללא מבוגר/);
+  assert.match(FREE_CLIMBING_POLICY, /בגיל 6–10 ניתן להגיע עם מבוגר/);
 });
 
 test('handoff and stop keywords match', () => {
