@@ -3374,27 +3374,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const handleAssignStudent = async (studentId, groupId, mode = 'fixed') => {
     const current = students.find((student) => String(student.id) === String(studentId));
     if (!current) throw new Error('המתאמן לא נמצא');
-    let response;
-    if (mode === 'waitlist') {
-      response = await fetch(`/api/groups/${encodeURIComponent(groupId)}/waitlist`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId }),
-      });
-    } else {
-      const currentIds = studentGroupIds(current);
-      if (mode === 'hold' && currentIds.length) {
-        throw new Error('למתאמן כבר יש שיבוץ. שינוי לשמירת מקום מתבצע מתיק המתאמן.');
-      }
-      const groupIds = mode === 'fixed'
-        ? [...new Set([...currentIds, String(groupId)])]
-        : [String(groupId)];
-      response = await fetch(`/api/students/${studentId}/group-placement`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, groupIds }),
-      });
-    }
+    const response = await fetch(`/api/students/${studentId}/group-placement/${encodeURIComponent(groupId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) throw new Error(payload.error || 'השיבוץ נכשל');
     await refreshStudents();
