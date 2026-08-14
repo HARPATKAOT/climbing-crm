@@ -2415,6 +2415,36 @@ select option, select optgroup {
 }
 .check-item:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
 .check-item.checked { border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.04); }
+.broadcast-template-option { position: relative; }
+.broadcast-template-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.broadcast-template-option:focus-within {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.broadcast-template-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--border-hover);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.broadcast-template-choice.selected {
+  border-color: rgba(16,185,129,0.45);
+  background: rgba(16,185,129,0.12);
+  color: var(--green);
+}
 .check-box {
   width: 22px; height: 22px;
   border-radius: 6px;

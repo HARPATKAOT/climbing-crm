@@ -789,15 +789,24 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 460, overflowY: 'auto' }}>
-                  {[...(pinnedTemplate ? [pinnedTemplate] : []), ...visibleTemplates].map(tmpl => (
-                    <div key={tmpl.id} className={`check-item ${selectedTemplate?.id === tmpl.id ? 'checked' : ''}`}
-                      onClick={() => { setSelectedTemplate(selectedTemplate?.id === tmpl.id ? null : tmpl); setCustomMessage(''); }}
-                      // .check-item is a flex row — left as-is, the name and the
-                      // message body sit side by side instead of one under the other.
-                      style={{ padding: 12, cursor: 'pointer', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)', borderRadius: 8, opacity: tmpl.archived ? 0.72 : 1, flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <CategoryIcon category={tmpl.category} />
-                        <div style={{ fontWeight: 700, fontSize: 13, minWidth: 0 }}>{tmpl.name}</div>
+                  {[...(pinnedTemplate ? [pinnedTemplate] : []), ...visibleTemplates].map(tmpl => {
+                    const isSelected = selectedTemplate?.id === tmpl.id;
+                    return (
+                      <label key={tmpl.id} className={`check-item broadcast-template-option ${isSelected ? 'checked' : ''}`}
+                        // .check-item is a flex row — left as-is, the name and the
+                        // message body sit side by side instead of one under the other.
+                        style={{ padding: 12, opacity: tmpl.archived ? 0.72 : 1, flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
+                        <input
+                          type="radio"
+                          name="broadcast-template"
+                          value={tmpl.id}
+                          checked={isSelected}
+                          onChange={() => { setSelectedTemplate(tmpl); setCustomMessage(''); }}
+                          className="broadcast-template-radio"
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <CategoryIcon category={tmpl.category} />
+                          <div style={{ fontWeight: 700, fontSize: 13, minWidth: 0 }}>{tmpl.name}</div>
                         {/* אייקון בלבד כאן: השורה צרה, והשם כבר לוקח אותה. */}
                         <TemplateUsageBadges usage={tmpl.usedBy} compact />
                         {tmpl.archived && (
@@ -805,6 +814,10 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                             ארכיון
                           </span>
                         )}
+                        <span className={`broadcast-template-choice ${isSelected ? 'selected' : ''}`}>
+                          {isSelected && <CheckCircle size={14} />}
+                          {isSelected ? 'נבחרה' : 'בחירה'}
+                        </span>
                       </div>
                       {tmpl.metaName && tmpl.metaName !== tmpl.name && (
                         <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 3, direction: 'ltr', textAlign: 'right', fontFamily: 'monospace' }}>
@@ -814,8 +827,9 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                       <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                         {tmpl.text}
                       </div>
-                    </div>
-                  ))}
+                      </label>
+                    );
+                  })}
                   {visibleTemplates.length === 0 && !pinnedTemplate && (
                     <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '14px 4px', textAlign: 'center' }}>
                       {allSendableTemplates.length === 0
