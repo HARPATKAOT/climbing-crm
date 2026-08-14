@@ -96,6 +96,10 @@ import {
   markParentAsked,
 } from './centreRegistrationChecks.js';
 import { INTRO_COLLECTION, markPlacementRegistered } from './registrationLifecycle.js';
+import {
+  handleMailingPreferenceConversation,
+  hasActiveMailingPreferenceFlow,
+} from './mailingPreferences.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -1742,10 +1746,29 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'reactivated' };
     }
 
-    if (gate.action === 'opt_out') {
-      await optOutPhone(normalizedPhone, true, { source: 'customer' });
-      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control', replyKey });
-      return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'opt_out' };
+    if (gate.action === 'mailing_preferences' || hasActiveMailingPreferenceFlow(parent)) {
+      const preferenceResult = await handleMailingPreferenceConversation({
+        database: db,
+        parent,
+        text,
+        origin: process.env.PUBLIC_APP_URL,
+        persistParent: (row) => persistCore('parents', row),
+        persistList: (row) => persistCore('broadcast_lists', row),
+      });
+      parent = findPrimaryParent(normalizedPhone) || parent;
+      await whatsappService.sendBotReply(normalizedPhone, preferenceResult.reply, {
+        isSimulator,
+        source: 'mailing_preferences',
+        replyKey,
+      });
+      return {
+        parent,
+        student,
+        isNew,
+        replied: true,
+        reply: preferenceResult.reply,
+        reason: 'mailing_preferences',
+      };
     }
 
     if (gate.action === 'silence') {

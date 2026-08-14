@@ -10,6 +10,7 @@ import { recordMessage } from './channels/messageStore.js';
 import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
 import { enrichGroupsWithBotMeta } from './groupMetadata.js';
 import { currentSeason, eligibilityForStudent, latestLevelTest } from './placementEligibility.js';
+import { isMailingPreferenceRequest } from './mailingPreferences.js';
 
 export const LEAD_STATUSES = new Set([
   'lead_new',
@@ -1143,8 +1144,8 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'opted_out' };
   }
 
-  if (textMatchesStandaloneKeywords(text, s.aiStopKeywords)) {
-    return { action: 'opt_out', reply: s.aiOptOutMessage };
+  if (isMailingPreferenceRequest(text, s.aiStopKeywords)) {
+    return { action: 'mailing_preferences' };
   }
 
   if (isBotPaused(parent) && !isSimulator) {

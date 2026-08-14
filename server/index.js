@@ -652,6 +652,11 @@ import {
 } from './channels/segments.js';
 import { startBroadcastJob, getBroadcastJob, listBroadcastJobs } from './channels/broadcast.js';
 import { mediaCredentialsStatus } from './channels/media.js';
+import {
+  mailingPreferencesSnapshot,
+  readMailingPreferenceToken,
+  updateMailingPreferences,
+} from './mailingPreferences.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -1964,6 +1969,40 @@ app.get('/api/broadcast-list-defs', (req, res) => {
 // Public read-only mailing list definitions (for onboarding form)
 app.get('/api/public/broadcast-list-defs', publicFormRateLimit, (req, res) => {
   res.json(db.getBroadcastListDefs());
+});
+
+// A signed recipient link can only view or change mailing subscriptions. It is
+// deliberately separate from the customer file and never exposes a phone, ID
+// number, children or conversation history.
+app.get('/api/public/mailing-preferences/:token', publicFormRateLimit, (req, res) => {
+  const resolved = readMailingPreferenceToken(req.params.token, {
+    parents: db.get('parents') || [],
+  });
+  if (!resolved) return res.status(404).json({ error: 'הקישור אינו תקף או שפג תוקפו' });
+  res.set('Cache-Control', 'no-store');
+  return res.json(mailingPreferencesSnapshot(db, resolved.parent));
+});
+
+app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (req, res) => {
+  const resolved = readMailingPreferenceToken(req.params.token, {
+    parents: db.get('parents') || [],
+  });
+  if (!resolved) return res.status(404).json({ error: 'הקישור אינו תקף או שפג תוקפו' });
+  try {
+    const snapshot = await updateMailingPreferences(
+      db,
+      resolved.parent,
+      req.body?.subscriptions,
+      {
+        persistParent: (row) => persistCore('parents', row),
+        persistList: (row) => persistCore('broadcast_lists', row),
+      }
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...snapshot });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'שמירת ההעדפות נכשלה' });
+  }
 });
 
 app.post('/api/broadcast-list-defs', (req, res) => {

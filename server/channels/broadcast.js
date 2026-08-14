@@ -3,6 +3,10 @@ import { previewAudience } from './segments.js';
 import { whatsappService } from '../whatsapp.js';
 import { canSendFreeform } from './sessionWindow.js';
 import { resolveTemplateVariableValues } from './templateVarFields.js';
+import {
+  appendMailingPreferencesFooter,
+  buildMailingPreferencesUrl,
+} from '../mailingPreferences.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -104,8 +108,16 @@ async function processBroadcastJob(jobId, { templateId, customMessage }) {
         const student = parent
           ? (db.get('students') || []).find((s) => s.parentId === parent.id || s.parent_id === parent.id)
           : null;
+        const preferenceUrl = buildMailingPreferencesUrl(parent);
+        const preferenceOverrides = Array.isArray(localTpl?.variables)
+          ? localTpl.variables.map((variable) => (
+            variable && typeof variable === 'object' && variable.field === 'mailing_preferences'
+              ? preferenceUrl
+              : null
+          ))
+          : [];
         const variables = localTpl
-          ? resolveTemplateVariableValues(localTpl, parent, student)
+          ? resolveTemplateVariableValues(localTpl, parent, student, preferenceOverrides)
           : [r.name || ''];
         const result = await whatsappService.sendTemplateMessage(
           r.phone,
@@ -123,7 +135,15 @@ async function processBroadcastJob(jobId, { templateId, customMessage }) {
         if (parent && !canSendFreeform(parent, 'whatsapp')) {
           throw new Error('חלון 24 שעות סגור');
         }
-        const result = await whatsappService.sendTextMessage(r.phone, customMessage);
+        const message = appendMailingPreferencesFooter(customMessage, parent || {
+          id: r.parent_id,
+          phone: r.phone,
+        });
+        const result = await whatsappService.sendTextMessage(r.phone, message, false, {
+          parentId: r.parent_id,
+          source: 'broadcast',
+          clip: false,
+        });
         if (!result.success) throw new Error(result.error || 'שליחה נכשלה');
         db.update('broadcast_recipients', r.id, {
           status: 'sent',

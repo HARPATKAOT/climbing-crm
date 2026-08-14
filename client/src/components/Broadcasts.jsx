@@ -814,6 +814,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10 }}>
                   לניהול — סדר ידני, ארכיון, עריכה ומחיקה — עברו לטאב «תבניות Meta».
+                  אפשר למפות בתבנית משתנה מסוג «קישור להעדפות דיוור».
                 </div>
               </div>
 
@@ -821,6 +822,9 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                 <div className="section-title" style={{ marginBottom: 10 }}>הודעה חופשית (רק לנמענים עם חלון 24ש פתוח)</div>
                 <textarea className="input textarea" rows={4} placeholder="כתוב הודעה..."
                   value={customMessage} onChange={e => { setCustomMessage(e.target.value); setSelectedTemplate(null); }} />
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8 }}>
+                  קישור אישי ומאובטח לעריכת העדפות הדיוור יתווסף אוטומטית בסוף ההודעה.
+                </div>
               </div>
             </div>
 

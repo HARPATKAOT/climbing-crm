@@ -315,7 +315,7 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
   // A bare «3» used to be the menu's "talk to staff". With no menu it is just a
   // number, and the model is the one that should read it in context.
   assert.equal(decideBotGate(base, {}, [], '3').action, 'reply');
-  assert.equal(decideBotGate(base, {}, [], 'עצור').action, 'opt_out');
+  assert.equal(decideBotGate(base, {}, [], 'עצור').action, 'mailing_preferences');
 
   const outside = decideBotGate(
     {

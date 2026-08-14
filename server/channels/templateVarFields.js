@@ -8,6 +8,7 @@ export const TEMPLATE_VAR_FIELDS = [
   { id: 'child_first', label: 'שם פרטי (ילד)', example: 'מוטי' },
   { id: 'child_last', label: 'שם משפחה (ילד)', example: 'כהן' },
   { id: 'phone', label: 'טלפון', example: '0501234567' },
+  { id: 'mailing_preferences', label: 'קישור להעדפות דיוור', example: 'https://app.kirboaz.co.il/mailing-preferences/...' },
   { id: 'custom', label: 'טקסט חופשי', example: 'דוגמה' },
 ];
 
@@ -42,6 +43,12 @@ export function resolveTemplateFieldValue(fieldId, parent = null, student = null
       return studentParts.last || studentParts.first || parentParts.last || parentParts.first;
     case 'phone':
       return parent?.phone || '';
+    case 'mailing_preferences': {
+      // Kept inline to avoid making every template helper depend on the bot.
+      // The sending path supplies the signed URL as an override when this field
+      // is present; this fallback keeps template previews readable.
+      return 'קישור אישי להעדפות הדיוור';
+    }
     default:
       return parentName || studentName || 'לקוח';
   }

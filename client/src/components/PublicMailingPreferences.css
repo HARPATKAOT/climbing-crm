@@ -1,0 +1,168 @@
+.mailing-preferences-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: clamp(18px, 5vw, 56px);
+  background:
+    radial-gradient(circle at 12% 10%, rgba(96, 165, 250, 0.18), transparent 32rem),
+    radial-gradient(circle at 88% 90%, rgba(52, 211, 153, 0.14), transparent 30rem),
+    #08111f;
+  color: #edf5ff;
+  font-family: Arial, sans-serif;
+}
+
+.mailing-preferences-card {
+  width: min(100%, 680px);
+  padding: clamp(22px, 5vw, 42px);
+  border: 1px solid #29405d;
+  border-radius: 28px;
+  background: rgba(13, 27, 45, 0.97);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.36);
+}
+
+.mailing-preferences-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.mailing-preferences-header h1 {
+  margin: 2px 0 8px;
+  font-size: clamp(28px, 6vw, 40px);
+  line-height: 1.1;
+}
+
+.mailing-preferences-header p { margin: 0; color: #b8c7d9; line-height: 1.6; }
+.mailing-preferences-header .mailing-preferences-eyebrow { color: #7dd3fc; font-weight: 800; }
+
+.mailing-preferences-icon {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: #07111f;
+  background: linear-gradient(135deg, #7dd3fc, #6ee7b7);
+}
+
+.mailing-preferences-icon svg { width: 27px; height: 27px; }
+
+.mailing-preferences-summary {
+  display: grid;
+  gap: 4px;
+  margin: 28px 0 20px;
+  padding: 16px 18px;
+  border: 1px solid #28415f;
+  border-radius: 16px;
+  background: #101f33;
+}
+
+.mailing-preferences-summary strong { color: #a7f3d0; font-size: 17px; }
+.mailing-preferences-summary span { color: #9fb0c4; font-size: 13px; line-height: 1.5; }
+
+.mailing-preferences-list { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; }
+
+.mailing-preferences-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+  gap: 14px;
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 1px solid #2a3b52;
+  border-radius: 17px;
+  background: #0c1828;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.mailing-preferences-option:hover { transform: translateY(-1px); border-color: #5b789d; }
+.mailing-preferences-option.is-checked { border-color: #4f8cb6; background: #10253a; }
+.mailing-preferences-option input { position: absolute; opacity: 0; pointer-events: none; }
+.mailing-preferences-option:has(input:focus-visible) { outline: 3px solid #7dd3fc; outline-offset: 3px; }
+
+.mailing-preferences-check {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #5a6d86;
+  border-radius: 9px;
+  color: #07111f;
+  background: transparent;
+}
+
+.is-checked .mailing-preferences-check { border-color: #6ee7b7; background: #6ee7b7; }
+.mailing-preferences-check svg { width: 18px; height: 18px; stroke-width: 3; }
+.mailing-preferences-option-copy { display: grid; gap: 5px; }
+.mailing-preferences-option-copy strong { font-size: 17px; }
+.mailing-preferences-option-copy span { color: #9fb0c4; font-size: 14px; line-height: 1.45; }
+
+.mailing-preferences-actions { display: grid; gap: 10px; margin-top: 24px; }
+.mailing-preferences-actions button {
+  min-height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border-radius: 14px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.mailing-preferences-actions button:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
+.mailing-preferences-actions button:disabled { cursor: not-allowed; opacity: 0.55; }
+.mailing-preferences-actions svg { width: 20px; height: 20px; }
+.mailing-preferences-save { border: 0; color: #06111e; background: linear-gradient(135deg, #7dd3fc, #6ee7b7); }
+.mailing-preferences-unsubscribe { border: 1px solid #7f3f4a; color: #fecdd3; background: #24151d; }
+
+.mailing-preferences-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  line-height: 1.5;
+}
+.mailing-preferences-notice.is-success { color: #a7f3d0; background: rgba(16, 185, 129, 0.12); }
+.mailing-preferences-notice.is-error { color: #fecdd3; background: rgba(244, 63, 94, 0.12); }
+
+.mailing-preferences-footer {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #26384f;
+  color: #91a4ba;
+}
+.mailing-preferences-footer svg { flex: 0 0 21px; width: 21px; height: 21px; color: #7dd3fc; }
+.mailing-preferences-footer p { margin: 0; font-size: 12px; line-height: 1.7; }
+
+.mailing-preferences-loading,
+.mailing-preferences-error {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.mailing-preferences-error > svg { width: 48px; height: 48px; color: #fda4af; }
+.mailing-preferences-error h1, .mailing-preferences-error p { margin: 0; }
+.mailing-preferences-error p { color: #b8c7d9; line-height: 1.6; }
+.mailing-preferences-spinner { animation: mailing-preferences-spin 900ms linear infinite; }
+
+@keyframes mailing-preferences-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 520px) {
+  .mailing-preferences-page { align-items: start; padding: 0; background: #08111f; }
+  .mailing-preferences-card { min-height: 100vh; border: 0; border-radius: 0; padding: 24px 18px 32px; }
+  .mailing-preferences-header { gap: 13px; }
+  .mailing-preferences-icon { width: 46px; height: 46px; flex-basis: 46px; border-radius: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mailing-preferences-option { transition: none; }
+  .mailing-preferences-spinner { animation-duration: 1800ms; }
+}
