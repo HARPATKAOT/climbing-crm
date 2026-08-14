@@ -82,7 +82,7 @@ import {
   sortCommunicationRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
-import { consecutiveAbsences, getGroupDays } from '../scheduleUtils.js';
+import { consecutiveAbsences, getGroupDays, shortGroupLabel } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { deriveGroupPlacements } from '../utils/groupPlacement.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -158,6 +158,12 @@ function groupDaysLabel(group) {
   const names = getGroupDays(group).map((d) => DAYS_FULL[d]).filter(Boolean);
   if (!names.length) return '';
   return names.length === 1 ? `יום ${names[0]}` : `ימים ${names.join(' ו')}`;
+}
+
+function groupDisplayName(group) {
+  return (shortGroupLabel(group?.name) || group?.name || '')
+    .replace(/\s+\d{1,2}:\d{2}\s*$/, '')
+    .trim();
 }
 
 /**
@@ -3032,8 +3038,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   };
   const groupSummary = currentPlacementGroups.length
     ? (currentPlacementGroups.length === 1
-      ? `${placementModeLabels[currentPlacementGroups[0].mode]} · ${currentPlacementGroups[0].group.name}`
-      : `${currentPlacementGroups.length} קבוצות · מצבים שונים`)
+      ? groupDisplayName(currentPlacementGroups[0].group)
+      : `${currentPlacementGroups.length} קבוצות`)
     : placementModeLabels.none;
   const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
     .includes(registrationLifecycle.intro?.status)
@@ -5219,7 +5225,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                   color: 'var(--text-1)', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 3,
                                 }}
                               >
-                                {g.name}
+                                {groupDisplayName(g)}
                               </button>
                               <span className={mode === 'fixed' ? 'badge badge-green' : mode === 'hold' ? 'badge badge-amber' : 'badge badge-blue'}>
                                 {placementModeLabels[mode]}
@@ -5236,8 +5242,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     ) : (
                       <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
                     )}
-                    {placementHold && canManageBilling && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9, alignItems: 'center' }}>
+                      {placementHold && canManageBilling && (
+                        <>
                         {placementHold.phase === 'waitlist_offer' && (
                           <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
                             onClick={() => runLifecycleAction('accept', `/api/students/${student.id}/waitlist/accept`)}>
@@ -5260,22 +5267,22 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           onClick={() => runLifecycleAction('release', `/api/placement-holds/${placementHold.id}/release`)}>
                           {lifecycleBusy === 'release' ? 'משחרר…' : 'שחרור המקום'}
                         </button>
-                      </div>
-                    )}
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={openGroupPlacementEditor}
+                      >
+                        <Edit2 size={11} /> ערוך שיבוץ
+                      </button>
+                    </div>
                     {introBooking && (
                       <div style={{ marginTop: 7, fontSize: 12, color: 'var(--text-2)' }}>
                         אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
                       </div>
                     )}
                     {lifecycleMessage && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      style={{ marginTop: 8 }}
-                      onClick={openGroupPlacementEditor}
-                    >
-                      <Edit2 size={11} /> ערוך שיבוץ
-                    </button>
                   </div>
                 )}
                   </>
