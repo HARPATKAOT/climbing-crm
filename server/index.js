@@ -16851,10 +16851,17 @@ app.post('/api/pos/payment-link', async (req, res) => {
       walkInEmail,
       sendWhatsapp = false,
       couponCode,
+      collectionIntent,
     } = req.body || {};
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    if (!['debt', 'offer'].includes(collectionIntent)) {
+      return res.status(400).json({
+        error: 'יש לבחור אם הקישור הוא לחוב קיים או רק אפשרות לרכישה',
+        code: 'collection_intent_required',
+      });
+    }
     const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -16896,6 +16903,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
         recordCounterPolicyAcceptances(req, cancellationPolicies, sale, payerId),
       soldBy: seller.name,
       soldByEmployeeId: seller.employee_id,
+      source: collectionIntent === 'offer' ? 'pos_offer' : 'pos_debt',
     });
 
     const delivery = sendWhatsapp

@@ -177,6 +177,7 @@ export default function PosSale({
   // ריק בכוונה: אמצעי התשלום נבחר, לא ננחש. ברירת מחדל „מזומן” גררה מכירות
   // שנרשמו כמזומן כי איש לא שם לב שהיא כבר מסומנת.
   const [paymentMethod, setPaymentMethod] = useState('');
+  const [collectionIntent, setCollectionIntent] = useState('');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsapp, setSendWhatsapp] = useState(true);
   const [quoteIncludePaymentLink, setQuoteIncludePaymentLink] = useState(true);
@@ -506,6 +507,7 @@ export default function PosSale({
     setAppliedCoupon(null);
     setDismissedCoupons(new Set());
     setPaymentMethod('');
+    setCollectionIntent('');
     setTenderedDenoms({});
     setEditingDiscountId(null);
     setShowCustomForm(false);
@@ -1046,7 +1048,7 @@ export default function PosSale({
     seller_name: seller?.name || undefined,
   });
 
-  const validate = () => {
+  const validate = ({ requireCollectionIntent = true } = {}) => {
     if (!cart.length) {
       setError('הוסיפו לפחות פריט אחד לעגלה');
       return false;
@@ -1097,6 +1099,10 @@ export default function PosSale({
       setError('יש לבחור איך התשלום מתקבל — מזומן או סליקה בקישור');
       return false;
     }
+    if (requireCollectionIntent && paymentMethod === 'online' && !collectionIntent) {
+      setError('יש לבחור אם הקישור הוא לחוב קיים או רק אפשרות לרכישה');
+      return false;
+    }
     if (paymentMethod === 'online' && !(Number(total) > 0)) {
       setError('לא ניתן ליצור קישור תשלום לסכום 0 — עמוד הסליקה יציג מחיר ברירת מחדל. שינוי מחיר או גבייה במזומן');
       return false;
@@ -1120,7 +1126,7 @@ export default function PosSale({
   };
 
   const validateQuote = () => {
-    if (!validate()) return false;
+    if (!validate({ requireCollectionIntent: false })) return false;
     if (quoteIncludePaymentLink && !(Number(total) > 0)) {
       setError('לא ניתן לכלול קישור תשלום בסכום 0 — בטלו את הסימון או שנו מחיר');
       return false;
@@ -1214,6 +1220,7 @@ export default function PosSale({
       setCart([]);
       setTenderedDenoms({});
       setPaymentMethod('');
+      setCollectionIntent('');
       setShowQuoteOptions(false);
       clearCustomer();
       setAnonymousSale(false);
@@ -1267,7 +1274,7 @@ export default function PosSale({
     if (paymentMethod === 'online') {
       // The link carries the discounted amount and the benefit is held aside
       // until the payment actually lands.
-      await runAction('/api/pos/payment-link', { couponCode });
+      await runAction('/api/pos/payment-link', { couponCode, collectionIntent });
       return;
     }
     const tendered = Number(tenderedAmount);
@@ -1297,6 +1304,7 @@ export default function PosSale({
     }
     setCashClosedHint(false);
     setPaymentMethod(id);
+    if (id !== 'online') setCollectionIntent('');
   };
 
   const handleCashOpened = async () => {
@@ -1305,6 +1313,7 @@ export default function PosSale({
     setCashClosedHint(false);
     setShowOpenCash(false);
     setPaymentMethod('cash');
+    setCollectionIntent('');
     await refresh();
   };
 
@@ -2444,6 +2453,69 @@ export default function PosSale({
             </div>
           </div>
 
+          {paymentMethod === 'online' && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 10,
+                borderRadius: 10,
+                border: `1px solid ${collectionIntent ? 'var(--border)' : 'rgba(251, 191, 36, 0.62)'}`,
+                background: collectionIntent ? 'transparent' : 'rgba(251, 191, 36, 0.06)',
+              }}
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 750, marginBottom: 8, color: collectionIntent ? 'var(--text-2)' : '#FBBF24' }}>
+                מה המשמעות של הקישור? חובה לבחור
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {[
+                  {
+                    id: 'debt',
+                    label: 'חוב קיים',
+                    hint: 'המוצר נמסר, השירות בוצע או שהלקוח התחייב. יופיע בדוח החובות.',
+                    color: '#F59E0B',
+                  },
+                  {
+                    id: 'offer',
+                    label: 'אפשרות לרכישה',
+                    hint: 'הלקוח עדיין מחליט. הקישור לא יופיע בדוח החובות.',
+                    color: '#818CF8',
+                  },
+                ].map((intent) => {
+                  const chosen = collectionIntent === intent.id;
+                  return (
+                    <button
+                      key={intent.id}
+                      type="button"
+                      aria-pressed={chosen}
+                      onClick={() => {
+                        setCollectionIntent(intent.id);
+                        setError('');
+                      }}
+                      style={{
+                        flex: '1 1 190px',
+                        padding: '11px 12px',
+                        borderRadius: 10,
+                        cursor: 'pointer',
+                        textAlign: 'right',
+                        border: `1px solid ${chosen ? intent.color : 'var(--border)'}`,
+                        background: chosen ? `${intent.color}1f` : 'var(--bg-input)',
+                        boxShadow: chosen ? `0 0 0 1px ${intent.color}` : 'none',
+                        color: 'inherit',
+                      }}
+                    >
+                      <span style={{ display: 'block', fontWeight: 800, fontSize: 13.5, color: chosen ? intent.color : 'inherit' }}>
+                        {intent.label}
+                      </span>
+                      <span style={{ display: 'block', marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-3)' }}>
+                        {intent.hint}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {requireSeller && !sellerEmployeeId && (
             <label className="pos-seller-field">
               <span><User size={14} /> מי מבצע את המכירה?</span>
@@ -2866,9 +2938,15 @@ export default function PosSale({
           )}
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
+              {!collectionIntent
+                ? 'בחרו אם הקישור מייצג חוב או רק אפשרות לרכישה.'
+                : collectionIntent === 'debt'
+                  ? 'הקישור יירשם כחוב פתוח עד שהתשלום יתקבל.'
+                  : 'הקישור לא יירשם כחוב; לאחר תשלום הוא יופיע כעסקה.'}
+              {' '}
               {sendWhatsapp
-                ? 'הקישור יישלח בוואטסאפ ללקוח, ויוצג גם כקוד לסריקה למי שמעדיף לשלם מהטלפון.'
-                : 'אין טלפון בתיק — הקישור יוצג כקוד לסריקה, ואפשר גם להעתיק אותו או לפתוח את עמוד הסליקה.'}
+                ? 'הקישור יישלח בוואטסאפ ויוצג גם כקוד לסריקה.'
+                : 'הקישור יוצג כקוד לסריקה, ואפשר גם להעתיק או לפתוח אותו.'}
             </div>
           )}
         </div>
