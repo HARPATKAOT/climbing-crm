@@ -470,6 +470,37 @@ test('מתאמן רשום — לא מעבירים קבוצה ולא מבטלים
   });
 });
 
+test('מתאמן מהעונה הקודמת שלא ממשיך עובר לארכיון והמעקב נסגר', async () => {
+  const returning = childYotam({ status: 'past_registered' });
+  await withSeed({
+    parents: [{ ...PARENT, status: 'past_registered' }],
+    students: [returning],
+    bot_followups: [{
+      id: 'bf-returning', parent_id: PARENT.id, student_id: returning.id,
+      status: 'open', reason: 'form_not_filled',
+    }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.archiveNonReturningStudent({ childName: 'יותם' });
+    assert.equal(result.הועבר_לארכיון, 'יותם כהן');
+    assert.equal(student(returning.id).status, 'archived');
+    assert.equal(db.getOne('parents', PARENT.id).status, 'archived');
+    assert.equal(followUps()[0].status, 'cancelled');
+  });
+});
+
+test('הודעת אי-המשך אינה יכולה לארכב מתאמן שרשום בעונה הנוכחית', async () => {
+  await withSeed({
+    parents: [{ ...PARENT, status: 'registered' }],
+    students: [childYotam({ status: 'registered', groupId: GROUP_GD.id })],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.archiveNonReturningStudent({ childName: 'יותם' });
+    assert.match(result.error, /ביטול הרשמה נעשה מול הצוות/);
+    assert.equal(student('s-yotam').status, 'registered');
+  });
+});
+
 // ─── שמירת מקום קשיחה והחזרתה ────────────────────────────────────────────────
 
 test('שיבוץ קשיח: הכרטיס ממתין לאישור הורה, תופס מקום ונרשמת שורת יומן', async () => {

@@ -607,6 +607,20 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'archiveNonReturningStudent',
+    description:
+      'מעביר לארכיון מתאמן שמסומן «היה רשום בשנה האחרונה», לאחר שההורה אמר במפורש '
+      + 'שהוא לא ימשיך או לא יירשם השנה. מבטל מעקבים פתוחים עבורו. לא להשתמש לביטול '
+      + 'של מתאמן שרשום או פעיל בעונה הנוכחית — מקרה כזה עובר לצוות.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
     name: 'updateCustomerDetails',
     description:
       'משלים בכרטיס של לקוח לא מזוהה שם פרטי ושם משפחה בלבד. שני השדות חובה. '
@@ -2432,6 +2446,77 @@ export function buildCustomerTools({
         קבוצה_קודמת: group ? describeGroup(group) : '',
         סטטוס: 'הפרטים הושלמו — ללא קבוצה',
         הערה: 'השיבוץ הוסר. אפשר לשבץ לקבוצה אחרת בכל שלב.',
+      };
+    },
+
+    archiveNonReturningStudent: async ({ childName } = {}) => {
+      await refreshExistingParticipantData();
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      parent = db.getOne('parents', parent.id) || parent;
+      const kids = studentsForParent(parent);
+      const named = String(childName || '').trim();
+      const matches = kids.filter((student) => (
+        named && String(student.name || '').includes(named.split(/\s+/)[0])
+      ));
+      if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+      if (matches.length > 1) {
+        return { error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר', ילדים: matches.map((student) => student.name || '') };
+      }
+
+      const student = matches[0];
+      if (isRegisteredTrainee(student)) {
+        return { error: `${student.name || 'המתאמן'} רשום כעת — ביטול הרשמה נעשה מול הצוות` };
+      }
+      if (String(student.status || '') !== 'past_registered') {
+        return {
+          error: 'הכלי מיועד רק למתאמן שהיה רשום בשנה שעברה ואינו ממשיך.',
+          סטטוס_נוכחי: String(student.status || ''),
+        };
+      }
+
+      const archivedAt = new Date().toISOString();
+      const archivedStudent = db.update('students', student.id, {
+        status: 'archived',
+        groupId: null,
+        archived_at: archivedAt,
+        archive_reason: 'not_continuing',
+      });
+      if (!archivedStudent) return { error: 'העברת המתאמן לארכיון נכשלה — יש להעביר לצוות' };
+      await persistCore('students', archivedStudent);
+
+      const family = studentsForParent(parent);
+      const allArchived = family.length > 0
+        && family.every((item) => String(item.status || '') === 'archived');
+      if (allArchived) {
+        const archivedParent = db.update('parents', parent.id, { status: 'archived' });
+        if (archivedParent) {
+          await persistCore('parents', archivedParent);
+          parent = archivedParent;
+        }
+      }
+
+      for (const followUp of (db.get(FOLLOWUP_COLLECTION) || [])) {
+        if (String(followUp.status || FOLLOWUP_OPEN) !== FOLLOWUP_OPEN) continue;
+        if (String(followUp.parent_id || '') !== String(parent.id)) continue;
+        if (!allArchived && String(followUp.student_id || '') !== String(student.id)) continue;
+        const cancelled = db.update(FOLLOWUP_COLLECTION, followUp.id, {
+          status: 'cancelled',
+          cancelled_at: archivedAt,
+          cancelled_by: 'bot',
+        });
+        if (cancelled) await persistCore(FOLLOWUP_COLLECTION, cancelled);
+      }
+
+      journal('student_archived', `${student.name || 'מתאמן'} לא ממשיך והועבר לארכיון`, {
+        from_status: student.status,
+        to_status: 'archived',
+        parent_archived: allArchived,
+      }, archivedStudent);
+      return {
+        הועבר_לארכיון: student.name || '',
+        סטטוס: 'ארכיון',
+        כרטיס_המשפחה_הועבר_לארכיון: allArchived,
+        הערה: 'אפשר להודות על העדכון ולאחל הצלחה.',
       };
     },
 

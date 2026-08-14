@@ -417,6 +417,13 @@ test('a completed action claim is blocked unless a write tool succeeded this tur
   );
   assert.deepEqual(unbackedReplyClaims('העברתי את זה לצוות'), []);
   assert.deepEqual(unbackedReplyClaims('שקד שובצה בקבוצה החדשה'), ['placement']);
+  assert.deepEqual(unbackedReplyClaims('העברתי את שקד לארכיון'), ['archive']);
+  assert.deepEqual(
+    unbackedReplyClaims('העברתי את שקד לארכיון', [
+      { name: 'archiveNonReturningStudent', result: { הועבר_לארכיון: 'שקד' } },
+    ]),
+    []
+  );
 });
 
 test('the bot cannot call a pending trainee registered without registered CRM evidence', async () => {
@@ -482,6 +489,7 @@ test('the tools offered to the model are facts, links and placements — never s
   assert.deepEqual(names, [
     'acceptWaitlistOffer',
     'addActivityInterest',
+    'archiveNonReturningStudent',
     'cancelSignup',
     'continueAfterIntro',
     'findExistingParticipant',
@@ -518,6 +526,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'retryIntroAfterNoShow',
     'joinWaitlist',
     'cancelSignup',
+    'archiveNonReturningStudent',
   ]) {
     const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
     assert.deepEqual(decl.parameters.required, ['childName']);

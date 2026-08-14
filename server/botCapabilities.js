@@ -79,6 +79,7 @@ export const BOT_CAPABILITIES = [
       'retryIntroAfterNoShow',
       'joinWaitlist',
       'cancelSignup',
+      'archiveNonReturningStudent',
     ],
   },
   {
