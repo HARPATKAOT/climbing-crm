@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive } from 'lucide-react';
+import { Send, History, Bot, CheckCircle, RefreshCw, Sparkles, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
@@ -694,35 +694,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
           <div className="grid-21" style={{ gap: 20, alignItems: 'flex-start' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
               <div className="card card-p">
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
-                  <div className="section-title" style={{ marginBottom: 0 }}>רשימת תפוצה</div>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={openListsModal} style={{ gap: 6 }}>
-                    <Pencil size={13} /> עריכת רשימות
-                  </button>
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${selectedList === '' ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => setSelectedList('')}
-                  >
-                    <Hash size={13} /> כל הרשימות
-                  </button>
-                  {lists.map(l => (
-                    <button key={l.key} className={`btn btn-sm ${selectedList === l.key ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => setSelectedList(l.key)}>
-                      <Hash size={13} /> {l.label}
-                    </button>
-                  ))}
-                </div>
-                {Array.isArray(segmentFilters.groupIds) && segmentFilters.groupIds.length > 0 && (
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10, lineHeight: 1.45 }}>
-                    נבחרו קבוצות — הדיוור יישלח לכל הרשומים בקבוצות, בלי תלות ברשימת התפוצה למעלה.
-                  </div>
-                )}
-              </div>
-
-              <div className="card card-p">
                 <div className="section-title" style={{ marginBottom: 14 }}>פילוח קהל</div>
                 <SegmentBuilder
                   parents={parents}
@@ -730,11 +701,14 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   groups={groups}
                   lists={lists}
                   filters={segmentFilters}
+                  onManageLists={openListsModal}
                   onChange={(next) => {
                     const hasGroups = Array.isArray(next.groupIds) && next.groupIds.length > 0;
+                    const effectiveList = hasGroups ? '' : (next.listKey || '');
+                    setSelectedList(effectiveList);
                     setSegmentFilters({
                       ...next,
-                      listKey: hasGroups ? '' : (selectedList || next.listKey || ''),
+                      listKey: effectiveList,
                     });
                   }}
                 />
