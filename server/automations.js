@@ -25,6 +25,7 @@ import {
   dueFollowUps,
   finishFollowUpSend,
   followUpMessage,
+  groupDueFollowUps,
   releaseFollowUpSend,
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
@@ -681,31 +682,44 @@ export const automationsService = {
     let resolved = 0;
     const needStaff = [];
 
-    for (const row of due) {
-      const sendId = `bf-${row.id}`;
-      if (alreadySent(sendId)) continue;
-
+    for (const rowGroup of groupDueFollowUps(due)) {
+      let row = rowGroup[0];
       const parent = (db.get('parents') || []).find((p) => String(p.id) === String(row.parent_id));
       const phone = row.phone || parent?.phone || '';
       if (!parent || !phone) {
-        await closeFollowUp(row, 'cancelled');
+        for (const item of rowGroup) await closeFollowUp(item, 'cancelled');
         continue;
       }
       // A customer who asked us to stop, or who is mid-conversation with a
       // person, must not get an automatic nudge on top of that.
       if (isOptedOut(parent) || isBotPaused(parent)) {
-        await closeFollowUp(row, 'cancelled');
+        for (const item of rowGroup) await closeFollowUp(item, 'cancelled');
         continue;
       }
 
       const firstName = parentFirstName(parent);
-      const live = liveFollowUpState(row, parent);
-      const text = followUpMessage(row, { firstName, ...live });
+      let live = null;
+      let text = '';
+      for (const candidate of rowGroup) {
+        const candidateLive = liveFollowUpState(candidate, parent);
+        const candidateText = followUpMessage(candidate, { firstName, ...candidateLive });
+        if (!candidateText) continue;
+        row = candidate;
+        live = candidateLive;
+        text = candidateText;
+        break;
+      }
       // Everything it was going to ask about has since been done. Closing it
       // quietly is the whole point of reading the state now.
       if (!text) {
-        await closeFollowUp(row, 'cancelled');
+        for (const item of rowGroup) await closeFollowUp(item, 'cancelled');
         resolved += 1;
+        continue;
+      }
+
+      const sendId = `bf-${row.id}`;
+      if (alreadySent(sendId)) {
+        for (const item of rowGroup) await closeFollowUp(item, 'sent');
         continue;
       }
       const body = withBotMark(text);
@@ -717,7 +731,7 @@ export const automationsService = {
       // in September" — can only travel as an approved template.
       if (!canSendFreeform(parent, 'whatsapp')) {
         if (!templateIsApproved(FOLLOWUP_TEMPLATE_NAME)) {
-          needStaff.push({ row, parent, claimId: claim.id });
+          needStaff.push({ row, rows: rowGroup, parent, claimId: claim.id });
           continue;
         }
         try {
@@ -737,7 +751,7 @@ export const automationsService = {
           if (result?.success) {
             sent += 1;
             await finishFollowUpSend(db, claim.id, { persist: persistCore });
-            await closeFollowUp(row, 'sent');
+            for (const item of rowGroup) await closeFollowUp(item, 'sent');
             recordBotAction(db, persistCore, {
               type: 'followup_sent',
               summary: `מעקב נשלח בתבנית: ${subject}`,
@@ -745,11 +759,11 @@ export const automationsService = {
               parentId: parent.id, parentName: parent.name, phone,
             });
           } else {
-            needStaff.push({ row, parent, claimId: claim.id });
+            needStaff.push({ row, rows: rowGroup, parent, claimId: claim.id });
           }
         } catch (err) {
           console.error('bot follow-up template failed:', err.message);
-          needStaff.push({ row, parent, claimId: claim.id });
+          needStaff.push({ row, rows: rowGroup, parent, claimId: claim.id });
         }
         continue;
       }
@@ -762,7 +776,7 @@ export const automationsService = {
         if (result?.success) {
           sent += 1;
           await finishFollowUpSend(db, claim.id, { persist: persistCore });
-          await closeFollowUp(row, 'sent');
+          for (const item of rowGroup) await closeFollowUp(item, 'sent');
           recordBotAction(db, persistCore, {
             type: 'followup_sent',
             summary: `מעקב נשלח: ${row.note || 'מעקב'}`,
@@ -811,9 +825,9 @@ export const automationsService = {
       }
       // Closed either way: the team has it now, and a note that repeats every
       // morning is how a queue becomes noise nobody reads.
-      for (const { row, claimId } of needStaff) {
+      for (const { row, rows, claimId } of needStaff) {
         await finishFollowUpSend(db, claimId, { persist: persistCore });
-        await closeFollowUp(row, 'sent');
+        for (const item of rows || [row]) await closeFollowUp(item, 'sent');
       }
     }
 

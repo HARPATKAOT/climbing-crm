@@ -24,6 +24,7 @@ import {
   requestProgramApproval,
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
+import { studentGroupIds } from './studentGroups.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
@@ -698,6 +699,17 @@ function seasonHalfFields(now = new Date()) {
   }
 }
 
+function classSeasonFields(now = new Date()) {
+  try {
+    const season = resolveSeasonHalves(DEFAULT_EQUIPMENT_SETTINGS, now);
+    return {
+      תחילת_עונת_החוגים: spellOutDate(season.start.toISOString().slice(0, 10)),
+    };
+  } catch {
+    return {};
+  }
+}
+
 /**
  * דמי השכרת הנעליים, לפי התדירות שהלקוח כבר ציין.
  *
@@ -802,6 +814,7 @@ function openGroupsPayload(groups) {
       תדירויות_אפשריות: availableGroupFrequencies(g),
       ...groupInfoFields(g),
       ...groupChatFields(g),
+      ...classSeasonFields(),
     }));
 }
 
@@ -1733,9 +1746,14 @@ export function buildCustomerTools({
             ? { הערת_בריאות: 'ההשתתפות מוקפאת עד אישור רפואי — יש להעביר לצוות' }
             : {}),
         };
+      const placedHere = studentGroupIds(student).length > 0;
 
       return {
         נרשם_לבדיקה: student.name || '',
+        משובץ_אצלנו: placedHere,
+        אישור_ללקוח: placedHere
+          ? `${student.name || 'המתאמן'} משובץ אצלנו וקיבלנו את העדכון שנרשמתם במתנ״ס. מבחינת ההרשמה הכול מסודר.`
+          : 'קיבלנו את העדכון שנרשמתם במתנ״ס. עדיין לא נבחרה קבוצה אצלנו, ולכן צריך להמשיך לבחירת קבוצה.',
         מסמכים: documents,
         ציוד: equipment.קישור
           ? {
@@ -1745,8 +1763,8 @@ export function buildCustomerTools({
             הסבר: 'יש להמשיך עכשיו לסגירת הציוד. גם מי שיש לו ציוד מהבית נכנס לקישור ומסמן מה כבר קיים.',
           }
           : { מצב: 'סגור', הערה: equipment.הערה || '' },
-        הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שהדיווח התקבל '
-          + 'ושהצוות יאמת את ההרשמה. אם שדה המסמכים מציג חוסר — זה הדבר הראשון בתשובה: יש לומר '
+        הערה: 'יש להשתמש בנוסח שבשדה אישור_ללקוח. האימות מול המתנ״ס נשאר תהליך פנימי ואין צורך '
+          + 'להעמיס אותו על הלקוח; אין לומר שהמתנ״ס עצמו כבר אימת את ההרשמה. אם שדה המסמכים מציג חוסר — זה הדבר הראשון בתשובה: יש לומר '
           + 'במפורש שאי אפשר לשבץ את המתאמן לקבוצה בלי זה, ולשלוח את הקישור. אם שדה הציוד מציג '
           + '«טרם נסגר», חובה להמשיך אליו באותה תשובה ולשלוח את הקישור; אין לומר שאין צורך בפעולה '
           + 'נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',

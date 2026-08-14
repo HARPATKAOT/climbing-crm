@@ -256,6 +256,52 @@ export function dueFollowUps(db, { now = new Date() } = {}) {
     .sort((a, b) => String(a.due_at || a.due_date || '').localeCompare(String(b.due_at || b.due_date || '')));
 }
 
+const AUTOMATIC_PROGRESS_REASONS = new Set([
+  'form_not_filled',
+  'pending_signup',
+  'equipment_unpaid',
+]);
+
+const AUTOMATIC_PROGRESS_PRIORITY = new Map([
+  ['form_not_filled', 0],
+  ['pending_signup', 1],
+  ['equipment_unpaid', 2],
+]);
+
+/**
+ * Several registration steps can each leave a next-day reminder. They are one
+ * customer journey, not three separate conversations, so process all due
+ * automatic rows for a family as a single delivery attempt. Explicit
+ * customer-requested reminders remain independent.
+ */
+export function groupDueFollowUps(rows = []) {
+  const groups = [];
+  const automaticByParent = new Map();
+
+  for (const row of rows || []) {
+    const reason = String(row?.reason || '');
+    const parentId = String(row?.parent_id || '');
+    if (!parentId || !AUTOMATIC_PROGRESS_REASONS.has(reason)) {
+      groups.push([row]);
+      continue;
+    }
+    if (!automaticByParent.has(parentId)) {
+      const group = [];
+      automaticByParent.set(parentId, group);
+      groups.push(group);
+    }
+    automaticByParent.get(parentId).push(row);
+  }
+
+  for (const group of automaticByParent.values()) {
+    group.sort((a, b) => (
+      (AUTOMATIC_PROGRESS_PRIORITY.get(String(a?.reason || '')) ?? 99)
+      - (AUTOMATIC_PROGRESS_PRIORITY.get(String(b?.reason || '')) ?? 99)
+    ));
+  }
+  return groups.filter((group) => group.length);
+}
+
 export function followUpSendId(row) {
   return `bf-${String(row?.id || '')}`;
 }

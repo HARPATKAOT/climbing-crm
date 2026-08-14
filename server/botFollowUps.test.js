@@ -7,6 +7,7 @@ import {
   followUpMessage,
   claimFollowUpSend,
   finishFollowUpSend,
+  groupDueFollowUps,
   releaseFollowUpSend,
   newFollowUpId,
   inWindowSendAt,
@@ -117,6 +118,22 @@ test('one open follow-up per customer per reason', () => {
   assert.equal(findOpenFollowUp(store(rows), { parentId: 'p1', reason: 'customer_asked' })?.id, 'a');
   assert.equal(findOpenFollowUp(store(rows), { parentId: 'p1', reason: 'pending_signup' })?.id, 'b');
   assert.equal(findOpenFollowUp(store(rows), { parentId: 'p2', reason: 'customer_asked' }), null);
+});
+
+test('registration, form and equipment reminders for one family become one customer turn', () => {
+  const grouped = groupDueFollowUps([
+    { id: 'equipment', parent_id: 'p1', reason: 'equipment_unpaid' },
+    { id: 'manual', parent_id: 'p1', reason: 'customer_asked' },
+    { id: 'signup', parent_id: 'p1', reason: 'pending_signup' },
+    { id: 'form', parent_id: 'p1', reason: 'form_not_filled' },
+    { id: 'other', parent_id: 'p2', reason: 'equipment_unpaid' },
+  ]);
+
+  assert.deepEqual(grouped.map((rows) => rows.map((row) => row.id)), [
+    ['form', 'signup', 'equipment'],
+    ['manual'],
+    ['other'],
+  ]);
 });
 
 test('the message says what was promised, not "just checking in"', () => {

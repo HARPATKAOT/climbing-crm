@@ -772,6 +772,10 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const result = await tools.reportCentreRegistration({ childName: 'יותם' });
 
+    assert.equal(result.משובץ_אצלנו, true);
+    assert.match(result.אישור_ללקוח, /יותם כהן משובץ אצלנו/);
+    assert.match(result.אישור_ללקוח, /מבחינת ההרשמה הכול מסודר/);
+    assert.doesNotMatch(result.אישור_ללקוח, /הצוות יאמת/);
     assert.equal(result.ציוד.מצב, 'טרם נסגר');
     assert.match(result.ציוד.קישור, /\/api\/e\//);
     assert.match(result.ציוד.הסבר, /ציוד מהבית/);
@@ -1047,6 +1051,7 @@ test('נבחרת חוזרת עם תנאי הכניסה שלה, לא רק עם ה
     assert.match(squad.תנאי_כניסה, /באישור צוות הקיר/);
     assert.match(squad.תנאי_כניסה, /ניסיון של כמה שנים/);
     assert.match(squad.תנאי_כניסה, /מתחיל לטפס/);
+    assert.match(squad.תחילת_עונת_החוגים, /1 בספטמבר \d{4}/);
 
     // וקבוצה רגילה אינה נושאת תנאי כניסה בכלל.
     const regular = await tools.listClasses({ grade: 'ג' });
