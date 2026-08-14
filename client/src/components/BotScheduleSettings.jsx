@@ -179,36 +179,21 @@ export default function BotScheduleSettings({ settings, setSettings, disabled = 
       </BotSettingsCard>
 
       <BotSettingsCard
-        title="כשלקוח מבקש להפסיק"
-        hint="מילה שלמה בלבד — «הסר» עוצר, «הסרת אחריות» לא."
-        keys={['aiStopKeywords', 'aiOptOutMessage', 'aiReactivateKeywords']}
+        title="ניהול העדפות דיוור בשיחה"
+        hint="«הסר» פותח בחירת רשימות מסודרת; «הסרת אחריות» אינה מפעילה אותה."
+        keys={['aiStopKeywords']}
         settings={settings}
       >
         <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>מילות עצירה</label>
+          <label className="form-label" style={{ fontSize: 11 }}>ביטויים לפתיחת בחירת הרשימות</label>
           <input
             className="input input-sm"
             value={settings.aiStopKeywords || ''}
             onChange={(e) => patch('aiStopKeywords', e.target.value)}
           />
-        </div>
-        <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>הודעת אישור עצירה</label>
-          <textarea
-            className="input textarea"
-            rows={2}
-            style={{ fontSize: 12 }}
-            value={settings.aiOptOutMessage || ''}
-            onChange={(e) => patch('aiOptOutMessage', e.target.value)}
-          />
-        </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label" style={{ fontSize: 11 }}>מילות הפעלה מחדש</label>
-          <input
-            className="input input-sm"
-            value={settings.aiReactivateKeywords || ''}
-            onChange={(e) => patch('aiReactivateKeywords', e.target.value)}
-          />
+          <div className="text-muted" style={{ fontSize: 10, marginTop: 6 }}>
+            הלקוח יכול לבחור רשימה אחת, כמה רשימות או את כולן, ולקבל קישור אישי לעריכה מלאה.
+          </div>
         </div>
       </BotSettingsCard>
     </div>

@@ -61,6 +61,7 @@ const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipme
 const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
 const PublicPosCheckout          = lazy(() => import('./components/PublicPosCheckout.jsx'));
 const PublicShiftSignup          = lazy(() => import('./components/PublicShiftSignup.jsx'));
+const PublicMailingPreferences   = lazy(() => import('./components/PublicMailingPreferences.jsx'));
 const PublicSite                 = lazy(() => import('./public-site/PublicSite.jsx'));
 
 /**
@@ -117,6 +118,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/staff-onboard" element={<PublicEmployeeOnboardForm />} />
             {/* זמינות למשמרות — הקישור שמחליף את הסקר בוואטסאפ. */}
             <Route path="/shift-signup/:token" element={<PublicShiftSignup />} />
+            <Route path="/mailing-preferences/:token" element={<PublicMailingPreferences />} />
             {/* The retired lead form now sends every legacy link to WhatsApp. */}
             <Route path="/join" element={<WhatsAppRedirect />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
