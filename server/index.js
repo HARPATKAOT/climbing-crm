@@ -22,6 +22,7 @@ import {
   recoverUnansweredConversations,
 } from './whatsapp.js';
 import { getAiServiceState } from './aiServiceState.js';
+import { ensurePublicRedirectLegacyCutoff } from './publicRedirectMigration.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { resumeConversationAfterForm } from './botFormResume.js';
@@ -790,9 +791,7 @@ async function businessBrand() {
 const publicRedirectWindows = new Map();
 const PUBLIC_REDIRECT_WINDOW_MS = 15 * 60 * 1000;
 const PUBLIC_REDIRECT_MAX = 30;
-const PUBLIC_LEGACY_REDIRECT_CUTOFF_MS = Date.parse(
-  process.env.PUBLIC_LEGACY_LINK_CUTOFF || '2026-08-14T07:03:23.582Z'
-);
+let publicLegacyRedirectCutoffMs = 0;
 
 function publicRedirectRateLimit(req, res, next) {
   const now = Date.now();
@@ -817,7 +816,7 @@ function publicRedirectRateLimit(req, res, next) {
 
 function signedOrLegacyRedirectId(value, purpose) {
   return resolvePublicRedirectRecordId(value, purpose, {
-    legacyCutoffMs: PUBLIC_LEGACY_REDIRECT_CUTOFF_MS,
+    legacyCutoffMs: publicLegacyRedirectCutoffMs,
   }) || '';
 }
 
@@ -20300,10 +20299,16 @@ app.post('/api/registration-lifecycle/run', requireOwner, async (req, res) => {
 });
 
 // Start Server (after loading CRM-core data from Supabase)
-initDb({ requireDurable: requiresDurableStore() }).then(() => {
+initDb({ requireDurable: requiresDurableStore() }).then(async () => {
   // Boot just read every core table — the first screen to open should serve
   // that snapshot, not queue a fresh download of everything it touches.
   markFreshlyLoaded(CORE_TABLES);
+  const redirectBoundary = await ensurePublicRedirectLegacyCutoff({
+    db,
+    persist: persistCore,
+    requireDurable: requiresDurableStore(),
+  });
+  publicLegacyRedirectCutoffMs = redirectBoundary.cutoffMs;
   const liveBotSettings = db.getSettings();
   if (Number(liveBotSettings.aiPauseMinutesAfterHuman) !== 1
       || Number(liveBotSettings.aiMaxReplyChars) < 1200) {

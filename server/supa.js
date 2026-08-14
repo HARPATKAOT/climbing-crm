@@ -137,6 +137,8 @@ const DIRECT_TABLES = [
 ];
 
 export const OPERATIONAL_TABLES = [
+  // One-time security migration markers that must survive deploys/restarts.
+  'security_runtime',
   'payments',
   'employees',
   'whatsapp_logs',
