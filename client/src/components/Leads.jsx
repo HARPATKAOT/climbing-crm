@@ -6406,12 +6406,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>שינוי סטטוס</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
-                    {statusKeys.filter(k => k !== 'archived').map(k => (
+                    {statusKeys.map(k => (
                       <button
                         key={k}
-                        className={`btn ${student.status === k ? 'btn-primary' : 'btn-ghost'} btn-xs`}
+                        className={`btn ${(k === 'archived' ? parentArchived : student.status === k) ? 'btn-primary' : 'btn-ghost'} btn-xs`}
                         style={{ justifyContent: 'flex-start', gap: 8 }}
-                        onClick={() => onStatusChange(student.id, k)}
+                        onClick={() => {
+                          if (k !== 'archived') {
+                            onStatusChange(student.id, k);
+                            return;
+                          }
+                          if (parentArchived) return;
+                          if (!confirm(`להעביר את ${parentDisplayName(parent) || 'הלקוח'} לארכיון? הכרטיס ייעלם מרשימת הלקוחות ומהחיפוש, וההיסטוריה תישמר. אפשר להחזיר בכל רגע.`)) return;
+                          onArchive?.(parent?.id, true);
+                        }}
                       >
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATUSES[k].color, flexShrink: 0 }} />
                         {STATUSES[k].label}
