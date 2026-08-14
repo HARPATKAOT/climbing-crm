@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   HOLD_COLLECTION,
   HOLD_PHASE,
+  GROUP_PLACEMENT_MODE,
   INTRO_COLLECTION,
   REGISTRATION_STATUS,
   WAITLIST_COLLECTION,
@@ -17,11 +18,13 @@ import {
   createPlacementHold,
   fullDayDeadline,
   joinGroupWaitlist,
+  leaveGroupWaitlist,
   migrationDryRun,
   markPlacementRegistered,
   offerNextWaitlistee,
   resolveOtherWaitlists,
   runRegistrationLifecycle,
+  setStudentGroupPlacement,
   waitlistEntriesForGroup,
 } from './registrationLifecycle.js';
 
@@ -126,6 +129,92 @@ test('one trainee cannot hold seats in two different groups', async () => {
   assert.equal(second.ok, false);
   assert.equal(second.reason, 'student_already_holding');
   assert.equal(db.get(HOLD_COLLECTION).length, 1);
+});
+
+test('CRM group placement cleanly switches between waitlist, hard hold and fixed seat', async () => {
+  const secondGroup = { ...group, id: 'g2', name: 'קבוצה שנייה', maxSlots: 2 };
+  const db = memoryDb({
+    groups: [{ ...group, maxSlots: 2 }, secondGroup],
+    students: [{ id: 's1', name: 'ילד', parentId: parent.id, status: REGISTRATION_STATUS.DETAILS_COMPLETED }],
+    parents: [parent],
+  });
+  const now = new Date('2026-08-13T10:00:00.000Z');
+
+  const waiting = await setStudentGroupPlacement({
+    db, persist, student: db.getOne('students', 's1'), parent,
+    groups: [group, secondGroup], mode: GROUP_PLACEMENT_MODE.WAITLIST, now,
+  });
+  assert.equal(waiting.ok, true);
+  assert.equal(waiting.waitlists.length, 2);
+  assert.equal(db.getOne('students', 's1').status, REGISTRATION_STATUS.WAITLIST);
+  assert.deepEqual(db.withStudentRelation(db.getOne('students', 's1')).groupIds, []);
+  assert.equal(capacityForGroup(db, group.id, now).occupied, 0);
+
+  const held = await setStudentGroupPlacement({
+    db, persist, student: db.getOne('students', 's1'), parent,
+    groups: [group], mode: GROUP_PLACEMENT_MODE.HOLD, now,
+  });
+  assert.equal(held.ok, true);
+  assert.equal(held.hold.phase, HOLD_PHASE.AWAITING_PARENT);
+  assert.equal(capacityForGroup(db, group.id, now).occupied, 1);
+  assert.equal(waitlistEntriesForGroup(db, group.id).length, 0);
+
+  const fixed = await setStudentGroupPlacement({
+    db, persist, student: db.getOne('students', 's1'), parent,
+    groups: [secondGroup], mode: GROUP_PLACEMENT_MODE.FIXED, now,
+  });
+  assert.equal(fixed.ok, true);
+  assert.equal(db.getOne('students', 's1').status, REGISTRATION_STATUS.REGISTERED);
+  assert.deepEqual(db.withStudentRelation(db.getOne('students', 's1')).groupIds, ['g2']);
+  assert.equal(activeHoldForStudent(db, 's1', now), null);
+  assert.equal(capacityForGroup(db, group.id, now).occupied, 0);
+  assert.equal(capacityForGroup(db, secondGroup.id, now).occupied, 1);
+});
+
+test('CRM cannot create a fixed seat or a hold beyond group capacity', async () => {
+  const db = memoryDb({
+    groups: [group],
+    students: [
+      { id: 's1', name: 'רשום', groupId: group.id, groupIds: [group.id], status: REGISTRATION_STATUS.REGISTERED },
+      { id: 's2', name: 'מועמד', parentId: parent.id, status: REGISTRATION_STATUS.DETAILS_COMPLETED },
+    ],
+    enrollments: [{ id: 's1:g1', student_id: 's1', group_id: group.id, status: 'active' }],
+    parents: [parent],
+  });
+  for (const mode of [GROUP_PLACEMENT_MODE.FIXED, GROUP_PLACEMENT_MODE.HOLD]) {
+    const result = await setStudentGroupPlacement({
+      db, persist, student: db.getOne('students', 's2'), parent, groups: [group], mode,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'full');
+  }
+});
+
+test('saving an existing fixed placement stays valid when the legacy group has no capacity value', async () => {
+  const legacyGroup = { ...group, maxSlots: undefined, capacity: undefined };
+  const db = memoryDb({
+    groups: [legacyGroup],
+    students: [{ id: 's1', name: 'existing', groupId: group.id, groupIds: [group.id], status: REGISTRATION_STATUS.REGISTERED }],
+    enrollments: [{ id: 's1:g1', student_id: 's1', group_id: group.id, status: 'active' }],
+  });
+  const fixed = await setStudentGroupPlacement({
+    db, persist, student: db.getOne('students', 's1'), groups: [legacyGroup], mode: GROUP_PLACEMENT_MODE.FIXED,
+  });
+  assert.equal(fixed.ok, true);
+});
+
+test('removing the last waitlist entry restores details-completed without touching a real seat', async () => {
+  const db = memoryDb({
+    groups: [group],
+    students: [{ id: 's1', name: 'ממתין', parentId: parent.id, status: REGISTRATION_STATUS.DETAILS_COMPLETED }],
+    parents: [parent],
+  });
+  await joinGroupWaitlist({ db, persist, student: db.getOne('students', 's1'), parent, group });
+  const result = await leaveGroupWaitlist({ db, persist, student: db.getOne('students', 's1'), group });
+  assert.equal(result.ok, true);
+  assert.equal(db.getOne('students', 's1').status, REGISTRATION_STATUS.DETAILS_COMPLETED);
+  assert.equal(waitlistEntriesForGroup(db, group.id).length, 0);
+  assert.equal(capacityForGroup(db, group.id).occupied, 0);
 });
 
 test('parallel claims for the same trainee produce exactly one active hold', async () => {

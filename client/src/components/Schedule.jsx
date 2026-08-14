@@ -2058,6 +2058,9 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [tab, setTab] = useState('attendance');
   const [attView, setAttView] = useState('sheet'); // 'sheet' | 'history'
   const [assignId, setAssignId] = useState('');
+  const [assignMode, setAssignMode] = useState('fixed');
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState('');
   const [attDate, setAttDate] = useState(initialAttDate || localDateStr());
   const [attState, setAttState] = useState({});
   const [attIds, setAttIds] = useState({});
@@ -2303,10 +2306,38 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     );
   };
 
-  const handleAssign = () => {
+  const handleAssign = async () => {
     if (!assignId) return;
-    onAssignStudent(assignId, group.id);
-    setAssignId('');
+    setAssignBusy(true);
+    setAssignError('');
+    try {
+      await onAssignStudent(assignId, group.id, assignMode);
+      setAssignId('');
+      if (assignMode === 'waitlist') loadWaitlist();
+    } catch (error) {
+      setAssignError(error.message || 'השיבוץ נכשל');
+    } finally {
+      setAssignBusy(false);
+    }
+  };
+
+  const removeFromWaitlist = async (row) => {
+    if (!window.confirm(`להסיר את ${row.student_name || 'המתאמן'} מרשימת ההמתנה של „${group.name}”?`)) return;
+    setWaitlistBusy(true);
+    setWaitlistError('');
+    try {
+      const response = await fetch(
+        `/api/groups/${encodeURIComponent(group.id)}/waitlist/${encodeURIComponent(row.student_id)}`,
+        { method: 'DELETE' },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) throw new Error(body.error || 'ההסרה נכשלה');
+      await loadWaitlist();
+    } catch (error) {
+      setWaitlistError(error.message || 'ההסרה נכשלה');
+    } finally {
+      setWaitlistBusy(false);
+    }
   };
 
   // The remove button sits next to the name, so it needs a deliberate confirm.
@@ -2448,10 +2479,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
             </div>
             <div style={{ maxHeight: 160, overflowY: 'auto' }}>
               {waitlistRows.map((row) => (
-                <div key={row.id} style={{ fontSize: 11.5, color: 'var(--text-2)', marginTop: 5 }}>
-                  {row.position}. {row.student_name || row.student_id}
-                  {row.status === 'offered' ? ' · הצעה פעילה' : ''}
-                  {row.status === 'paused_after_acceptance' ? ' · ממתין להחלטת ההורה' : ''}
+                <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-2)', marginTop: 5 }}>
+                  <span style={{ flex: 1 }}>
+                    {row.position}. {row.student_name || row.student_id}
+                    {row.status === 'offered' ? ' · הצעה פעילה' : ''}
+                    {row.status === 'paused_after_acceptance' ? ' · ממתין להחלטת ההורה' : ''}
+                  </span>
+                  <button type="button" className="btn btn-ghost btn-icon btn-xs" title="הסר מרשימת ההמתנה"
+                    disabled={waitlistBusy} onClick={() => removeFromWaitlist(row)}>
+                    <UserMinus size={12} />
+                  </button>
                 </div>
               ))}
             </div>
@@ -2717,7 +2754,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 
             <div className="card card-p" style={{ marginBottom: 14, background: '#111827' }}>
               <div style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>שיבוץ מתאמן לקבוצה</div>
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <AppSelect className="input input-sm" style={{ flex: 1 }} value={assignId}
                   onChange={e => setAssignId(e.target.value)}>
                   <option value="">בחר מתאמן...</option>
@@ -2726,15 +2763,22 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                     return <option key={s.id} value={s.id}>{s.name}{p?.name ? ` — ${p.name}` : ''}</option>;
                   })}
                 </AppSelect>
-                <button className="btn btn-primary btn-sm" onClick={handleAssign} disabled={!assignId || isFull}>
-                  <UserPlus size={13} /> שבץ
+                <AppSelect className="input input-sm" value={assignMode} onChange={(event) => setAssignMode(event.target.value)}>
+                  <option value="fixed">שיבוץ קבוע</option>
+                  <option value="hold">שמירת מקום · 3 ימים</option>
+                  <option value="waitlist">רשימת המתנה</option>
+                </AppSelect>
+                <button className="btn btn-primary btn-sm" onClick={handleAssign}
+                  disabled={!assignId || assignBusy || (assignMode !== 'waitlist' && isFull)}>
+                  <UserPlus size={13} /> {assignBusy ? 'שומר…' : 'בצע'}
                 </button>
               </div>
               {isFull && (
                 <div style={{ fontSize: 11, color: '#FCD34D', marginTop: 6 }}>
-                  הקבוצה מלאה — אפשר לשבץ לרשימת המתנה מהבוט או להסיר מתאמן
+                  הקבוצה מלאה או שהמכסה לא הוגדרה — ניתן לבחור „רשימת המתנה”.
                 </div>
               )}
+              {assignError && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{assignError}</div>}
             </div>
 
             {members.length === 0 ? (
@@ -3327,24 +3371,34 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
     }
   };
 
-  const handleAssignStudent = async (studentId, groupId) => {
-    setStudents(prev => prev.map(s => {
-      if (s.id !== studentId) return s;
-      const ids = studentGroupIds(s);
-      if (ids.includes(String(groupId))) return s;
-      const next = [...ids, String(groupId)];
-      return { ...s, groupIds: next, groupId: s.groupId || groupId };
-    }));
-    try {
-      await fetch(`/api/students/${studentId}`, {
+  const handleAssignStudent = async (studentId, groupId, mode = 'fixed') => {
+    const current = students.find((student) => String(student.id) === String(studentId));
+    if (!current) throw new Error('המתאמן לא נמצא');
+    let response;
+    if (mode === 'waitlist') {
+      response = await fetch(`/api/groups/${encodeURIComponent(groupId)}/waitlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId }),
+      });
+    } else {
+      const currentIds = studentGroupIds(current);
+      if (mode === 'hold' && currentIds.length) {
+        throw new Error('למתאמן כבר יש שיבוץ. שינוי לשמירת מקום מתבצע מתיק המתאמן.');
+      }
+      const groupIds = mode === 'fixed'
+        ? [...new Set([...currentIds, String(groupId)])]
+        : [String(groupId)];
+      response = await fetch(`/api/students/${studentId}/group-placement`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addGroupId: groupId })
+        body: JSON.stringify({ mode, groupIds }),
       });
-      refreshStudents();
-    } catch (err) {
-      console.error(err);
     }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || 'השיבוץ נכשל');
+    await refreshStudents();
+    return payload;
   };
 
   const handleRemoveStudent = async (studentId, groupId) => {

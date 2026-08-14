@@ -12,7 +12,7 @@ import {
 } from '../utils/levelTestKinds.js';
 import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE, highestPassedLevel } from '../utils/levelGrades.js';
 import GenderPicker, { AdultMark, GenderMark, genderKind } from './GenderPicker.jsx';
-import { GroupPickerField } from './GroupPickerCards.jsx';
+import GroupPlacementEditor from './GroupPlacementEditor.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -84,6 +84,7 @@ import {
 } from './communicationQueue.js';
 import { consecutiveAbsences, getGroupDays } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
+import { deriveGroupPlacement } from '../utils/groupPlacement.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
 import { otherGuardians, studentGuardianIds } from '../utils/studentGuardians.js';
 import {
@@ -684,6 +685,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [registrationLifecycleState, setRegistrationLifecycleState] = useState(
     student.registrationLifecycle || {}
   );
+  const initialGroupPlacement = deriveGroupPlacement(student, student.registrationLifecycle || {});
+  const [placementMode, setPlacementMode] = useState(initialGroupPlacement.mode);
+  const [groupPlacementError, setGroupPlacementError] = useState('');
 
   // Keep an open card current even when the surrounding customer list still
   // has an older snapshot after a background expiry or waitlist offer.
@@ -806,7 +810,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditStudentNotes(student.notes || '');
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
-    setEditGroupIds(studentGroupIds(student));
+    {
+      const placement = deriveGroupPlacement(student, student.registrationLifecycle || {});
+      setEditGroupIds(placement.groupIds);
+      setPlacementMode(placement.mode);
+    }
+    setGroupPlacementError('');
     setEditEligibleGroupIds(eligibleGroupIdsFromRows(programEligibility, groups));
     const nextParentName = parentNameParts(parent);
     setEditParentName(nextParentName.firstName);
@@ -2106,7 +2115,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             notes: editStudentNotes,
             segment: editSegment || null,
             nextFollowup: editNextFollowup || null,
-            groupIds: editGroupIds,
             source: editSource
           })
         });
@@ -2174,20 +2182,22 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   const handleSaveGroup = async () => {
     setSavingGroup(true);
+    setGroupPlacementError('');
     try {
-      const res = await fetch(`/api/students/${student.id}`, {
+      const res = await fetch(`/api/students/${student.id}/group-placement`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds: editGroupIds }),
+        body: JSON.stringify({ groupIds: editGroupIds, mode: placementMode }),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        onUpdateStudent(student.id, updated);
-        setEditingGroup(false);
-        if (refreshData) refreshData();
-      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) throw new Error(payload.error || 'שמירת השיבוץ נכשלה');
+      if (payload.student) onUpdateStudent(student.id, payload.student);
+      if (payload.lifecycle) setRegistrationLifecycleState(payload.lifecycle);
+      setEditingGroup(false);
+      if (refreshData) await refreshData();
     } catch (err) {
       console.error('Failed to update group:', err);
+      setGroupPlacementError(err.message || 'שמירת השיבוץ נכשלה');
     } finally {
       setSavingGroup(false);
     }
@@ -2925,37 +2935,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const safetyTone = SAFETY_TONE[punchSafety.state] || SAFETY_TONE.missing;
   const SafetyStatusIcon = safetyTone.alert ? ShieldAlert : ShieldCheck;
   const absenceStreak = consecutiveAbsences(attendanceHistory);
-  const studentGroups = groups.filter((g) => studentGroupIds(student).includes(String(g.id)));
-  const groupSummary = studentGroups.length === 0
-    ? 'לא משויך'
-    : studentGroups.length === 1
-      ? `${studentGroups[0].name}${groupDaysLabel(studentGroups[0]) ? ` · ${groupDaysLabel(studentGroups[0])}` : ''}`
-      : (
-        // More than one group — flag it so the staff notices the double assignment
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span
-            title="המתאמן משובץ ליותר מחוג אחד"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 15,
-              height: 15,
-              borderRadius: '50%',
-              background: 'rgba(251,191,36,0.18)',
-              border: '1px solid rgba(251,191,36,0.5)',
-              color: '#FBBF24',
-              fontSize: 10,
-              fontWeight: 800,
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
-            !
-          </span>
-          {`${studentGroups.length} חוגים`}
-        </span>
-      );
   const activePasses = customerPasses.filter((p) => p.status === 'active').length;
   const passesSummary = passesLoading
     ? 'טוען...'
@@ -3047,14 +3026,21 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const placementHold = registrationLifecycle.hold || null;
   const lifecycleWaitlists = (registrationLifecycle.waitlists || [])
     .filter((entry) => ['waiting', 'offered', 'paused_after_acceptance'].includes(entry.status));
+  const currentGroupPlacement = deriveGroupPlacement(student, registrationLifecycle);
+  const currentPlacementGroups = groups.filter((group) => currentGroupPlacement.groupIds.includes(String(group.id)));
+  const placementModeLabels = {
+    fixed: 'שיבוץ קבוע',
+    hold: 'מקום שמור',
+    waitlist: 'רשימת המתנה',
+    none: 'לא משויך',
+  };
+  const groupSummary = currentPlacementGroups.length
+    ? `${placementModeLabels[currentGroupPlacement.mode]} · ${currentPlacementGroups.length === 1 ? currentPlacementGroups[0].name : `${currentPlacementGroups.length} קבוצות`}`
+    : placementModeLabels.none;
   const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
     .includes(registrationLifecycle.intro?.status)
     ? registrationLifecycle.intro
     : null;
-  const hasRegistrationLifecycle = Boolean(placementHold || lifecycleWaitlists.length || introBooking);
-  const lifecycleSummary = placementHold
-    ? (placementHold.phase === 'awaiting_centre' ? 'ממתין לאישור מתנ״ס' : 'מקום שמור')
-    : (lifecycleWaitlists.length ? `${lifecycleWaitlists.length} רשימות המתנה` : 'אימון היכרות');
   const lifecycleDate = (value) => {
     if (!value) return '—';
     const parsed = new Date(value);
@@ -3086,6 +3072,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     const active = broadcastListDefs.filter((list) => broadcastLists[list.key] !== false).length;
     return `${active}/${broadcastListDefs.length} רשימות`;
   })();
+
+  const openGroupPlacementEditor = () => {
+    const placement = deriveGroupPlacement(student, registrationLifecycleState);
+    setEditGroupIds(placement.groupIds);
+    setPlacementMode(placement.mode);
+    setGroupPlacementError('');
+    setEditingGroup(true);
+  };
 
   const openUnifiedEditor = () => {
     const nextParentName = parentNameParts(parent);
@@ -5200,71 +5194,103 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 renderBody={() => (
                   <>
                 {editingGroup ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <GroupPickerField
-                      groups={groups}
-                      selectedIds={editGroupIds}
-                      disabled={savingGroup}
-                      initiallyOpen
-                      modalOnly
-                      onSave={handleSaveGroup}
-                      onCancel={() => {
-                        setEditGroupIds(studentGroupIds(student));
-                        setEditingGroup(false);
-                      }}
-                      onToggle={(id) => {
-                        setEditGroupIds((prev) => (
-                          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-                        ));
-                      }}
-                    />
-                  </div>
+                  <GroupPlacementEditor
+                    groups={groups}
+                    mode={placementMode}
+                    selectedIds={editGroupIds}
+                    onModeChange={setPlacementMode}
+                    onSelectedIdsChange={setEditGroupIds}
+                    onSave={handleSaveGroup}
+                    onCancel={() => {
+                      setGroupPlacementError('');
+                      setEditingGroup(false);
+                    }}
+                    saving={savingGroup}
+                    error={groupPlacementError}
+                  />
                 ) : (
                   <div>
-                    {studentGroups.length > 0 ? (
+                    {currentPlacementGroups.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {studentGroups.map((g) => (
-                          <div key={g.id}>
-                            <button
-                              type="button"
-                              onClick={() => navigate(`/schedule?group=${encodeURIComponent(g.id)}`)}
-                              title="פתיחת החוג בלוח החוגים"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 5,
-                                padding: 0,
-                                background: 'none',
-                                border: 'none',
-                                font: 'inherit',
-                                fontWeight: 700,
-                                color: 'var(--text-1)',
-                                cursor: 'pointer',
-                                textAlign: 'right',
-                              }}
-                            >
-                              <span style={{ textDecoration: 'underline', textUnderlineOffset: 3 }}>{g.name}</span>
-                              <ChevronLeft size={13} style={{ opacity: 0.6, flexShrink: 0 }} />
-                            </button>
-                            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                        {currentPlacementGroups.map((g) => {
+                          const waitlistEntry = lifecycleWaitlists.find((entry) => String(entry.group_id) === String(g.id));
+                          return (
+                          <div key={g.id} className="card card-p" style={{ padding: 9 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/schedule?group=${encodeURIComponent(g.id)}`)}
+                                title="פתיחת החוג בלוח החוגים"
+                                style={{
+                                  padding: 0, background: 'none', border: 'none', font: 'inherit', fontWeight: 800,
+                                  color: 'var(--text-1)', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 3,
+                                }}
+                              >
+                                {g.name}
+                              </button>
+                              <span className={currentGroupPlacement.mode === 'fixed' ? 'badge badge-green' : currentGroupPlacement.mode === 'hold' ? 'badge badge-amber' : 'badge badge-blue'}>
+                                {placementModeLabels[currentGroupPlacement.mode]}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4 }}>
                               {[groupDaysLabel(g), g.time ? `בשעה ${g.time}` : ''].filter(Boolean).join(' ')}
+                              {currentGroupPlacement.mode === 'hold' && placementHold?.expires_at ? ` · בתוקף עד ${lifecycleDate(placementHold.expires_at)}` : ''}
+                              {currentGroupPlacement.mode === 'waitlist' && waitlistEntry?.position ? ` · מקום ${waitlistEntry.position} בתור` : ''}
                             </div>
                           </div>
-                        ))}
+                        );})}
                       </div>
                     ) : (
                       <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
                     )}
+                    {currentGroupPlacement.mode !== 'waitlist' && lifecycleWaitlists.length > 0 && (
+                      <div style={{ marginTop: 9, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {lifecycleWaitlists.map((entry) => (
+                          <div key={entry.id} style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                            רשימת המתנה · {entry.group_name || entry.group_id}{entry.position ? ` · מקום ${entry.position}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {placementHold && canManageBilling && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
+                        {placementHold.phase === 'waitlist_offer' && (
+                          <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                            onClick={() => runLifecycleAction('accept', `/api/students/${student.id}/waitlist/accept`)}>
+                            {lifecycleBusy === 'accept' ? 'שומר…' : 'קבלת המקום'}
+                          </button>
+                        )}
+                        {placementHold.phase === 'intro_decision' && (
+                          <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                            onClick={() => runLifecycleAction('continue', `/api/students/${student.id}/intro/continue`)}>
+                            {lifecycleBusy === 'continue' ? 'שומר…' : 'ממשיכים להרשמה'}
+                          </button>
+                        )}
+                        {placementHold.phase === 'awaiting_parent' && (
+                          <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
+                            onClick={() => runLifecycleAction('parent', `/api/students/${student.id}/registration/parent-confirmation`)}>
+                            {lifecycleBusy === 'parent' ? 'שומר…' : 'ההורה אישר הרשמה'}
+                          </button>
+                        )}
+                        <button className="btn btn-ghost btn-xs" disabled={!!lifecycleBusy}
+                          onClick={() => runLifecycleAction('release', `/api/placement-holds/${placementHold.id}/release`)}>
+                          {lifecycleBusy === 'release' ? 'משחרר…' : 'שחרור המקום'}
+                        </button>
+                      </div>
+                    )}
+                    {introBooking && (
+                      <div style={{ marginTop: 7, fontSize: 12, color: 'var(--text-2)' }}>
+                        אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
+                      </div>
+                    )}
+                    {lifecycleMessage && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
                       style={{ marginTop: 8 }}
-                      onClick={() => {
-                        setEditGroupIds(studentGroupIds(student));
-                        setEditingGroup(true);
-                      }}
+                      onClick={openGroupPlacementEditor}
                     >
-                      <Edit2 size={11} /> ערוך שיוך
+                      <Edit2 size={11} /> ערוך שיבוץ
                     </button>
                   </div>
                 )}
@@ -6372,76 +6398,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               />
             )}
 
-            {hasRegistrationLifecycle && (
-              <FolderRow
-                id="registration-lifecycle"
-                title="שמירת מקום והרשמה"
-                icon={CalendarDays}
-                accent="#FBBF24"
-                summary={lifecycleSummary}
-                open={openFolder === 'registration-lifecycle'}
-                onToggle={toggleFolder}
-                renderBody={() => (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                    {placementHold && (
-                      <div className="card card-p" style={{ padding: 10 }}>
-                        <div style={{ fontWeight: 800, fontSize: 13 }}>
-                          {placementHold.phase === 'awaiting_parent' && 'מקום שמור · ממתין לאישור הורה'}
-                          {placementHold.phase === 'awaiting_centre' && 'מקום שמור · ממתין לאישור מתנ״ס'}
-                          {placementHold.phase === 'waitlist_offer' && 'הצעת מקום מרשימת ההמתנה'}
-                          {placementHold.phase === 'intro_payment' && 'אימון היכרות · ממתין לתשלום'}
-                          {placementHold.phase === 'intro_scheduled' && 'אימון היכרות נקבע'}
-                          {placementHold.phase === 'intro_decision' && 'אימון היכרות · ממתין להחלטה'}
-                        </div>
-                        <div style={{ marginTop: 5, fontSize: 12, color: 'var(--text-3)' }}>
-                          {placementHold.group_ids?.map((id) => groups.find((item) => String(item.id) === String(id))?.name || id).join(' · ')}
-                          {placementHold.expires_at ? ` · עד ${lifecycleDate(placementHold.expires_at)}` : ''}
-                        </div>
-                        {canManageBilling && (
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
-                            {placementHold.phase === 'waitlist_offer' && (
-                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
-                                onClick={() => runLifecycleAction('accept', `/api/students/${student.id}/waitlist/accept`)}>
-                                {lifecycleBusy === 'accept' ? 'שומר…' : 'קבלת המקום'}
-                              </button>
-                            )}
-                            {placementHold.phase === 'intro_decision' && (
-                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
-                                onClick={() => runLifecycleAction('continue', `/api/students/${student.id}/intro/continue`)}>
-                                {lifecycleBusy === 'continue' ? 'שומר…' : 'ממשיכים להרשמה'}
-                              </button>
-                            )}
-                            {placementHold.phase === 'awaiting_parent' && (
-                              <button className="btn btn-primary btn-xs" disabled={!!lifecycleBusy}
-                                onClick={() => runLifecycleAction('parent', `/api/students/${student.id}/registration/parent-confirmation`)}>
-                                {lifecycleBusy === 'parent' ? 'שומר…' : 'ההורה אישר הרשמה'}
-                              </button>
-                            )}
-                            <button className="btn btn-ghost btn-xs" disabled={!!lifecycleBusy}
-                              onClick={() => runLifecycleAction('release', `/api/placement-holds/${placementHold.id}/release`)}>
-                              {lifecycleBusy === 'release' ? 'משחרר…' : 'שחרור המקום'}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {introBooking && (
-                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                        אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
-                      </div>
-                    )}
-                    {lifecycleWaitlists.map((entry) => (
-                      <div key={entry.id} style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                        רשימת המתנה · {entry.group_name || entry.group_id}
-                        {entry.position ? ` · מקום ${entry.position}` : ''}
-                      </div>
-                    ))}
-                    {lifecycleMessage && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}
-                  </div>
-                )}
-              />
-            )}
-
             {/* Status & notes folder */}
             <FolderRow
               id="status"
@@ -6856,19 +6812,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     <GenderPicker value={editGender} onChange={setEditGender} />
                   </div>
                 </div>
-                {/* Its own row — the board opens in a window of its own, and a
-                    half-width form cell had nowhere to put the chosen classes. */}
                 <div className="form-group">
-                  <label className="form-label">שיוך לחוגים</label>
-                  <GroupPickerField
-                    groups={groups}
-                    selectedIds={editGroupIds}
-                    onToggle={(id) => {
-                      setEditGroupIds((prev) => (
-                        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-                      ));
-                    }}
-                  />
+                  <label className="form-label">קבוצה</label>
+                  <div style={{ padding: '9px 11px', borderRadius: 9, border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12 }}>
+                    {groupSummary}. שינוי שיבוץ, שמירת מקום או רשימת המתנה נעשה בחלונית „קבוצה” שבתיק.
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">זכאות לקבוצות מתקדמים ונבחרת</label>
