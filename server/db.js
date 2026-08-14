@@ -537,8 +537,20 @@ export function botFlagLabel() {
   return enabled ? 'ON' : 'OFF';
 }
 
-/** How many tables boot hydration pulls from the durable store at once. */
-const HYDRATION_CONCURRENCY = 8;
+/**
+ * How many tables boot hydration pulls from the durable store at once.
+ *
+ * The durable store sits in Seoul while the API runs in Frankfurt, so each
+ * table costs a ~250ms round trip before a single byte arrives. Hydration is
+ * therefore latency-bound, not throughput-bound: the wall clock is roughly
+ * (tables / concurrency) x round-trip, and raising the divisor is the only
+ * lever that does not involve moving a region.
+ *
+ * Measured against the live project (103 collections, ~17MB): 8 -> 12.9s,
+ * 16 -> 8.8s, 32 -> 7.3s, with zero failed requests at any level. Past 32 the
+ * curve flattens — the remaining time is the transfer itself.
+ */
+const HYDRATION_CONCURRENCY = 32;
 
 /** Run `worker` over `items`, at most `limit` at a time, preserving order. */
 async function mapWithConcurrency(items, limit, worker) {
