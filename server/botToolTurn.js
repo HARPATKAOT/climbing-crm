@@ -9,6 +9,7 @@ import { callGeminiChat } from './aiChat.js';
 import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools } from './botTools.js';
 import { enabledToolNames } from './botCapabilities.js';
 import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
+import { customerAllowsIntro, replyMentionsIntro } from './introOfferPolicy.js';
 
 /**
  * A turn is one model call per step, so this is a ceiling on cost — but set too
@@ -23,7 +24,7 @@ const MAX_TOOL_STEPS = 7;
 
 export const CUSTOMER_TOOL_RULES = [
   '## סדר הרשמה קשיח',
-  'פעל תמיד בסדר הזה: (1) אם הלקוח אינו מזוהה אסוף שם פרטי ושם משפחה; אם הוא מזוהה דלג. (2) הצג בקצרה את הקבוצות האפשריות לפי המידע בכרטיס. (3) שלח קישור לטופס ההשתתפות והמתן לסיום המילוי. (4) לאחר עדכון מהמערכת שהטופס הושלם, כתוב רק שהפרטים התקבלו ושאל לאיזו קבוצה רוצים להשתבץ. (5) לאחר בחירת קבוצה פנויה הצג שתי אפשרויות קצרות: הרשמה ישירה או אימון היכרות במפגש הקרוב. אם נבחרה הרשמה ישירה, קרא ל-startSignup ורק לאחר הצלחה שלח את קישור המתנ״ס ואת קישור הציוד. אם נבחר אימון היכרות, קרא ל-scheduleIntroSession. אם הקבוצה מלאה, הצע רשימת המתנה. (6) לאחר השלמת פרטי הציוד אשר זאת בקצרה.',
+  'פעל תמיד בסדר הזה: (1) אם הלקוח אינו מזוהה אסוף שם פרטי ושם משפחה; אם הוא מזוהה דלג. (2) הצג בקצרה את הקבוצות האפשריות לפי המידע בכרטיס. (3) שלח קישור לטופס ההשתתפות והמתן לסיום המילוי. (4) לאחר עדכון מהמערכת שהטופס הושלם, כתוב רק שהפרטים התקבלו ושאל לאיזו קבוצה רוצים להשתבץ. (5) לאחר בחירת קבוצה פנויה המשך כברירת מחדל להרשמה ישירה: קרא ל-startSignup ורק לאחר הצלחה שלח את קישור המתנ״ס ואת קישור הציוד. אל תציע אימון היכרות ואל תשאל מה מעדיפים. אימון היכרות הוא חריג שמותר להציע רק אם הלקוח שאל עליו במפורש או אמר שאינו רוצה או אינו מוכן להירשם כרגע; רק אז קרא ל-scheduleIntroSession. אם הקבוצה מלאה, הצע רשימת המתנה. (6) לאחר השלמת פרטי הציוד אשר זאת בקצרה.',
   'אם יש בכרטיס גיל או תאריך לידה תקין, השתמש בגיל שהכלי מחזיר להתאמת קבוצות ואל תשאל באיזו כיתה המתאמן. אם חסר המידע, אל תאסוף תאריך לידה או כיתה בוואטסאפ; הטופס אוסף אותם.',
   'כשאין עדיין טופס השתתפות בתוקף: מותר להציג את אפשרויות הקבוצות ולשלוח את קישור הטופס, אבל לאחר הקישור עצור. אל תשאל כיתה, קבוצה או שאלה אחרת ואל תמשיך את ההרשמה עד שהמערכת מודיעה שהטופס הושלם.',
   'אישור השלמת טופס הוא הודעה אחת בלבד: «הפרטים התקבלו. לאיזו קבוצה תרצו להשתבץ?» אין לפרט בנפרד שהצהרת הבריאות התקבלה ושאישור ההשתתפות התקבל.',
@@ -60,7 +61,7 @@ export const CUSTOMER_TOOL_RULES = [
   `שם הטופס הוא «${FORM_SHORT}», ובפעם הראשונה שמזכירים אותו בשיחה יש לפרט: ${FORM_FULL}. לעולם אל תקרא לו «הצהרת בריאות» בלבד — גם לא כשמדובר בטופס שכבר נחתם — כי זה מבטיח ללקוח פחות ממה שהוא באמת ממלא.`,
   'הודעה שמתחילה ב-[מערכת] היא עדכון מהמערכת ולא דברי הלקוח: אל תצטט אותה, אל תודה עליה, ואל תתייחס אליה כאילו הלקוח כתב אותה. קרא את ההיסטוריה והמשך מהמקום שבו השיחה נעצרה.',
   `כשמתקבל עדכון ש${FORM_SHORT} של מתאמן נחתם: בדוק ב-getHealthDeclarations שהוא אכן בתוקף, כתוב בקצרה «הפרטים התקבלו» ושאל לאיזו קבוצה רוצים להשתבץ. אל תשלח אישור נפרד על הצהרת הבריאות ואל תחזור על הסבר הטופס.`,
-  'אחרי ששאלת לאיזו קבוצה לשבץ והלקוח בחר במפורש קבוצה, יום או שעה, אל תשאל שוב «לשבץ?». אם הלקוח עוד לא בחר בין הרשמה ישירה לאימון היכרות, הצג את שתי האפשרויות במשפט קצר. אם כבר בחר הרשמה ישירה, קרא מיד ל-startSignup; אם בחר אימון היכרות, קרא ל-scheduleIntroSession. אחרי הצלחת startSignup שלח באותה תשובה את קישור ההרשמה/התשלום ואת קישור הציוד, אם הוחזרו.',
+  'אחרי ששאלת לאיזו קבוצה לשבץ והלקוח בחר במפורש קבוצה, יום או שעה, אל תשאל שוב «לשבץ?» ואל תשאל אם מעדיפים הרשמה ישירה או אימון היכרות. ברירת המחדל היא הרשמה ישירה: קרא מיד ל-startSignup. רק אם הלקוח ביקש אימון היכרות או אמר שאינו רוצה להירשם כרגע, קרא ל-scheduleIntroSession. אחרי הצלחת startSignup שלח באותה תשובה את קישור ההרשמה/התשלום ואת קישור הציוד, אם הוחזרו.',
   'קישור ששלחת כבר בשיחה הזאת — אל תשלח שוב ואל תחזור על ההסבר שלו. הזכר אותו במשפט קצר («הקישור למעלה») רק אם הלקוח שאל עליו או אמר שלא קיבל. שלוש הודעות ברצף שפותחות באותה כותרת ובאותו קישור נקראות כמו נדנוד.',
   'ענה על מה שנשאלת. אם הלקוח בחר שעה או מסר שם — אשר את מה שהוא אמר והמשך משם, במקום לפתוח מחדש את אותו הסבר על הטופס.',
   'שאלה «למה צריך X» או «מה זה» על ציוד, או «על מה משלמים דמי העשרה» — קרא ל-getEquipmentInfo וענה ממה שכתוב שם. אם ההסבר חסר — אל תמציא אותו מהידע הכללי שלך.',
@@ -561,9 +562,13 @@ export async function runCustomerToolTurn({
   // all. Filtering the declarations rather than refusing the call is what makes
   // the switch real: the model cannot talk itself into a tool it cannot see.
   const allowed = enabledToolNames(settings);
-  const declarations = CUSTOMER_TOOL_DECLARATIONS.filter((d) => allowed.has(d.name));
   const contents = history.filter((entry) => entry?.parts?.[0]?.text);
   const incoming = String(incomingText || '').trim();
+  const introAllowed = customerAllowsIntro(history, incoming);
+  const declarations = CUSTOMER_TOOL_DECLARATIONS.filter((declaration) => (
+    allowed.has(declaration.name)
+      && (declaration.name !== 'scheduleIntroSession' || introAllowed)
+  ));
   const last = contents[contents.length - 1];
   const currentAlreadyStored = last?.role === 'user'
     && String(last?.parts?.[0]?.text || '').trim() === incoming;
@@ -593,10 +598,14 @@ export async function runCustomerToolTurn({
   const confirmationInstruction = confirmsLastBotQuestion(history, incoming)
     ? '## מצב התור הנוכחי\nהלקוח אישר בחיוב את השאלה האחרונה של הבוט. אין לשאול אותה שוב. יש לבצע עכשיו את הפעולה שאושרה בעזרת הכלי המתאים, ואז להמשיך רק לפרט הבא שחסר.'
     : '';
+  const introPolicyInstruction = introAllowed
+    ? '## אימון היכרות\nהלקוח ביקש אימון היכרות או אמר שאינו מוכן להירשם ישירות, ולכן אפשר להציע את מסלול ההיכרות.'
+    : '## ברירת מחדל להרשמה\nהלקוח לא ביקש אימון היכרות ולא סירב להרשמה. אסור להזכיר או להציע אימון היכרות. לאחר בחירת קבוצה יש לבצע הרשמה ישירה באמצעות startSignup.';
   const instruction = [
     systemInstruction,
     CUSTOMER_TOOL_RULES,
     confirmationInstruction,
+    introPolicyInstruction,
     directEligibilityInstruction(directEligibility),
   ]
     .filter(Boolean)
@@ -613,6 +622,7 @@ export async function runCustomerToolTurn({
 
   let eligibilityCorrectionSent = false;
   let registrationAckCorrectionSent = false;
+  let introPolicyCorrectionSent = false;
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
       contents,
@@ -623,6 +633,9 @@ export async function runCustomerToolTurn({
           : '',
         registrationAckCorrectionSent
           ? 'התשובה הקודמת נפסלה כי חשפה ללקוח תהליך אימות פנימי. השתמש בנוסח אישור_ללקוח שהכלי החזיר, ואל תכתוב שהצוות יאמת או שהדיווח נשמר לבדיקה.'
+          : '',
+        introPolicyCorrectionSent
+          ? 'התשובה הקודמת נפסלה כי הציעה אימון היכרות בלי שהלקוח ביקש. אל תזכיר אימון היכרות. המשך בהרשמה ישירה וקרא ל-startSignup אם כבר נבחרה קבוצה.'
           : '',
       ].filter(Boolean).join('\n\n'),
       declarations,
@@ -648,6 +661,21 @@ export async function runCustomerToolTurn({
       const text = separateMultiChildGradeQuestion(
         whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''))
       );
+
+      if (!introAllowed && replyMentionsIntro(text)) {
+        console.error('bot offered an intro session without customer intent');
+        if (!introPolicyCorrectionSent) {
+          introPolicyCorrectionSent = true;
+          continue;
+        }
+        return {
+          text: '',
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'unsolicited_intro_offer',
+        };
+      }
 
       const centreReport = [...successfulCalls].reverse()
         .find((item) => item.name === 'reportCentreRegistration' && item.result?.משובץ_אצלנו);
@@ -757,6 +785,17 @@ export async function runCustomerToolTurn({
     contents.push(content);
     const responseParts = [];
     for (const call of calls) {
+      if (call.name === 'scheduleIntroSession' && !introAllowed) {
+        responseParts.push({
+          functionResponse: {
+            name: call.name,
+            response: {
+              error: 'הלקוח לא ביקש אימון היכרות. יש להמשיך בהרשמה ישירה באמצעות startSignup.',
+            },
+          },
+        });
+        continue;
+      }
       const tool = allowed.has(call.name) ? tools[call.name] : null;
       if (!tool) {
         responseParts.push({

@@ -252,11 +252,37 @@ test('a shared grade question is rewritten as one fact per child', () => {
   );
 });
 
-test('choosing a proposed group leads to direct signup or an intro without repeating the group question', () => {
+test('choosing a proposed group defaults to direct signup without offering an intro', () => {
   assert.match(CUSTOMER_TOOL_RULES, /אל תשאל שוב «לשבץ\?»/);
-  assert.match(CUSTOMER_TOOL_RULES, /הרשמה ישירה או אימון היכרות/);
+  assert.match(CUSTOMER_TOOL_RULES, /ברירת המחדל היא הרשמה ישירה/);
+  assert.match(CUSTOMER_TOOL_RULES, /אל תשאל אם מעדיפים הרשמה ישירה או אימון היכרות/);
   assert.match(CUSTOMER_TOOL_RULES, /startSignup/);
   assert.match(CUSTOMER_TOOL_RULES, /scheduleIntroSession/);
+});
+
+test('the intro tool is exposed only after the customer asks or declines direct signup', async () => {
+  const declarationsByTurn = [];
+  const callModel = async ({ declarations }) => {
+    declarationsByTurn.push(declarations.map((row) => row.name));
+    return { content: textReply('נמשיך בהרשמה הישירה.'), error: '' };
+  };
+  await runCustomerToolTurn({ incomingText: 'יום שלישי מתאים', apiKey: 'test-key', callModel });
+  await runCustomerToolTurn({ incomingText: 'אפשר אימון היכרות?', apiKey: 'test-key', callModel });
+  assert.equal(declarationsByTurn[0].includes('scheduleIntroSession'), false);
+  assert.equal(declarationsByTurn[1].includes('scheduleIntroSession'), true);
+});
+
+test('an unsolicited intro offer is rejected and rewritten without reaching the customer', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: 'יום שלישי מתאים',
+    apiKey: 'test-key',
+    callModel: scriptedModel([
+      textReply('תרצו הרשמה ישירה או אימון היכרות?'),
+      textReply('נמשיך בהרשמה הישירה.'),
+    ]),
+  });
+  assert.equal(turn.text, 'נמשיך בהרשמה הישירה.');
+  assert.equal(turn.reason, 'ok');
 });
 
 test('a returning squad member is recognized as directly eligible for the requested squad', () => {

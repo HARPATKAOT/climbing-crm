@@ -29,6 +29,7 @@ import { resumeConversationAfterForm } from './botFormResume.js';
 import { formConfirmationPayload } from './formConfirmation.js';
 import { ensureGroupSignupWhatsappTemplate } from './groupSignupWhatsappTemplate.js';
 import { runOneTimeBotDataMigrations } from './oneTimeBotDataMigrations.js';
+import { recoverStalledIntroOffers } from './introOfferPolicy.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
   DENOMINATIONS,
@@ -20671,6 +20672,27 @@ app.listen(PORT, () => {
   setInterval(() => {
     recoverUnansweredConversations().catch((err) => console.error('unanswered WhatsApp recovery failed:', err.message));
   }, 60_000);
+
+  // One-time policy repair, safe to retry: only a still-last unsolicited intro
+  // choice is eligible, the 24h gate stays in force, and the offer id is the
+  // durable reply key. Once the direct-registration answer lands, the thread
+  // is no longer a candidate.
+  const recoverIntroOfferDeadEnds = () => recoverStalledIntroOffers({
+    messages: db.get('messages') || [],
+    parents: db.get('parents') || [],
+    since: Date.parse('2026-08-09T00:00:00+03:00'),
+    getStudents: (parent) => (db.get('students') || [])
+      .filter((student) => String(student.parentId || student.parent_id || '') === String(parent?.id || '')),
+    continueConversation: whatsappService.continueConversation,
+  }).then((summary) => {
+    if (summary.candidates) console.log(`Direct-signup recovery: ${JSON.stringify(summary)}`);
+  });
+  setTimeout(() => {
+    recoverIntroOfferDeadEnds().catch((err) => console.error('direct-signup recovery failed:', err.message));
+  }, 100_000);
+  setInterval(() => {
+    recoverIntroOfferDeadEnds().catch((err) => console.error('direct-signup recovery failed:', err.message));
+  }, 15 * 60_000);
 
   // Staff reminders before their own shifts. Every 10 minutes rather than once
   // a day, because the lead time is each employee's own choice — two hours for
