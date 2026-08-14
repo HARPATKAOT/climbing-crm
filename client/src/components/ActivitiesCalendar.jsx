@@ -4462,6 +4462,7 @@ export default function ActivitiesCalendar({
   }));
   const skipClickUntilRef = useRef(0);
   const deepLinkDoneRef = useRef(false);
+  const initialGoogleSyncRef = useRef(false);
   const undoStackRef = useRef([]);
   const undoBusyRef = useRef(false);
   const visibleRangeRef = useRef({ from: '', to: '' });
@@ -5660,7 +5661,7 @@ export default function ActivitiesCalendar({
     }
   };
 
-  const syncNow = async () => {
+  const syncNow = async ({ announce = true } = {}) => {
     setGoogleBusy(true);
     try {
       const res = await fetch('/api/google-calendar/sync', { method: 'POST' });
@@ -5669,16 +5670,31 @@ export default function ActivitiesCalendar({
       await loadActivities();
       await loadGoogleStatus();
       await loadOverlayEvents(visibleRange.from, visibleRange.to);
-      setBanner(
-        `סנכרון הושלם: נשלחו לגוגל ${data.pushed || 0}, נוספו ${data.created || 0}, עודכנו ${data.updated || 0}, נמחקו ${data.deleted || 0}`
-      );
+      if (announce) {
+        setBanner(
+          `סנכרון הושלם: נשלחו לגוגל ${data.pushed || 0}, נוספו ${data.created || 0}, עודכנו ${data.updated || 0}, נמחקו ${data.deleted || 0}`
+        );
+      }
     } catch (err) {
-      setBanner(googleAuthHint(err.message) || err.message || 'סנכרון נכשל');
+      if (announce) setBanner(googleAuthHint(err.message) || err.message || 'סנכרון נכשל');
       await loadGoogleStatus();
     } finally {
       setGoogleBusy(false);
     }
   };
+
+  // Once the connection status is known, reconcile immediately in the background.
+  // The ref keeps status refreshes performed by the sync itself from starting a loop.
+  useEffect(() => {
+    if (
+      initialGoogleSyncRef.current
+      || !googleStatus?.connected
+      || googleAuthNeedsReconnect(googleStatus.error)
+    ) return;
+
+    initialGoogleSyncRef.current = true;
+    syncNow({ announce: false });
+  }, [googleStatus?.connected, googleStatus?.error]);
 
   const saveOverlaySelection = async (next) => {
     const prev = overlaySelectedIds;
@@ -5739,6 +5755,24 @@ export default function ActivitiesCalendar({
     const b = days[6].date;
     return `${a.getDate()} ${HEB_MONTHS[a.getMonth()]} – ${b.getDate()} ${HEB_MONTHS[b.getMonth()]} ${b.getFullYear()}`;
   })();
+
+  const googleNeedsReconnect = !!(
+    googleStatus?.connected && googleAuthNeedsReconnect(googleStatus.error)
+  );
+  const googleStatusTitle = googleBusy
+    ? 'מסנכרן עם יומן גוגל…'
+    : googleNeedsReconnect
+      ? 'החיבור ליומן גוגל דורש חיבור מחדש'
+      : googleStatus?.connected
+        ? `מחובר ומסתנכרן אוטומטית${googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}`
+        : googleStatus?.configured === false
+          ? 'סנכרון יומן גוגל אינו מוגדר בשרת'
+          : 'יומן גוגל אינו מחובר';
+  const googleIndicatorColor = googleBusy
+    ? '#38BDF8'
+    : googleNeedsReconnect || googleStatus?.configured === false
+      ? '#FBBF24'
+      : googleStatus?.connected ? '#34D399' : '#94A3B8';
 
   return (
     <div
@@ -6018,76 +6052,85 @@ export default function ActivitiesCalendar({
           </div>
         </div>
 
-        <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-          fontSize: 12, color: 'var(--text-3)',
-        }}>
-          {googleStatus?.connected && googleAuthNeedsReconnect(googleStatus.error) ? (
-            <>
-              <span style={{ color: '#FBBF24' }}>
-                החיבור לגוגל פג — דורש חיבור מחדש
-              </span>
-              {isOwner && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={connectGoogle}
-                  disabled={googleBusy}
-                >
-                  {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
-                  חיבור מחדש
-                </button>
+        {/* סטטוס גוגל צף בשולי המסך ואינו תופס מקום משטח היומן. בזמן טעינת
+            הסטטוס לא מציגים דבר, כדי שלא יהיה הבזק שגוי של כפתור חיבור. */}
+        {googleStatus && (
+          <div style={{
+            position: 'fixed',
+            insetInlineEnd: 8,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 45,
+          }}>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setGoogleMenuOpen((v) => !v)}
+              title={googleStatusTitle}
+              aria-label={googleStatusTitle}
+              aria-expanded={googleMenuOpen}
+              style={{
+                position: 'relative',
+                zIndex: 2,
+                background: 'var(--bg-card)',
+                boxShadow: '0 6px 18px rgba(0,0,0,0.28)',
+              }}
+            >
+              {googleBusy ? (
+                <Loader2 size={15} className="spin" />
+              ) : googleNeedsReconnect || googleStatus.configured === false ? (
+                <AlertCircle size={15} />
+              ) : googleStatus.connected ? (
+                <RefreshCw size={15} />
+              ) : (
+                <Link2 size={15} />
               )}
-            </>
-          ) : googleStatus?.connected ? (
-            /* מצב תקין — מוצנע לכפתור אחד; הפרטים והפעולות נפתחים בלחיצה */
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setGoogleMenuOpen((v) => !v)}
-                title={`מחובר ליומן גוגל${googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}`}
-                aria-label="חיבור יומן גוגל"
-                style={{ position: 'relative' }}
-              >
-                {googleBusy
-                  ? <Loader2 size={15} className="spin" />
-                  : <RefreshCw size={15} />}
-                <span style={{
-                  position: 'absolute', insetInlineEnd: 3, top: 3,
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: '#34D399',
-                  boxShadow: '0 0 0 2px var(--bg-card)',
-                }} />
-              </button>
+              <span style={{
+                position: 'absolute', insetInlineEnd: 3, top: 3,
+                width: 7, height: 7, borderRadius: '50%',
+                background: googleIndicatorColor,
+                boxShadow: '0 0 0 2px var(--bg-card)',
+              }} />
+            </button>
 
-              {googleMenuOpen && (
-                <>
-                  <div
-                    onClick={() => setGoogleMenuOpen(false)}
-                    style={{ position: 'fixed', inset: 0, zIndex: 40 }}
-                  />
+            {googleMenuOpen && (
+              <>
+                <div
+                  onClick={() => setGoogleMenuOpen(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 0 }}
+                />
+                <div style={{
+                  position: 'absolute',
+                  left: 'calc(100% + 8px)',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  zIndex: 1,
+                  width: 240,
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+                  padding: 8,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}>
                   <div style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 6px)',
-                    insetInlineEnd: 0,
-                    zIndex: 41,
-                    minWidth: 220,
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 12,
-                    boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
-                    padding: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
+                    fontSize: 11,
+                    color: googleIndicatorColor,
+                    padding: '4px 8px 6px',
+                    lineHeight: 1.5,
                   }}>
-                    <div style={{
-                      fontSize: 11, color: '#34D399', padding: '4px 8px 6px', lineHeight: 1.4,
-                    }}>
-                      מחובר ליומן גוגל
-                      {googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}
-                    </div>
+                    {googleNeedsReconnect
+                      ? 'החיבור לגוגל פג — נדרש חיבור מחדש'
+                      : googleStatus.connected
+                        ? `הסנכרון אוטומטי${googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}`
+                        : googleStatus.configured === false
+                          ? 'הסנכרון לגוגל עדיין לא מוגדר בשרת'
+                          : 'יומן גוגל אינו מחובר'}
+                  </div>
+
+                  {googleStatus.connected && !googleNeedsReconnect && (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -6098,43 +6141,45 @@ export default function ActivitiesCalendar({
                       {googleBusy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
                       סנכרון עכשיו
                     </button>
-                    {isOwner && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => { setGoogleMenuOpen(false); disconnectGoogle(); }}
-                        disabled={googleBusy}
-                        style={{ justifyContent: 'flex-start' }}
-                      >
-                        <Unlink size={13} /> ניתוק
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          ) : googleStatus?.configured === false ? (
-            <span style={{ color: '#FBBF24', maxWidth: 420, lineHeight: 1.4 }}>
-              הסנכרון לגוגל עדיין לא מוגדר בשרת.
-              חסרים מפתחות התחברות של גוגל.
-            </span>
-          ) : (
-            <>
-              <span>לא מחובר ליומן גוגל</span>
-              {isOwner && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={connectGoogle}
-                  disabled={googleBusy}
-                >
-                  {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
-                  חיבור לגוגל
-                </button>
-              )}
-            </>
-          )}
-        </div>
+                  )}
+                  {isOwner && !googleStatus.connected && googleStatus.configured !== false && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={connectGoogle}
+                      disabled={googleBusy}
+                    >
+                      {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
+                      חיבור לגוגל
+                    </button>
+                  )}
+                  {isOwner && googleNeedsReconnect && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={connectGoogle}
+                      disabled={googleBusy}
+                    >
+                      {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
+                      חיבור מחדש
+                    </button>
+                  )}
+                  {isOwner && googleStatus.connected && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => { setGoogleMenuOpen(false); disconnectGoogle(); }}
+                      disabled={googleBusy}
+                      style={{ justifyContent: 'flex-start' }}
+                    >
+                      <Unlink size={13} /> ניתוק
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Calendar */}
