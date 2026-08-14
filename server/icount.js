@@ -4,6 +4,7 @@
  * Body: application/x-www-form-urlencoded (not JSON)
  */
 
+import crypto from 'crypto';
 import { VAT_RATE, chargeAmount, icountVatType, roundMoney } from './vat.js';
 
 const BASE_URL = 'https://api.icount.co.il/api/v3.php';
@@ -762,12 +763,21 @@ export function getPaymentTemplateName() {
 }
 
 /** Server-to-server notify URL after payment-page success (IPN). */
+export function signWebhookPaymentId(paymentId, secret = process.env.ICOUNT_WEBHOOK_SECRET || '') {
+  const cleanSecret = String(secret || '').trim();
+  const cleanPaymentId = String(paymentId || '').trim();
+  if (!cleanSecret || !cleanPaymentId) return '';
+  return crypto.createHmac('sha256', cleanSecret).update(`icount:${cleanPaymentId}`).digest('base64url');
+}
+
 export function buildIpnUrl({ paymentId } = {}) {
   const base = getPublicApiBase();
-  const secret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
   const params = new URLSearchParams();
-  if (secret) params.set('secret', secret);
-  if (paymentId) params.set('payment_id', String(paymentId));
+  if (paymentId) {
+    params.set('payment_id', String(paymentId));
+    const signature = signWebhookPaymentId(paymentId);
+    if (signature) params.set('signature', signature);
+  }
   const qs = params.toString();
   return `${base}/api/icount/webhook${qs ? `?${qs}` : ''}`;
 }
@@ -840,6 +850,7 @@ export const icount = {
   buildPaymentUrl,
   resolvePayPageUrl,
   buildIpnUrl,
+  signWebhookPaymentId,
   getPublicApiBase,
   isLocalPublicApiBase,
   isLocalHostname,

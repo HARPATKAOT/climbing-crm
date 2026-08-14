@@ -174,7 +174,10 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
   const climberId = decl.climberIdNum || snapshot.participant?.idNumber || '—';
   const birthDate = decl.birthDate || snapshot.participant?.birthDate || '—';
   const signature = signatureSrc || decl.signature_url || decl.signature || '';
-  const hasSig = typeof signature === 'string' && signature.startsWith('data:image');
+  // Signed records can predate current server validation. Only raster data URLs
+  // are allowed into innerHTML; SVG and attribute-breaking payloads stay inert.
+  const hasSig = typeof signature === 'string'
+    && /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(signature);
   const documentType = decl.documentType || 'legacy_combined';
   const includesHealth = documentType !== 'participation_waiver';
   const includesWaiver = documentType !== 'health';
@@ -319,7 +322,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         <h2>חתימה דיגיטלית</h2>
         <div class="sig-box">
           ${hasSig
-            ? `<img src="${signature}" alt="חתימה" />`
+            ? `<img src="${escapeHtml(signature)}" alt="חתימה" />`
             : '<div class="muted">לא נמצאה תמונת חתימה שמורה</div>'}
         </div>
         ${/* What the signature is worth as evidence: a drawn line plus a phone

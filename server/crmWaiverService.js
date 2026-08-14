@@ -60,6 +60,29 @@ function clean(value) {
   return String(value || '').trim();
 }
 
+const MAX_SIGNATURE_BYTES = 1024 * 1024;
+const SIGNATURE_DATA_URL = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/i;
+
+export function validateSignatureImage(value, participantName = '') {
+  const signature = clean(value);
+  const match = SIGNATURE_DATA_URL.exec(signature);
+  const label = participantName ? ` עבור ${participantName}` : '';
+  if (!match) {
+    throw Object.assign(new Error(`החתימה${label} אינה תמונת PNG או JPEG תקינה`), { status: 400 });
+  }
+  const bytes = Buffer.from(match[2], 'base64');
+  if (!bytes.length || bytes.length > MAX_SIGNATURE_BYTES) {
+    throw Object.assign(new Error(`קובץ החתימה${label} גדול מדי או ריק`), { status: 400 });
+  }
+  const png = bytes.length >= 8
+    && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if ((match[1].toLowerCase() === 'png' && !png) || (match[1].toLowerCase() === 'jpeg' && !jpeg)) {
+    throw Object.assign(new Error(`תוכן החתימה${label} אינו תואם לסוג הקובץ`), { status: 400 });
+  }
+  return { mimeType: `image/${match[1].toLowerCase()}`, bytes: bytes.length };
+}
+
 function normalizedName(value) {
   return clean(value).replace(/\s+/g, ' ').toLocaleLowerCase('he');
 }
@@ -359,6 +382,7 @@ export function validateParticipantDeclarations(participants, template, { health
     if (!clean(participant.signature)) {
       throw Object.assign(new Error(`חסרה חתימה עבור ${name}`), { status: 400 });
     }
+    validateSignatureImage(participant.signature, name);
     // Confirmations must be ticked; screening questions must be answered
     // either way, so a condition nobody was asked about is never filed as "no".
     // Parent-only clauses are excluded for an adult signing for themselves —

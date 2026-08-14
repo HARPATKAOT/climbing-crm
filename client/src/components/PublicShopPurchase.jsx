@@ -236,7 +236,8 @@ function ShopPurchase({ slug }) {
 
   const lookupHousehold = async (phone, verificationToken = otp.token) => {
     const response = await fetch(
-      `/api/public/shop/${encodeURIComponent(slug)}/household?phone=${encodeURIComponent(phone)}&idNumber=${encodeURIComponent(buyer.idNumber)}&verificationToken=${encodeURIComponent(verificationToken)}`
+      `/api/public/shop/${encodeURIComponent(slug)}/household?phone=${encodeURIComponent(phone)}&idNumber=${encodeURIComponent(buyer.idNumber)}`,
+      { headers: verificationToken ? { 'x-phone-verification': verificationToken } : {} }
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {

@@ -129,6 +129,15 @@ import {
   resolveEventHostRecipient,
 } from './eventHostProfile.js';
 import { apiAuth, requireOwner } from './auth.js';
+import {
+  allowedCorsOrigins,
+  issueOAuthState,
+  requireCronSecret,
+  safeIcountDocumentUrl,
+  secureCompare,
+  securityHeaders,
+  verifyOAuthState,
+} from './security.js';
 import { financeRouter } from './financeRoutes.js';
 import {
   accessAtLeast,
@@ -294,6 +303,7 @@ import {
   findLatestValidDeclaration,
   saveCrmParticipants,
   statusAfterHealthSignature,
+  validateSignatureImage,
 } from './crmWaiverService.js';
 import {
   declarationGap,
@@ -657,6 +667,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(securityHeaders);
 
 // The customer list is ~1.7 MB of JSON and the pricelist another 1.7 MB, all
 // of it sent uncompressed until now — the single biggest cost of opening a
@@ -667,26 +679,24 @@ const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
-const allowedOrigins = new Set([
-  'https://app.kirboaz.co.il',
-  'https://client-omega-topaz-35.vercel.app',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost:3001',
-  'http://127.0.0.1:3001',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  ...configuredOrigins,
-]);
+const allowedOrigins = allowedCorsOrigins(configuredOrigins);
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin) || (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')))) {
+    if (!origin || allowedOrigins.has(origin)) {
       return callback(null, true);
     }
-    return callback(new Error('Origin is not allowed'));
+    const error = new Error('Origin is not allowed');
+    error.code = 'CORS_ORIGIN_DENIED';
+    return callback(error);
   },
 }));
+app.use((err, _req, res, next) => {
+  if (err?.code === 'CORS_ORIGIN_DENIED') {
+    return res.status(403).json({ error: 'Origin is not allowed' });
+  }
+  return next(err);
+});
 app.use(express.json({
   limit: '15mb',
   verify(req, _res, buffer) {
@@ -719,33 +729,32 @@ app.use((err, _req, res, next) => {
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Health check endpoint for uptime monitoring & keep-alive.
-// `/api/health/deep` (or legacy `?deep=1`) also probes the durable store and
-// message write queue, so a monitor can tell "alive" from "actually able to serve".
-app.get(['/api/health', '/api/health/deep'], async (req, res) => {
-  const base = {
+// Public uptime checks reveal only process health. Store errors and security
+// configuration are available on the authenticated owner-only deep endpoint.
+function healthBase() {
+  return {
     status: 'UP',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     release: String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
   };
+}
 
-  if (!req.query.deep && req.path !== '/api/health/deep') {
-    return res.status(200).json(base);
-  }
+app.get('/api/health', (_req, res) => res.status(200).json(healthBase()));
 
+async function deepHealthResponse(res) {
   const store = await supa.ping();
   const pendingMessages = countPendingMessages();
   const healthy = store.ok && pendingMessages === 0;
 
   return res.status(healthy ? 200 : 503).json({
-    ...base,
+    ...healthBase(),
     status: healthy ? 'UP' : 'DEGRADED',
     database: store.ok ? { ok: true, ms: store.ms } : { ok: false, error: store.error },
     serviceRoleKey: supa.hasServiceRoleKey(),
     pendingMessages,
   });
-});
+}
 
 const DEFAULT_BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
@@ -987,6 +996,8 @@ app.get('/api/g/:groupId', redirectGroupIntake);
 
 app.use('/api', apiAuth);
 app.use('/api/finance', financeRouter);
+
+app.get('/api/health/deep', requireOwner, async (_req, res) => deepHealthResponse(res));
 
 app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
@@ -3145,7 +3156,10 @@ function verifyMetaWebhookSignature(req, res, next) {
 // Meta Webhook Messages Processor (POST) - Handles both WhatsApp & Instagram if routed here
 app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) => {
   const body = req.body;
-  console.log('📥 Received WhatsApp/Meta webhook:', JSON.stringify(body, null, 2));
+  console.log('📥 Received WhatsApp/Meta webhook', {
+    object: body?.object || null,
+    entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+  });
 
   try {
     // If Meta routed an Instagram or Page object to /api/whatsapp/webhook
@@ -3262,7 +3276,14 @@ app.get('/api/webhook-logs', (req, res) => {
 // Instagram Webhook Messages Processor (POST)
 app.post('/api/instagram/webhook', verifyMetaWebhookSignature, async (req, res) => {
   const body = req.body;
-  console.log('📥 Received Instagram webhook:', JSON.stringify(body, null, 2));
+  const webhookSummary = {
+    object: body?.object || null,
+    entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+    fields: [...new Set((body?.entry || []).flatMap((entry) => (
+      (entry?.changes || []).map((change) => String(change?.field || '')).filter(Boolean)
+    )))],
+  };
+  console.log('📥 Received Instagram webhook', webhookSummary);
 
   try {
     // Store in persistent log array for inspection (keep last 50)
@@ -3270,7 +3291,7 @@ app.post('/api/instagram/webhook', verifyMetaWebhookSignature, async (req, res) 
     const webhookLog = {
       id: `webhook-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      body,
+      summary: webhookSummary,
     };
     logs.unshift(webhookLog);
     if (logs.length > 50) logs.pop();
@@ -3398,15 +3419,7 @@ app.post('/api/agenda-digest/run-due', async (req, res) => {
 });
 
 // Cron / external scheduler: intro reminders (today) + followups (yesterday)
-app.post('/api/automations/run-scheduled', async (req, res) => {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return res.status(503).json({ error: 'CRON_SECRET is not configured' });
-  }
-  const provided = req.get('x-cron-secret') || '';
-  if (provided !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/api/automations/run-scheduled', requireCronSecret, async (req, res) => {
   try {
     await refreshStudentsAndGroupsCache();
     await refreshAttendanceCache();
@@ -7363,7 +7376,9 @@ app.get('/api/activities/:id/host-payment/invoice', async (req, res) => {
       });
     }
 
-    const upstream = await fetch(url);
+    const documentUrl = safeIcountDocumentUrl(url);
+    if (!documentUrl) return res.status(502).json({ error: 'כתובת מסמך החיוב אינה מאושרת' });
+    const upstream = await fetch(documentUrl);
     if (!upstream.ok) {
       return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
     }
@@ -9295,7 +9310,8 @@ app.get('/api/google-calendar/status', async (req, res) => {
 
 app.get('/api/google-calendar/auth-url', requireOwner, (req, res) => {
   try {
-    res.json({ url: googleCalendarService.getAuthUrl() });
+    const state = issueOAuthState('google-calendar');
+    res.json({ url: googleCalendarService.getAuthUrl(state) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -9304,7 +9320,7 @@ app.get('/api/google-calendar/auth-url', requireOwner, (req, res) => {
 app.get('/api/google-calendar/oauth/callback', async (req, res) => {
   try {
     const code = req.query.code;
-    if (!code) {
+    if (!code || !verifyOAuthState(req.query.state, 'google-calendar')) {
       return res.redirect(`${googleCalendarService.frontendBase()}/activities?google=error`);
     }
     const result = await googleCalendarService.completeOAuth(String(code));
@@ -9456,6 +9472,9 @@ app.delete('/api/google-calendar/overlay-events', async (req, res) => {
 
 // Public webhook from Google push notifications
 app.post('/api/google-calendar/webhook', async (req, res) => {
+  if (!await googleCalendarService.verifyWebhookNotification(req.headers)) {
+    return res.status(401).json({ error: 'Invalid Google webhook notification' });
+  }
   res.status(200).end();
   const resourceState = req.get('X-Goog-Resource-State');
   if (resourceState === 'sync') return;
@@ -9470,11 +9489,7 @@ app.post('/api/google-calendar/webhook', async (req, res) => {
 });
 
 // Cron-friendly pull (same secret pattern as attendance ensure)
-app.post('/api/google-calendar/sync-due', async (req, res) => {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.get('x-cron-secret') !== secret && req.query.secret !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/api/google-calendar/sync-due', requireCronSecret, async (req, res) => {
   try {
     const result = await applyGooglePull(db);
     res.json({ success: true, ...result });
@@ -9494,7 +9509,8 @@ app.get('/api/google-business-profile/status', requireOwner, async (_req, res) =
 
 app.get('/api/google-business-profile/auth-url', requireOwner, (_req, res) => {
   try {
-    res.json({ url: googleBusinessProfileService.getAuthUrl() });
+    const state = issueOAuthState('google-business-profile');
+    res.json({ url: googleBusinessProfileService.getAuthUrl(state) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -9504,7 +9520,9 @@ app.get('/api/google-business-profile/oauth/callback', async (req, res) => {
   const base = googleBusinessProfileService.frontendBase();
   try {
     const code = String(req.query.code || '');
-    if (!code) throw new Error('לא התקבל אישור מגוגל');
+    if (!code || !verifyOAuthState(req.query.state, 'google-business-profile')) {
+      throw new Error('אישור החיבור לגוגל אינו תקין או שפג תוקפו');
+    }
     const status = await googleBusinessProfileService.completeOAuth(code);
     if (status.ready) {
       await googleBusinessProfileService.syncOpeningHours(db.get('activities') || []);
@@ -9583,7 +9601,8 @@ app.get('/api/google-contacts/contact-status', async (req, res) => {
 
 app.get('/api/google-contacts/auth-url', requireOwner, (req, res) => {
   try {
-    res.json({ url: googleContactsService.getAuthUrl() });
+    const state = issueOAuthState('google-contacts');
+    res.json({ url: googleContactsService.getAuthUrl(state) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -9593,7 +9612,9 @@ app.get('/api/google-contacts/oauth/callback', async (req, res) => {
   const base = googleContactsService.frontendBase();
   try {
     const code = req.query.code;
-    if (!code) return res.redirect(`${base}/business-settings?googleContacts=error`);
+    if (!code || !verifyOAuthState(req.query.state, 'google-contacts')) {
+      return res.redirect(`${base}/business-settings?googleContacts=error`);
+    }
     await googleContactsService.completeOAuth(String(code));
     // First fill right after connecting, so the phone is useful immediately.
     try {
@@ -9628,11 +9649,7 @@ app.post('/api/google-contacts/sync', requireOwner, async (req, res) => {
 });
 
 // Cron-friendly sync (same secret pattern as the calendar pull)
-app.post('/api/google-contacts/sync-due', async (req, res) => {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.get('x-cron-secret') !== secret && req.query.secret !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/api/google-contacts/sync-due', requireCronSecret, async (req, res) => {
   try {
     res.json(await googleContactsService.syncContacts(googleContactsDeps));
   } catch (err) {
@@ -9826,15 +9843,7 @@ app.post('/api/attendance/ensure', async (req, res) => {
 });
 
 // Cron / external scheduler entry. The secret is mandatory and header-only.
-app.post('/api/attendance/ensure-today', async (req, res) => {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return res.status(503).json({ error: 'CRON_SECRET is not configured' });
-  }
-  const provided = req.get('x-cron-secret') || '';
-  if (provided !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.post('/api/attendance/ensure-today', requireCronSecret, async (req, res) => {
   req.body = { ...(req.body || {}), date: israelDateStr() };
   // Reuse ensure handler logic
   await refreshStudentsAndGroupsCache();
@@ -10653,7 +10662,9 @@ app.get('/api/payments/:id/invoice', async (req, res) => {
       });
     }
 
-    const upstream = await fetch(url);
+    const documentUrl = safeIcountDocumentUrl(url);
+    if (!documentUrl) return res.status(502).json({ error: 'כתובת מסמך החיוב אינה מאושרת' });
+    const upstream = await fetch(documentUrl);
     if (!upstream.ok) {
       return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
     }
@@ -11327,12 +11338,18 @@ app.post('/api/icount/webhook', async (req, res) => {
     if (!expectedSecret && process.env.NODE_ENV === 'production') {
       return res.status(503).json({ ok: false, error: 'webhook secret is not configured' });
     }
-    const incoming =
-      req.get('X-iCount-Secret') ||
-      req.get('x-icount-secret') ||
-      req.query?.secret ||
-      '';
-    if (expectedSecret && String(incoming) !== expectedSecret) {
+    const headerSecret = String(req.get('X-iCount-Secret') || req.get('x-icount-secret') || '');
+    const legacyQuerySecret = String(req.query?.secret || '');
+    const paymentId = String(req.query?.payment_id || req.body?.payment_id || '');
+    const expectedSignature = icount.signWebhookPaymentId(paymentId, expectedSecret);
+    const suppliedSignature = String(req.query?.signature || req.get('x-icount-signature') || '');
+    const authorized = !expectedSecret
+      || (headerSecret && secureCompare(headerSecret, expectedSecret))
+      // Compatibility for already-issued payment links. New links use the
+      // payment-bound signature and never expose the reusable secret in a URL.
+      || (legacyQuerySecret && secureCompare(legacyQuerySecret, expectedSecret))
+      || (expectedSignature && suppliedSignature && secureCompare(suppliedSignature, expectedSignature));
+    if (!authorized) {
       console.warn('⛔ [iCount webhook] rejected — bad or missing secret');
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
@@ -15057,7 +15074,9 @@ app.get('/api/pos/sales/:id/invoice', async (req, res) => {
       });
     }
 
-    const upstream = await fetch(url);
+    const documentUrl = safeIcountDocumentUrl(url);
+    if (!documentUrl) return res.status(502).json({ error: 'כתובת מסמך החיוב אינה מאושרת' });
+    const upstream = await fetch(documentUrl);
     if (!upstream.ok) {
       return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
     }
@@ -17742,6 +17761,7 @@ function requireVerifiedPublicPhone(req, res, rawPhone, { allowConsumed = false 
   const phone = normPhone(rawPhone);
   const token = String(
     req.body?.phoneVerification?.token
+      || req.get('x-phone-verification')
       || req.query?.verificationToken
       || req.query?.verification_token
       || ''
@@ -17865,6 +17885,15 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
   if (!waiverAccepted) {
     return res.status(400).json({ error: 'יש לאשר את כתב הוויתור / הסרת האחריות' });
   }
+  const verified = requireVerifiedPublicPhone(req, res, phone);
+  if (!verified) return;
+  const identity = requirePublicIdentityPair(req, res, verified, { idNumber: parentIdNum });
+  if (!identity) return;
+  try {
+    validateSignatureImage(signature, climberName);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
 
   const sourceTemplate = templateId
     ? listFormTemplates().find((t) => t.id === templateId)
@@ -17882,6 +17911,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     source: 'form',
     channel: 'form',
     lastName: parentLastName,
+    idNumber: parentIdNum || '',
   });
   // Always refresh parent name from form when provided
   if (parentName && parent.name !== parentName) {
@@ -18000,6 +18030,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     signedDate: new Date().toISOString().split('T')[0],
     signedBy: parentName,
     studentName: cleanClimberName,
+    phoneVerification: verifiedPhoneEvidence(verified),
   });
 
   // 3. Await durable Supabase writes so the client file survives Render restarts
@@ -18009,6 +18040,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     persistCore('health_declarations', record),
   ]);
   const failed = durable.find((r) => r && r.ok === false);
+  otpService.consumeToken(verified.token, verified.phone);
   if (failed) {
     console.error('health-declaration durable write failed:', failed.error);
     return res.status(201).json({
@@ -18069,18 +18101,17 @@ function findParentForOnboard({ parentId, phone, studentId, idNumber }) {
 app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
-  const parentId = String(req.query.parentId || '').trim();
+  const verified = requireVerifiedPublicPhone(req, res, phone);
+  if (!verified) return;
 
-  const students = db.get('students') || [];
-  let student = studentId ? students.find((s) => s.id === studentId) : null;
-  const parent = findParentForOnboard({
-    parentId: parentId || student?.parentId || '',
-    phone,
-    studentId,
-  });
+  const parent = findParentForOnboard({ phone: verified.phone });
+  const household = parent ? expandHousehold(db, parent.id) : { students: [] };
+  let student = studentId
+    ? household.students.find((row) => String(row.id) === studentId) || null
+    : null;
 
   if (!student && parent) {
-    const kids = students.filter((s) => s.parentId === parent.id);
+    const kids = household.students;
     if (kids.length === 1) student = kids[0];
   }
 
@@ -18161,7 +18192,12 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
     templateSlug: contextTemplateSlug,
   });
   const hasPersonalLookup = !!(parentId || studentId || phone || idNumber);
-  const verificationToken = String(req.query.verificationToken || req.query.verification_token || '').trim();
+  const verificationToken = String(
+    req.get('x-phone-verification')
+      || req.query.verificationToken
+      || req.query.verification_token
+      || ''
+  ).trim();
   if (hasPersonalLookup && (!phone || !verificationToken || !otpService.checkToken(verificationToken, normPhone(phone)))) {
     const listDefs = db.getBroadcastListDefs();
     res.json({
@@ -20251,7 +20287,7 @@ app.listen(PORT, () => {
   // Self-ping keeps the instance awake and surfaces a degraded store early.
   const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://climbing-crm-api.onrender.com';
   setInterval(() => {
-    fetch(`${renderUrl}/api/health?deep=1`)
+    fetch(`${renderUrl}/api/health`)
       .then(async (res) => {
         if (res.ok) {
           console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`);

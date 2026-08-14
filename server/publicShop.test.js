@@ -100,7 +100,7 @@ const signedHolder = {
   birthDate: '2015-04-01',
   answers: { ...HEALTHY_ANSWERS },
   waiverAccepted: true,
-  signature: 'data:image/png;base64,signed',
+  signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
 };
 
 function purchase(db, payload, extra = {}) {

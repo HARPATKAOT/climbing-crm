@@ -298,6 +298,7 @@ async function ensureWallCalendar(settings) {
 
 async function startWatch(calendarId) {
   const channelId = crypto.randomUUID();
+  const channelToken = crypto.randomBytes(32).toString('base64url');
   const address = `${publicApiBase()}/api/google-calendar/webhook`;
   try {
     const watch = await googleFetch(`/calendars/${encodeURIComponent(calendarId)}/events/watch`, {
@@ -306,6 +307,7 @@ async function startWatch(calendarId) {
         id: channelId,
         type: 'web_hook',
         address,
+        token: channelToken,
         // ~7 days (Google max ~1 week for calendar watch)
         expiration: String(Date.now() + 6.5 * 24 * 60 * 60 * 1000),
       },
@@ -313,6 +315,7 @@ async function startWatch(calendarId) {
     return {
       channelId: watch.id || channelId,
       channelResourceId: watch.resourceId || null,
+      channelToken,
       channelExpiration: watch.expiration ? Number(watch.expiration) : null,
     };
   } catch (err) {
@@ -320,10 +323,35 @@ async function startWatch(calendarId) {
     return {
       channelId: null,
       channelResourceId: null,
+      channelToken: null,
       channelExpiration: null,
       watchError: err.message,
     };
   }
+}
+
+function headerValue(headers, name) {
+  if (typeof headers?.get === 'function') return String(headers.get(name) || '');
+  return String(headers?.[name.toLowerCase()] || headers?.[name] || '');
+}
+
+function equalHeader(left, right) {
+  const a = Buffer.from(String(left || ''), 'utf8');
+  const b = Buffer.from(String(right || ''), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function webhookNotificationMatches(settings, headers) {
+  if (!settings?.channelId || !settings?.channelResourceId) return false;
+  if (!equalHeader(headerValue(headers, 'x-goog-channel-id'), settings.channelId)) return false;
+  if (!equalHeader(headerValue(headers, 'x-goog-resource-id'), settings.channelResourceId)) return false;
+  if (settings.channelToken
+      && !equalHeader(headerValue(headers, 'x-goog-channel-token'), settings.channelToken)) return false;
+  return true;
+}
+
+export async function verifyWebhookNotification(headers) {
+  return webhookNotificationMatches(await loadSettings({ force: true }), headers);
 }
 
 async function stopWatch(settings) {
@@ -981,6 +1009,7 @@ export async function completeOAuth(code) {
   settings = await saveSettings({
     channelId: watch.channelId,
     channelResourceId: watch.channelResourceId,
+    channelToken: watch.channelToken,
     channelExpiration: watch.channelExpiration,
     syncToken: null,
   });
@@ -1188,6 +1217,7 @@ export async function pullChanges(deps) {
     await saveSettings({
       channelId: watch.channelId,
       channelResourceId: watch.channelResourceId,
+      channelToken: watch.channelToken,
       channelExpiration: watch.channelExpiration,
     });
   }
@@ -1206,6 +1236,7 @@ export const googleCalendarService = {
   getAuthUrl,
   getStatus,
   completeOAuth,
+  verifyWebhookNotification,
   disconnect,
   pushActivity,
   pullChanges,

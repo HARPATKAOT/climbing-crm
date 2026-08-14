@@ -101,7 +101,7 @@ const signedNoam = {
   birthDate: '2014-03-02',
   answers: healthyAnswers,
   waiverAccepted: true,
-  signature: 'data:image/png;base64,signed',
+  signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
 };
 
 test('an adult may sign only their own adult card', async () => {
@@ -124,7 +124,7 @@ test('an adult may sign only their own adult card', async () => {
       parent: { name: 'אבנר לוי', phone: '0521112222' },
       participants: [{
         type: 'adult', id: 's-rotem', name: 'רותם לוי', birthDate: '1988-05-05',
-        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,signed',
+        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
       }],
     }),
     /מבוגר רשאי לחתום רק עבור עצמו/
@@ -140,7 +140,7 @@ test('a minor cannot bypass guardian signing by posting type adult', async () =>
       parent: { name: 'אבנר לוי', phone: '0521112222' },
       participants: [{
         type: 'adult', name: 'אבנר לוי', birthDate: '2012-05-05',
-        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,signed',
+        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
       }],
     }),
     /קטין אינו רשאי לחתום עבור עצמו/
@@ -169,7 +169,7 @@ test('a staff-targeted link files an adult signature on the named CRM card', asy
     participants: [{
       type: 'adult', name: 'יאיר קרפל', birthDate: '1978-03-08',
       idNumber: '031455983', answers: healthyAnswers,
-      waiverAccepted: true, signature: 'data:image/png;base64,signed',
+      waiverAccepted: true, signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
     }],
     targetStudentId: 's-yair',
   });
@@ -718,7 +718,7 @@ test('confirming the same family puts both parents on every child, once', async 
       birthDate: '2017-06-06',
       answers: healthyAnswers,
       waiverAccepted: true,
-      signature: 'data:image/png;base64,signed',
+      signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
     }],
   });
 

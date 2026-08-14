@@ -14,8 +14,19 @@ import {
 } from './finance.js';
 import { financeSyncStatus, runFinanceSync } from './financeSync.js';
 import { financeAutomationSummary, matchExpenseTransactions, parseFinanceCsv } from './financeAutomation.js';
+import { requireCronSecret } from './security.js';
 
 export const financeRouter = express.Router();
+
+// Render invokes this without a CRM session. Keep it before the finance access
+// middleware, but fail closed unless the dedicated header secret is present.
+financeRouter.post('/sync-scheduled', requireCronSecret, async (_req, res) => {
+  try {
+    res.json(await runFinanceSync({ full: false, sources: ['notion', 'icount'] }));
+  } catch (error) {
+    res.status(502).json({ error: error.message || 'סנכרון הנתונים נכשל' });
+  }
+});
 
 financeRouter.use((req, res, next) => {
   if (!hasSensitiveAccess(req.crmUser, 'finance')) {

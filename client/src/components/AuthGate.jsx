@@ -142,8 +142,8 @@ function NewPasswordScreen({ onDone }) {
 
   const submit = async (event) => {
     event.preventDefault();
-    if (password.length < 6) {
-      setError('הסיסמה חייבת לכלול לפחות 6 תווים');
+    if (password.length < 12) {
+      setError('הסיסמה חייבת לכלול לפחות 12 תווים');
       return;
     }
     if (password !== confirm) {
@@ -179,7 +179,7 @@ function NewPasswordScreen({ onDone }) {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           required
-          minLength={6}
+          minLength={12}
         />
         <label className="form-label" htmlFor="crm-confirm-password">אימות סיסמה</label>
         <input
@@ -190,7 +190,7 @@ function NewPasswordScreen({ onDone }) {
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}
           required
-          minLength={6}
+          minLength={12}
         />
         {error && <div className="alert alert-danger">{error}</div>}
         <button className="btn btn-primary" type="submit" disabled={loading}>

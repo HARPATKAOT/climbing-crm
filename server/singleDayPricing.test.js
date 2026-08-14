@@ -89,7 +89,7 @@ async function register(activity, attendingDates, participantCount = 1) {
         name: `ילד ${i + 1}`,
         birthDate: '2016-05-05',
         waiverAccepted: true,
-        signature: 'data:image/png;base64,AAAA',
+        signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
         answers: { ...ALL_ANSWERS },
       })),
       policyAccepted: true,

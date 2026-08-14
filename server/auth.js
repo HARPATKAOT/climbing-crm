@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supa } from './supa.js';
 import { db } from './db.js';
 import {
@@ -13,19 +14,21 @@ import {
 // screen often opens several protected resources together, so repeating both
 // checks for every request made a single card transition pay the same latency
 // many times. Cache the resolved context briefly and share concurrent checks;
-// permissions and revocations still take effect within one minute.
-const AUTH_CONTEXT_TTL_MS = 60_000;
+// Keep the cache short so a blocked account or removed permission stops working
+// quickly, and hash bearer tokens so the cache never retains reusable secrets.
+const AUTH_CONTEXT_TTL_MS = 15_000;
 const AUTH_CONTEXT_CACHE_MAX = 250;
 const authContextCache = new Map();
 const authContextInFlight = new Map();
 
 async function resolveCachedAuthContext(token) {
+  const cacheKey = crypto.createHash('sha256').update(token).digest('hex');
   const now = Date.now();
-  const cached = authContextCache.get(token);
+  const cached = authContextCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.value;
-  if (cached) authContextCache.delete(token);
+  if (cached) authContextCache.delete(cacheKey);
 
-  const pending = authContextInFlight.get(token);
+  const pending = authContextInFlight.get(cacheKey);
   if (pending) return pending;
 
   const request = (async () => {
@@ -37,15 +40,15 @@ async function resolveCachedAuthContext(token) {
     if (authContextCache.size >= AUTH_CONTEXT_CACHE_MAX) {
       authContextCache.delete(authContextCache.keys().next().value);
     }
-    authContextCache.set(token, { value, expiresAt: Date.now() + AUTH_CONTEXT_TTL_MS });
+    authContextCache.set(cacheKey, { value, expiresAt: Date.now() + AUTH_CONTEXT_TTL_MS });
     return value;
   })();
 
-  authContextInFlight.set(token, request);
+  authContextInFlight.set(cacheKey, request);
   try {
     return await request;
   } finally {
-    authContextInFlight.delete(token);
+    authContextInFlight.delete(cacheKey);
   }
 }
 

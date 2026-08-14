@@ -109,7 +109,7 @@ const signed = (name, type = 'child') => ({
   birthDate: type === 'child' ? '2015-01-01' : '1985-01-01',
   answers: { ...HEALTHY_ANSWERS },
   waiverAccepted: true,
-  signature: 'data:image/png;base64,signed',
+  signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
 });
 
 const parent = { name: 'אמא ישראלי', phone: '050-123-4567', email: 'parent@example.com' };

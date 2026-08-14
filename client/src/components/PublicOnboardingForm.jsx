@@ -1563,8 +1563,9 @@ export default function PublicOnboardingForm() {
       if (targetStudentId) params.set('studentId', targetStudentId);
       if (template?.slug) params.set('templateSlug', template.slug);
       if (formSource) params.set('source', formSource);
-      if (verificationToken) params.set('verificationToken', verificationToken);
-      const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
+      const res = await fetch(`/api/public/onboard-context?${params.toString()}`, {
+        headers: verificationToken ? { 'x-phone-verification': verificationToken } : {},
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (data.identity_status === 'review_required') {
