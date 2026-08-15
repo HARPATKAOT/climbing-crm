@@ -15,6 +15,10 @@ import {
 import { financeSyncStatus, runFinanceSync } from './financeSync.js';
 import { financeAutomationSummary, matchExpenseTransactions, parseFinanceCsv } from './financeAutomation.js';
 import { requireCronSecret } from './security.js';
+import { FINANCE_FLAGS, financeFlag, financeId } from './financeCore.js';
+import { PROVIDER_CATALOG, credentialsFromEnv, fromCsvRows } from './bankProviders.js';
+import { ingestRawTransactions } from './bankIngestion.js';
+import { durableRecordingStore, runBankSync } from './bankSync.js';
 
 export const financeRouter = express.Router();
 
@@ -25,6 +29,15 @@ financeRouter.post('/sync-scheduled', requireCronSecret, async (_req, res) => {
     res.json(await runFinanceSync({ full: false, sources: ['notion', 'icount'] }));
   } catch (error) {
     res.status(502).json({ error: error.message || 'סנכרון הנתונים נכשל' });
+  }
+});
+
+// משיכת בנק/אשראי לילית. no-op בטוח כשהדגל כבוי.
+financeRouter.post('/bank-sync-scheduled', requireCronSecret, async (_req, res) => {
+  try {
+    res.json(await runBankSync());
+  } catch (error) {
+    res.status(502).json({ error: error.message || 'משיכת תנועות הבנק נכשלה' });
   }
 });
 
@@ -170,6 +183,88 @@ financeRouter.get('/reconciliation', (_req, res) => {
 
 financeRouter.get('/sync-status', (_req, res) => res.json(financeSyncStatus()));
 
+// ─── מרכז פיננסי: חשבונות, משיכה, תיבת נכנס (FINANCE_SPEC שלבים 1, 5.4) ────
+
+financeRouter.get('/flags', (_req, res) => {
+  res.json(Object.fromEntries(FINANCE_FLAGS.map((name) => [name, financeFlag(name)])));
+});
+
+financeRouter.get('/accounts', (_req, res) => {
+  const accounts = db.get('financial_accounts').map((account) => ({
+    ...account,
+    // שמות השדות הנדרשים + האם env מכיל אותם. ערכים לעולם לא נשלחים.
+    provider: PROVIDER_CATALOG[account.institution]
+      ? {
+        label: PROVIDER_CATALOG[account.institution].label,
+        credential_fields: PROVIDER_CATALOG[account.institution].credentialFields,
+        credentials_configured: Boolean(credentialsFromEnv(account.institution)),
+      }
+      : null,
+  }));
+  res.json({ accounts, catalog: Object.fromEntries(Object.entries(PROVIDER_CATALOG)
+    .map(([key, spec]) => [key, { label: spec.label, account_type: spec.accountType, credential_fields: spec.credentialFields }])) });
+});
+
+financeRouter.post('/accounts', async (req, res) => {
+  try {
+    const type = String(req.body?.type || '');
+    if (!['bank', 'credit_card', 'cash', 'clearing'].includes(type)) {
+      return res.status(400).json({ error: 'סוג חשבון לא תקין' });
+    }
+    const row = await persistRow('financial_accounts', {
+      id: financeId('acc'),
+      type,
+      institution: String(req.body?.institution || '').trim(),
+      display_name: String(req.body?.display_name || '').trim(),
+      last4: String(req.body?.last4 || '').replace(/\D/g, '').slice(-4) || null,
+      currency: 'ILS',
+      is_active: true,
+      created_by: req.crmUser?.email || null,
+    });
+    return res.status(201).json(row);
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'שמירת החשבון נכשלה' });
+  }
+});
+
+financeRouter.post('/bank-sync', async (_req, res) => {
+  try {
+    res.json(await runBankSync());
+  } catch (error) {
+    res.status(502).json({ error: error.message || 'משיכת תנועות הבנק נכשלה' });
+  }
+});
+
+financeRouter.get('/inbox', (req, res) => {
+  const wanted = String(req.query.status || 'open');
+  const items = db.get('finance_inbox_items')
+    .filter((row) => wanted === 'all' || row.status === wanted)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const counts = {};
+  for (const item of items) counts[item.item_type] = (counts[item.item_type] || 0) + 1;
+  res.json({ items, counts, total: items.length });
+});
+
+financeRouter.put('/inbox/:id', async (req, res) => {
+  try {
+    const item = db.getOne('finance_inbox_items', req.params.id);
+    if (!item) return res.status(404).json({ error: 'הפריט לא נמצא' });
+    const status = String(req.body?.status || '');
+    if (!['resolved', 'dismissed', 'open'].includes(status)) {
+      return res.status(400).json({ error: 'סטטוס לא תקין' });
+    }
+    const saved = await persistRow('finance_inbox_items', {
+      ...item,
+      status,
+      resolved_by: status === 'open' ? null : (req.crmUser?.email || null),
+      resolved_at: status === 'open' ? null : new Date().toISOString(),
+    });
+    return res.json(saved);
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'עדכון הפריט נכשל' });
+  }
+});
+
 financeRouter.post('/sync', async (req, res) => {
   try {
     const sources = Array.isArray(req.body?.sources) ? req.body.sources.filter((row) => ['notion', 'icount'].includes(row)) : ['icount'];
@@ -240,7 +335,31 @@ financeRouter.post('/bank-transactions/import', async (req, res) => {
     }
     const proposed = matchExpenseTransactions(chooseExpenseRows(db.get('finance_expenses')), db.get('finance_bank_transactions'));
     for (const row of proposed) await persistRow('finance_expense_matches', row);
-    res.json({ ...automationPayload(), import_errors: parsed.errors });
+
+    // אותו קובץ מזין גם את המרכז הפיננסי החדש — pipeline אחד, לא שניים.
+    // ה-dedupe_hash מגן מפני ייבוא כפול, אז אפשר להזרים את כל השורות.
+    let financeCenter = null;
+    if (financeFlag('bank_ingestion')) {
+      const accountType = req.body?.account_type === 'bank' ? 'bank' : 'credit_card';
+      const last4 = String(req.body?.account_last4 || '').replace(/\D/g, '').slice(-4) || null;
+      let account = db.get('financial_accounts').find((row) =>
+        row.type === accountType && String(row.last4 || '') === String(last4 || '') && row.institution === 'csv');
+      if (!account) {
+        account = await persistRow('financial_accounts', {
+          id: financeId('acc'),
+          type: accountType,
+          institution: 'csv',
+          display_name: `ייבוא קובץ ${accountType === 'bank' ? 'בנק' : 'אשראי'}${last4 ? ` ${last4}` : ''}`,
+          last4,
+          currency: 'ILS',
+          is_active: true,
+        });
+      }
+      const store = durableRecordingStore();
+      financeCenter = ingestRawTransactions(store, { account, rawTxns: fromCsvRows(parsed.rows) });
+      await store.flush();
+    }
+    res.json({ ...automationPayload(), import_errors: parsed.errors, finance_center: financeCenter });
   } catch (error) {
     res.status(500).json({ error: error.message || 'ייבוא התנועות נכשל' });
   }

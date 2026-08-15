@@ -26,8 +26,9 @@
 - ליבה: `server/financeCore.js` (feature flags, כסף באגורות, dedupe_hash, סיווג kind).
 - SQL twin: `database/20260815_finance_center.sql` (up) + הערות down בקובץ.
 
-### שלב 1 — ingestion בנק+אשראי, dedupe, settlement — todo
-- קריטריון: ייבוא פעמיים = 0 כפילויות (טסט); חיוב אשראי מרוכז מסווג settlement ולא נספר כהוצאה (טסט); תשלומים עתידיים של Max → cash_flow_items (טסט); ריצת 0 תנועות ביום עסקים = שגיאה.
+### שלב 1 — ingestion בנק+אשראי, dedupe, settlement — **done** (משיכה חיה ממתינה ל-B1)
+- קריטריון: ייבוא פעמיים = 0 כפילויות (טסט ✓); חיוב אשראי מרוכז מסווג settlement ולא נספר כהוצאה + אימות מחזור (טסט ✓); תשלומים עתידיים של Max → cash_flow_items (טסט ✓); 0 תנועות ביום עסקים = פריט שגיאה (טסט ✓); כשל אימות = פריט inbox בלי להפיל ריצה (טסט ✓).
+- קבצים: `server/bankProviders.js` (interface + מרכנתיל/Max + mock + CSV), `server/bankIngestion.js` (הצנרת), `server/bankSync.js` (תזמור + כתיבה עמידה), ראוטים ב-financeRoutes (`/accounts`, `/bank-sync`, `/inbox`), cron ב-render.yaml (04:30), ייבוא ה-CSV הקיים מזין גם את הצנרת החדשה.
 
 ### שלב 1.5 — iCount דו-כיווני: outbox, reconciliation, פאנל בריאות — todo
 - קיים כבר: pull מלא (financeSync, cron כל 15 דק), push (invrec מהקופה, IPN). נבנה: outbox לכשלונות+retry+DLQ, reconciliation לילי → פריטי inbox, פאנל בריאות, סנכרון ספקים דו-כיווני.
