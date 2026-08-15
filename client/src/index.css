@@ -2183,6 +2183,9 @@ select option, select optgroup {
 .finance-matching-panes .is-matched-row { opacity: .5; }
 .finance-inbox-row.is-focused { background: color-mix(in srgb, var(--purple) 9%, transparent); box-shadow: inset 3px 0 0 var(--purple); }
 .finance-automation-hero p svg { vertical-align: -2px; margin-inline-end: 4px; color: var(--amber); }
+/* מונה תיבת הטיפול על הטאב */
+.finance-tab-count { min-width: 18px; height: 18px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 999px; background: linear-gradient(135deg, #F87171, #FB7185); color: #fff; font-size: 10px; font-weight: 800; line-height: 1; }
+.tab-pill.active .finance-tab-count { background: #14172a; color: #FB7185; }
 /* FinChart (שלב 7) */
 .finchart { width: 100%; height: auto; display: block; font-family: inherit; }
 .finchart-spark { display: block; margin-top: 6px; opacity: .85; }
