@@ -7,6 +7,7 @@
 import { db } from './db.js';
 import { financeFlag } from './financeCore.js';
 import { icount } from './icount.js';
+import { runFinanceSync } from './financeSync.js';
 import { durableRecordingStore } from './bankSync.js';
 import { matureInstallments } from './bankIngestion.js';
 import { processOutbox } from './icountOutbox.js';
@@ -58,6 +59,8 @@ export async function runFinanceNightly({ now = new Date() } = {}) {
     }
   };
 
+  // משיכת iCount טרייה לפני היישוב — אין cron חיצוני שעושה את זה.
+  await part('icount_pull', 'reconciliation', () => runFinanceSync({ full: false, sources: ['icount'] }));
   await part('outbox', 'icount_outbox', () => processOutbox(store, { icountClient: icount, now }));
   await part('email', 'doc_ingestion', async () => (gmailConfigured()
     ? runEmailIngestion(store, { provider: createGmailProvider() })

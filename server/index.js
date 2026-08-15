@@ -147,6 +147,7 @@ import {
   verifyOAuthState,
 } from './security.js';
 import { financeRouter } from './financeRoutes.js';
+import { runFinanceNightlyIfDue } from './financeNightly.js';
 import {
   accessAtLeast,
   createAccessRole,
@@ -21045,6 +21046,12 @@ app.listen(PORT, () => {
 
   // AI assistant sweep over conversations that went quiet (from 03:00 Asia/Jerusalem)
   setInterval(() => { runNightlySweepIfDue(3); }, 15 * 60 * 1000);
+
+  // המרכז הפיננסי: משיכת iCount, התאמות, יישוב, ספר ותחזית — פעם ביום
+  // מ-04:00. אין cron של Render בחשבון, אז התזמון חי כאן כמו שאר העבודות.
+  setInterval(() => {
+    runFinanceNightlyIfDue().catch((err) => console.error('finance nightly failed:', err?.message || err));
+  }, 15 * 60 * 1000);
 
   // Sunday and Tuesday at 08:00: one question to the community centre carrying
   // every trainee whose parent said they had registered there.
