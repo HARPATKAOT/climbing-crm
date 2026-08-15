@@ -357,6 +357,21 @@ function saleDescription(sale) {
   return names.join(' · ') || 'מכירה בדלפק';
 }
 
+/** שורות המוצרים של העסקה, לפירוט בתוך המגירה. description נושא גם את שם ההנחה. */
+function saleItemLines(sale) {
+  const items = Array.isArray(sale?.items) ? sale.items : [];
+  return items.map((item) => {
+    const quantity = Number(item?.quantity) || 1;
+    const unitPrice = Number(item?.unitprice ?? item?.unit_price ?? 0);
+    return {
+      name: item?.description || item?.name || 'פריט',
+      quantity,
+      unit_price: Number.isFinite(unitPrice) ? unitPrice : 0,
+      line_total: Number.isFinite(unitPrice) ? Math.round(unitPrice * quantity * 100) / 100 : 0,
+    };
+  });
+}
+
 function customerNameFor({ row, parentById, studentById }) {
   if (row?.customer_name) return row.customer_name;
   const parent = row?.parent_id ? parentById.get(String(row.parent_id)) : null;
@@ -427,6 +442,8 @@ export function listTodayTransactions({
       excluded_reason: null,
       sale_id: sale?.id || payment.pos_sale_id || null,
       payment_id: paymentId || null,
+      payment_url: payment.payment_url || sale?.payment_url || null,
+      items: sale ? saleItemLines(sale) : [],
       icount_doc_number: payment.icount_doc_number || sale?.icount_doc_number || null,
       has_charge_doc: Boolean(payment.icount_doc_url || payment.icount_doc_number || sale?.icount_doc_url || sale?.icount_doc_number),
       has_refund_doc: Boolean(payment.refund_doc_number || sale?.refund_doc_number),
@@ -465,6 +482,8 @@ export function listTodayTransactions({
       excluded_reason: counted ? null : (refundedToday ? 'refunded' : cancelledToday ? 'cancelled' : 'pending'),
       sale_id: sale.id,
       payment_id: sale.payment_id || saleByPaymentLink.get(String(sale.id))?.id || null,
+      payment_url: sale.payment_url || saleByPaymentLink.get(String(sale.id))?.payment_url || null,
+      items: saleItemLines(sale),
       icount_doc_number: sale.icount_doc_number || null,
       has_charge_doc: Boolean(sale.icount_doc_url || sale.icount_doc_number),
       has_refund_doc: Boolean(sale.refund_doc_url || sale.refund_doc_number),

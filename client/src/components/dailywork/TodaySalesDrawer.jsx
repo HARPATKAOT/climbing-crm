@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Ban,
+  ChevronDown,
+  ChevronUp,
   CircleDollarSign,
   FileText,
+  Link2,
   RefreshCw,
   Send,
   Undo2,
@@ -201,7 +204,7 @@ function CancelDialog({ row, onClose, onDone }) {
  * העסקאות שמאחורי „הכנסות היום”: כל שורה עם צפייה בקבלה, שליחה ללקוח, זיכוי
  * (מלא/חלקי עם סיבה) וביטול. אחרי פעולה כספית הסכום למעלה מתרענן מיד.
  */
-export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = false, onClose, onMoneyChanged }) {
+export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = false, onClose, onMoneyChanged, onOpenCustomer }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -210,6 +213,7 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
   const [notice, setNotice] = useState(null);
   const [refundRow, setRefundRow] = useState(null);
   const [cancelRow, setCancelRow] = useState(null);
+  const [expandedId, setExpandedId] = useState('');
 
   const load = useCallback(async () => {
     setError('');
@@ -241,6 +245,15 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
     setLoading(true);
     load();
     onMoneyChanged?.();
+  };
+
+  const copyPaymentLink = async (row) => {
+    try {
+      await navigator.clipboard.writeText(row.payment_url);
+      setNotice({ type: 'success', text: `קישור התשלום של ${row.customer_name || 'הלקוח'} הועתק — אפשר להדביק בוואטסאפ` });
+    } catch {
+      setNotice({ type: 'error', text: 'ההעתקה נכשלה — אפשר לפתוח את הקישור בלשונית ולהעתיק משם' });
+    }
   };
 
   const openDocument = (row, kind) => {
@@ -339,13 +352,40 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
         )}
         {!loading && !error && rows.map((row) => {
           const excluded = !row.counted;
+          const isOpenCharge = row.excluded_reason === 'pending';
           const canRefund = row.sale_id && !excluded;
           const allowPartial = Boolean(isOwner && row.payment_id && row.bucket === 'online');
+          const hasCustomer = Boolean(row.parent_id || row.student_id);
+          const items = Array.isArray(row.items) ? row.items : [];
+          const expanded = expandedId === row.id;
+          // חיוב פתוח אינו נספר בסכום היום, אבל קו חוצה אומר „בוטל” — לכן ענבר.
+          const amountClass = excluded && !isOpenCharge ? 'excluded' : '';
+          const amountStyle = isOpenCharge ? { color: '#FCD34D' } : (excluded ? undefined : { color: '#6EE7B7' });
           return (
             <div key={row.id} className="dw-sale-row">
               <div className="dw-sale-main">
-                <strong>{row.customer_name || 'לקוח מזדמן'}</strong>
-                <span className={`dw-sale-amount ${excluded ? 'excluded' : ''}`} style={excluded ? undefined : { color: '#6EE7B7' }}>
+                {hasCustomer ? (
+                  <strong
+                    role="button"
+                    tabIndex={0}
+                    title="פתיחת תיק הלקוח"
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={(event) => { event.currentTarget.style.color = 'var(--blue)'; }}
+                    onMouseLeave={(event) => { event.currentTarget.style.color = ''; }}
+                    onClick={() => onOpenCustomer?.(row)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onOpenCustomer?.(row);
+                      }
+                    }}
+                  >
+                    {row.customer_name || 'לקוח'}
+                  </strong>
+                ) : (
+                  <strong>{row.customer_name || 'לקוח מזדמן'}</strong>
+                )}
+                <span className={`dw-sale-amount ${amountClass}`} style={amountStyle}>
                   {shekel(row.amount)}
                 </span>
               </div>
@@ -355,10 +395,38 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
                 <span>{row.description}</span>
                 <span className="badge badge-gray" style={{ fontSize: 10 }}>{METHOD_LABEL[row.bucket] || row.payment_method || '—'}</span>
                 {excluded && (
-                  <span className="badge badge-red" style={{ fontSize: 10 }}>{EXCLUDED_LABEL[row.excluded_reason] || row.excluded_reason}</span>
+                  <span className={`badge ${isOpenCharge ? 'badge-amber' : 'badge-red'}`} style={{ fontSize: 10 }}>
+                    {EXCLUDED_LABEL[row.excluded_reason] || row.excluded_reason}
+                  </span>
                 )}
               </div>
+              {expanded && items.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '2px 10px 4px', borderInlineStart: '2px solid var(--border)', fontSize: 12, color: 'var(--text-2)' }}>
+                  {items.map((item, index) => {
+                    const name = /^[�\s?]+$/.test(item.name || '') ? 'פריט ללא שם (נשמר משובש)' : item.name;
+                    return (
+                      <div key={index} style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {name}
+                          {item.quantity > 1 && ` ×${item.quantity} (${shekel(item.unit_price)} ליח׳)`}
+                        </span>
+                        <span style={{ flexShrink: 0, fontWeight: 600 }}>{shekel(item.line_total)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="dw-sale-actions">
+                {items.length > 0 && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => setExpandedId(expanded ? '' : row.id)}>
+                    {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />} {expanded ? 'סגור פירוט' : 'פירוט מוצרים'}
+                  </button>
+                )}
+                {row.payment_url && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => copyPaymentLink(row)}>
+                    <Link2 size={12} /> העתק קישור תשלום
+                  </button>
+                )}
                 {row.has_charge_doc && (
                   <button type="button" className="btn btn-ghost btn-xs" onClick={() => openDocument(row, 'charge')}>
                     <FileText size={12} /> קבלה

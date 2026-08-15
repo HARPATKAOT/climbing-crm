@@ -380,6 +380,18 @@ export default function DailyWork({
     else onNavigate?.(`/leads?open=${encodeURIComponent(key)}`);
   }, [entries, onNavigate]);
 
+  /** פתיחת תיק הלקוח משורת עסקה — המגירה נשארת פתוחה מתחת, וחוזרים אליה בסגירה. */
+  const openSaleCustomer = useCallback((row) => {
+    const studentKey = row.student_id ? String(row.student_id) : '';
+    if (studentKey && entries.some((entry) => String(entry.key) === studentKey)) {
+      setStudentFileId(studentKey);
+      return;
+    }
+    const open = openParentCard(row.parent_id);
+    if (open) open();
+    else if (row.parent_id) onNavigate?.(`/leads?open=${encodeURIComponent(`parent:${row.parent_id}`)}`);
+  }, [entries, onNavigate, openParentCard]);
+
   /** סימון שיחה כטופלה — אופטימי: השורה יורדת מיד וחוזרת אם השרת נכשל. */
   const markConversationHandled = useCallback(async (conversation) => {
     const previous = conversations;
@@ -675,6 +687,7 @@ export default function DailyWork({
           isOwner={Boolean(isOwner)}
           onClose={() => setDrawer(null)}
           onMoneyChanged={() => { fetchStats(); setLastUpdated(new Date()); }}
+          onOpenCustomer={openSaleCustomer}
         />
       )}
       {drawer?.type === 'funnel' && (

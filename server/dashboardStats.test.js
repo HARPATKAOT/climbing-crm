@@ -225,6 +225,11 @@ test('today transactions: counted rows sum to the daily total, refunds stay visi
       status: 'pending_payment',
       total: 250,
       payment_method: 'online',
+      payment_url: 'https://pay.example.test/open-link',
+      items: [
+        { name: 'כניסה לקיר', description: 'כניסה לקיר · הנחה למתאמנים', quantity: 2, unitprice: 45 },
+        { name: 'ארטיק', quantity: 1, unitprice: 10 },
+      ],
       created_at: '2026-08-13T08:00:00.000Z',
     },
     {
@@ -269,6 +274,12 @@ test('today transactions: counted rows sum to the daily total, refunds stay visi
     { counted: pendingRow.counted, reason: pendingRow.excluded_reason },
     { counted: false, reason: 'pending' }
   );
+  assert.equal(pendingRow.payment_url, 'https://pay.example.test/open-link');
+  // description נושא את שם ההנחה, והסכום לשורה הוא כמות כפול מחיר יחידה.
+  assert.deepEqual(pendingRow.items, [
+    { name: 'כניסה לקיר · הנחה למתאמנים', quantity: 2, unit_price: 45, line_total: 90 },
+    { name: 'ארטיק', quantity: 1, unit_price: 10, line_total: 10 },
+  ]);
   const oldPendingRow = result.rows.find((r) => r.sale_id === 'old-open-link');
   assert.deepEqual(
     { counted: oldPendingRow.counted, reason: oldPendingRow.excluded_reason },
