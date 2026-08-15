@@ -29,6 +29,7 @@ import {
   proposeMatches,
   unmatchedExpenseSummary,
 } from './matchingEngine.js';
+import { applyRules, learnRule, seedCategories, vatSummary } from './financeCategories.js';
 
 export const financeRouter = express.Router();
 
@@ -432,6 +433,138 @@ financeRouter.post('/matching/manual', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message || 'הקישור הידני נכשל' });
   }
+});
+
+// ─── קטגוריות, מנוע חוקים, ספקים ומע״מ (שלב 4) ─────────────────────────────
+
+financeRouter.get('/categories', async (_req, res) => {
+  try {
+    if (!db.get('finance_categories').length) {
+      const store = durableRecordingStore();
+      seedCategories(store);
+      await store.flush();
+    }
+    res.json({ categories: db.get('finance_categories').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)) });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'טעינת הקטגוריות נכשלה' });
+  }
+});
+
+financeRouter.put('/transactions/:id/classify', async (req, res) => {
+  try {
+    const transaction = db.getOne('finance_transactions', req.params.id);
+    if (!transaction) return res.status(404).json({ error: 'התנועה לא נמצאה' });
+    const store = durableRecordingStore();
+    store.update('finance_transactions', transaction.id, {
+      ...transaction,
+      category_id: req.body?.category_id ?? transaction.category_id,
+      supplier_id: req.body?.supplier_id ?? transaction.supplier_id,
+      cost_center_id: req.body?.cost_center_id ?? transaction.cost_center_id ?? null,
+      status: 'classified',
+      classified_by: req.crmUser?.email || null,
+      classified_at: new Date().toISOString(),
+    });
+    let rule = null;
+    // "החל על כל החיובים מהספק הזה מעכשיו" — כך המערכת לומדת (סעיף 9.3).
+    if (req.body?.create_rule === true) {
+      const learned = learnRule(store, {
+        merchantPattern: transaction.merchant_raw || transaction.raw_description,
+        categoryId: req.body?.category_id || null,
+        supplierId: req.body?.supplier_id || null,
+        costCenterId: req.body?.cost_center_id || null,
+        createdBy: req.crmUser?.email || null,
+      });
+      rule = learned.rule;
+      applyRules(store);
+    }
+    await store.flush();
+    res.json({ ok: true, rule });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'הסיווג נכשל' });
+  }
+});
+
+financeRouter.post('/rules/apply', async (_req, res) => {
+  try {
+    if (!financeFlag('rules_engine')) return res.status(409).json({ error: 'מנוע החוקים כבוי (דגל rules_engine)' });
+    const store = durableRecordingStore();
+    const summary = applyRules(store);
+    await store.flush();
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'הרצת החוקים נכשלה' });
+  }
+});
+
+financeRouter.get('/rules', (_req, res) => {
+  res.json({ rules: db.get('finance_rules').sort((a, b) => (b.hits || 0) - (a.hits || 0)) });
+});
+
+financeRouter.put('/rules/:id', async (req, res) => {
+  try {
+    const rule = db.getOne('finance_rules', req.params.id);
+    if (!rule) return res.status(404).json({ error: 'החוק לא נמצא' });
+    const saved = await persistRow('finance_rules', {
+      ...rule,
+      is_active: req.body?.is_active !== false,
+      set_category_id: req.body?.set_category_id ?? rule.set_category_id,
+      set_supplier_id: req.body?.set_supplier_id ?? rule.set_supplier_id,
+      set_cost_center_id: req.body?.set_cost_center_id ?? rule.set_cost_center_id,
+    });
+    res.json(saved);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'עדכון החוק נכשל' });
+  }
+});
+
+financeRouter.get('/suppliers', (_req, res) => {
+  const usage = new Map();
+  for (const expense of db.get('finance_expenses')) {
+    if (expense.supplier_id) usage.set(String(expense.supplier_id), (usage.get(String(expense.supplier_id)) || 0) + 1);
+  }
+  res.json({
+    suppliers: db.get('finance_suppliers').map((supplier) => ({
+      ...supplier,
+      alias_count: (supplier.aliases || []).length,
+      expense_count: usage.get(String(supplier.id)) || 0,
+    })).sort((a, b) => (b.expense_count || 0) - (a.expense_count || 0)),
+  });
+});
+
+financeRouter.put('/suppliers/:id', async (req, res) => {
+  try {
+    const supplier = db.getOne('finance_suppliers', req.params.id);
+    if (!supplier) return res.status(404).json({ error: 'הספק לא נמצא' });
+    const saved = await persistRow('finance_suppliers', {
+      ...supplier,
+      name: String(req.body?.name ?? supplier.name).trim() || supplier.name,
+      vat_id: String(req.body?.vat_id ?? supplier.vat_id ?? '').replace(/\D/g, '') || supplier.vat_id,
+      aliases: Array.isArray(req.body?.aliases) ? req.body.aliases.map(String).filter(Boolean) : supplier.aliases,
+      default_category_id: req.body?.default_category_id ?? supplier.default_category_id ?? null,
+      payment_terms: req.body?.payment_terms ?? supplier.payment_terms ?? null,
+      is_recurring: req.body?.is_recurring ?? supplier.is_recurring ?? false,
+    });
+    res.json(saved);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'עדכון הספק נכשל' });
+  }
+});
+
+financeRouter.get('/vat-summary', (req, res) => {
+  const { from, to } = period(req);
+  const documentsVatAgorot = db.get('finance_documents')
+    .filter((doc) => dateInRange(doc.document_date, from, to))
+    .filter((doc) => classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).recognized)
+    .reduce((sum, doc) => {
+      const sign = classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).sign;
+      return sum + Math.round(Math.abs(Number(doc.vat_amount) || 0) * 100) * sign;
+    }, 0);
+  res.json(vatSummary({
+    documentsVatAgorot,
+    transactions: db.get('finance_transactions').filter((row) => dateInRange(row.booking_date, from, to)),
+    matches: db.get('finance_matches'),
+    categories: db.get('finance_categories'),
+  }));
 });
 
 // ─── קליטת מסמכים: pipeline אחד להעלאה, מייל וצילום (שלב 2) ────────────────
