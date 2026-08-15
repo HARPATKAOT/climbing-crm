@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, History, Bot, CheckCircle, RefreshCw, Sparkles, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive } from 'lucide-react';
+import { Send, History, Bot, CheckCircle, RefreshCw, Sparkles, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive, CalendarClock, AlertTriangle, X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
@@ -17,11 +17,22 @@ import BotActivityPanel from './BotActivityPanel.jsx';
 import BotOpenItemsPanel from './BotOpenItemsPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import AppSelect from './AppSelect.jsx';
+import BroadcastQuotaCard from './BroadcastQuotaCard.jsx';
+import BroadcastSuppressionPanel from './BroadcastSuppressionPanel.jsx';
+import BroadcastPreviewPager from './BroadcastPreviewPager.jsx';
+import BroadcastSendFlow from './BroadcastSendFlow.jsx';
 
 // Only downloaded when the campaigns tab is opened.
 const Campaigns = lazy(() => import('./Campaigns.jsx'));
 
 const PLAYGROUND_PHONE = '0599111000';
+
+// datetime-local מדבר בשעון המקומי; toISOString נותן UTC ומזיז את המינימום
+// שלוש שעות אחורה בישראל — מה שמאפשר לבחור עבר.
+function toLocalDatetimeValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 
 const DEFAULT_LISTS = [
   { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)' },
@@ -95,9 +106,20 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const [showArchivedTemplates, setShowArchivedTemplates] = useState(false);
   const [customMessage, setCustomMessage] = useState('');
   const [segmentFilters, setSegmentFilters] = useState({ ...EMPTY_FILTERS });
-  const [previewCount, setPreviewCount] = useState(0);
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
-  const [sendResult, setSendResult] = useState(null);
+
+  // תוכנית השליחה מהשרת: קהל מאוחד לפי טלפון, חסימות, עלות ותצוגות אמת.
+  const [plan, setPlan] = useState(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [overrides, setOverrides] = useState([]);
+  const [suppressionSettings, setSuppressionSettings] = useState({ recencyDays: 7, capHours: 72 });
+  const [savingDefaults, setSavingDefaults] = useState(false);
+  const [quota, setQuota] = useState(null);
+  const [scheduleAt, setScheduleAt] = useState('');
+  const [quietOffer, setQuietOffer] = useState(null); // {error, quiet:{reason,nextAllowed}}
+  const [splitOffer, setSplitOffer] = useState(null); // {remaining}
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [sendError, setSendError] = useState('');
 
   // Edit mailing lists
   const [showListsModal, setShowListsModal] = useState(false);
@@ -110,6 +132,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   // Broadcast History State
   const [broadcasts, setBroadcasts] = useState([]);
   const [loadingBroadcasts, setLoadingBroadcasts] = useState(false);
+  const [historyJobId, setHistoryJobId] = useState(null);
 
   // Settings State
   const [settings, setSettings] = useState({
@@ -291,11 +314,18 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const fetchBroadcasts = async () => {
     setLoadingBroadcasts(true);
     try {
-      const response = await fetch('/api/whatsapp/broadcasts');
-      if (response.ok) {
-        const data = await response.json();
-        setBroadcasts(data);
-      }
+      // משימות חדשות (עם דוח מלא) + קמפיינים ישנים שאין להם שורת משימה.
+      const [jobsRes, campaignsRes] = await Promise.all([
+        fetch('/api/broadcast/jobs'),
+        fetch('/api/whatsapp/broadcasts'),
+      ]);
+      const jobs = jobsRes.ok ? await jobsRes.json() : [];
+      const campaigns = campaignsRes.ok ? await campaignsRes.json() : [];
+      const jobIds = new Set(jobs.map((j) => j.id));
+      const legacy = campaigns.filter((c) => !jobIds.has(c.id)).map((c) => ({ ...c, legacy: true }));
+      setBroadcasts([...jobs, ...legacy].sort(
+        (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+      ));
     } catch (e) {
       console.error(e);
     } finally {
@@ -307,6 +337,12 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     fetchLists();
     fetchSettings();
     fetchApprovedTemplates();
+    fetch('/api/broadcast/defaults')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setSuppressionSettings({ recencyDays: d.recencyDays, capHours: d.capHours });
+      })
+      .catch(() => {});
   }, []);
 
   // Archived templates come down too, behind the "כולל ארכיון" switch below:
@@ -356,20 +392,67 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     });
   }, [selectedList]);
 
+  // עקיפה שאושרה מול תבנית וסינון מסוימים לא נודדת בשקט לקהל אחר.
+  useEffect(() => {
+    setOverrides([]);
+  }, [selectedTemplate?.id, JSON.stringify(segmentFilters)]);
+
+  // תוכנית השליחה מתחשבת מחדש בכל שינוי קהל/תבנית/הודעה/עקיפות — בשרת.
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/broadcast/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filters: segmentFilters }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setPreviewCount(d.count || 0);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [JSON.stringify(segmentFilters)]);
+    // הדגל נדלק מיידית (לא בתוך ההשהיה) — אחרת ב-350 המילישניות הראשונות
+    // כפתור השליחה עדיין חי עם ספירה של הקהל הקודם.
+    setPlanLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/broadcast/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filters: segmentFilters,
+            templateId: selectedTemplate?.id || null,
+            customMessage: selectedTemplate ? '' : customMessage,
+            listKey: segmentFilters.listKey || '',
+            overrides,
+            recencyDays: suppressionSettings.recencyDays,
+            capHours: suppressionSettings.capHours,
+            sampleLimit: 12,
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!cancelled && res.ok && data) setPlan(data);
+      } catch {
+        /* הרשת נפלה — נשארים עם התוכנית הקודמת */
+      } finally {
+        if (!cancelled) setPlanLoading(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [
+    JSON.stringify(segmentFilters),
+    selectedTemplate?.id,
+    customMessage,
+    overrides.join(','),
+    suppressionSettings.recencyDays,
+    suppressionSettings.capHours,
+  ]);
+
+  const toggleOverride = (id) => {
+    setOverrides((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const saveSuppressionDefaults = async () => {
+    setSavingDefaults(true);
+    try {
+      await fetch('/api/broadcast/defaults', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(suppressionSettings),
+      });
+    } catch { /* לא קריטי */ } finally {
+      setSavingDefaults(false);
+    }
+  };
 
   const messageText = selectedTemplate ? (selectedTemplate.text || selectedTemplate.body || `[תבנית: ${selectedTemplate.id}]`) : customMessage;
 
@@ -449,13 +532,24 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     }
   };
 
-  const handleSendBroadcast = async () => {
+  const handleSendBroadcast = async ({ scheduledAt = null } = {}) => {
     if (!selectedTemplate && !customMessage.trim()) {
-      alert('בחרו תבנית מאושרת, או כתבו הודעה לנמענים עם חלון פתוח');
+      setSendError('בחרו תבנית מאושרת, או כתבו הודעה לנמענים עם חלון פתוח');
       return;
     }
+
+    // הקהל גדול מהמכסה שנותרה — עוצרים להצעה לפני שמנסים בכלל,
+    // כולל כשהמכסה נגמרה לגמרי (remaining === 0).
+    const remaining = quota?.remaining;
+    if (!scheduledAt && !splitOffer && remaining != null
+      && (plan?.eligibleCount || 0) > remaining) {
+      setSplitOffer({ remaining, resetAt: quota?.window?.oldestRollsOffAt || null });
+      return;
+    }
+
     setSendingBroadcast(true);
-    setSendResult(null);
+    setSendError('');
+    setQuietOffer(null);
 
     const campaignName = `קמפיין ${lists.find(l => l.key === selectedList)?.label || 'פילוח'} - ${new Date().toLocaleDateString('he-IL')}`;
     const hasGroupFilter = Array.isArray(segmentFilters.groupIds) && segmentFilters.groupIds.length > 0;
@@ -475,33 +569,38 @@ export default function Broadcasts({ parents, students, groups = [] }) {
           templateId: selectedTemplate?.id || null,
           customMessage: selectedTemplate ? null : customMessage,
           filters: effectiveFilters,
+          overrides,
+          recencyDays: suppressionSettings.recencyDays,
+          capHours: suppressionSettings.capHours,
+          ...(scheduledAt ? { scheduledAt } : {}),
         }),
       });
 
-      const data = await response.json();
-      if (response.ok && data.sent > 0) {
-        setSendResult({
-          success: true,
-          sent: data.sent,
-          failed: data.failed || 0,
-          total: data.recipientCount || data.total,
-          jobId: data.jobId,
-        });
-        setSelectedTemplate(null);
-        setCustomMessage('');
-      } else {
-        setSendResult({
-          success: false,
-          error: data.error || 'השליחה נכשלה. לרוב האסימון של Meta פג תוקף.',
-          sent: data.sent || 0,
-          failed: data.failed || 0,
-        });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 409 && data.quiet) {
+        setQuietOffer({ error: data.error, quiet: data.quiet });
+        return;
       }
-    } catch (err) {
-      setSendResult({ success: false, error: 'שגיאה בחיבור' });
+      if (!response.ok) {
+        setSendError(data.error || 'השליחה נכשלה. לרוב האסימון של Meta פג תוקף.');
+        return;
+      }
+      setActiveJobId(data.jobId);
+      setSplitOffer(null);
+      setScheduleAt('');
+      setOverrides([]);
+    } catch {
+      setSendError('שגיאה בחיבור לשרת');
     } finally {
       setSendingBroadcast(false);
     }
+  };
+
+  const exitSendFlow = () => {
+    setActiveJobId(null);
+    setSelectedTemplate(null);
+    setCustomMessage('');
+    setSendError('');
   };
 
   // Test AI bot reply as a continuing playground conversation
@@ -644,7 +743,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             className={`tab-pill ${activeTab === key ? 'active' : ''}`}
             onClick={() => {
               setActiveTab(key);
-              if (key === 'compose') setSendResult(null);
+              if (key === 'compose') setSendError('');
             }}
           >
             <Icon size={14} /> {label}
@@ -662,34 +761,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
 
       {/* COMPOSE */}
       {activeTab === 'compose' && (
-        sendResult && sendResult.success ? (
-          <div className="fade-in" style={{ maxWidth: 500, margin: '0 auto', textAlign: 'center', paddingTop: 40 }}>
-            <div style={{ fontSize: 64, marginBottom: 16 }}>📤</div>
-            <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>הדיוור נשלח בהצלחה!</h2>
-            <div className="alert alert-success" style={{ textAlign: 'right', marginBottom: 20 }}>
-              <CheckCircle size={18} style={{ flexShrink: 0 }} />
-              <div>
-                <div style={{ fontWeight: 600 }}>ההודעה הופצה ל-{sendResult.sent} נמענים</div>
-                {sendResult.failed > 0 && (
-                  <div style={{ fontSize: 12, marginTop: 4 }}>נכשלו: {sendResult.failed}</div>
-                )}
-              </div>
-            </div>
-            <button className="btn btn-ghost" onClick={() => setSendResult(null)}>דיוור חדש</button>
-          </div>
-        ) : sendResult && !sendResult.success ? (
-          <div className="fade-in" style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center', paddingTop: 40 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>הדיוור לא נשלח</h2>
-            <div className="alert alert-danger" style={{ textAlign: 'right', marginBottom: 20 }}>
-              <div style={{ fontWeight: 600 }}>{sendResult.error || 'שגיאה בשליחה'}</div>
-              {(sendResult.sent != null || sendResult.failed != null) && (
-                <div style={{ fontSize: 12, marginTop: 6 }}>
-                  נשלחו: {sendResult.sent || 0} · נכשלו: {sendResult.failed || 0}
-                </div>
-              )}
-            </div>
-            <button className="btn btn-ghost" onClick={() => setSendResult(null)}>חזרה</button>
-          </div>
+        activeJobId ? (
+          <BroadcastSendFlow jobId={activeJobId} onExit={exitSendFlow} />
         ) : (
           <div className="grid-21" style={{ gap: 20, alignItems: 'flex-start' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
@@ -829,14 +902,157 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+              <BroadcastQuotaCard audienceCount={plan?.eligibleCount || 0} onQuota={setQuota} />
+
+              {(plan?.samples?.length || 0) > 0 ? (
+                <BroadcastPreviewPager
+                  samples={plan.samples}
+                  eligibleCount={plan.eligibleCount}
+                  templateId={selectedTemplate?.id || null}
+                  customMessage={selectedTemplate ? '' : customMessage}
+                />
+              ) : (
+                <div className="card card-p">
+                  <TemplatePreview draft={previewDraft} varMeta={previewVarMeta} />
+                </div>
+              )}
+
+              <BroadcastSuppressionPanel
+                plan={plan}
+                overrides={overrides}
+                onToggleOverride={toggleOverride}
+                recencyDays={suppressionSettings.recencyDays}
+                capHours={suppressionSettings.capHours}
+                onChangeSettings={(patch) => setSuppressionSettings((s) => ({ ...s, ...patch }))}
+                onSaveDefaults={saveSuppressionDefaults}
+                savingDefaults={savingDefaults}
+              />
+
+              {(plan?.compliance?.blockers || []).map((msg) => (
+                <div key={msg} className="alert alert-danger" style={{ fontSize: 12 }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} /> {msg}
+                </div>
+              ))}
+              {(plan?.compliance?.warnings || []).map((msg) => (
+                <div key={msg} className="alert alert-warning" style={{ fontSize: 12 }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} /> {msg}
+                </div>
+              ))}
+
+              {plan && (
+                <div className="card card-p" style={{ fontSize: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ color: 'var(--text-3)' }}>קהל לפי הסינון</span>
+                    <strong>{plan.audience.count} נמענים · {plan.audience.childCount} ילדים</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ color: 'var(--text-3)' }}>אחרי שכבת החסימות</span>
+                    <strong style={{ color: 'var(--green)' }}>{plan.eligibleCount} יישלחו</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-3)' }}>עלות משוערת</span>
+                    <strong>
+                      {plan.cost.total > 0
+                        ? `כ-${plan.cost.total} דולר (${plan.cost.perMessage}$ להודעת ${plan.cost.category === 'MARKETING' ? 'שיווק' : 'שירות'})`
+                        : 'ללא עלות'}
+                    </strong>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>{plan.cost.note}</div>
+                </div>
+              )}
+
               <div className="card card-p">
-                <TemplatePreview draft={previewDraft} varMeta={previewVarMeta} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <CalendarClock size={15} style={{ color: 'var(--blue)' }} />
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>תזמון (לא חובה)</span>
+                  {scheduleAt && (
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => setScheduleAt('')}>
+                      <X size={11} /> נקה
+                    </button>
+                  )}
+                </div>
+                <input
+                  className="input input-sm"
+                  type="datetime-local"
+                  value={scheduleAt}
+                  min={toLocalDatetimeValue(new Date(Date.now() + 5 * 60000))}
+                  onChange={(e) => setScheduleAt(e.target.value)}
+                />
+                {plan?.quiet?.quiet && !scheduleAt && (
+                  <div className="alert alert-warning" style={{ fontSize: 11, marginTop: 8 }}>
+                    עכשיו שעות שקטות ({plan.quiet.reason}) — שליחה מיידית תיחסם, אפשר לתזמן.
+                  </div>
+                )}
               </div>
 
-              <button className="btn btn-primary btn-full" style={{ paddingBlock: 14 }} onClick={handleSendBroadcast}
-                disabled={(!messageText || !String(messageText).trim()) || sendingBroadcast || previewCount === 0}>
-                {sendingBroadcast ? '⏳ שולח...' : `שלח ל-${previewCount} נמענים`}
+              {sendError && (
+                <div className="alert alert-danger" style={{ fontSize: 12 }}>{sendError}</div>
+              )}
+
+              {quietOffer && (
+                <div className="alert alert-warning" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{quietOffer.error}</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={sendingBroadcast}
+                      onClick={() => handleSendBroadcast({ scheduledAt: quietOffer.quiet.nextAllowed })}
+                    >
+                      <CalendarClock size={14} /> תזמן ל-{new Date(quietOffer.quiet.nextAllowed).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setQuietOffer(null)}>ביטול</button>
+                  </div>
+                </div>
+              )}
+
+              {splitOffer && (
+                <div className="alert alert-warning" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    {splitOffer.remaining === 0
+                      ? 'המכסה בחלון הנוכחי נוצלה במלואה — שליחה עכשיו צפויה להיכשל.'
+                      : `הקהל (${plan?.eligibleCount}) גדול מהמכסה שנותרה (${splitOffer.remaining}). שליחה מלאה עכשיו תיכשל באמצע.`}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    {/* המכסה מתפנה בהדרגה, נמען-נמען, ולכן אין "שעת פתיחה" אחת שאפשר
+                        לתזמן אליה את כולם — הדרך הבטוחה היא שליחה חלקית ואז שליחה
+                        חוזרת לנכשלים. */}
+                    מומלץ: לשלוח עכשיו, לתת למשימה להיעצר כשהמכסה נגמרת, ואז «שליחה חוזרת
+                    לנכשלים» מדוח התוצאות. המקום מתחיל להתפנות בהדרגה
+                    {splitOffer.resetAt ? ` מ-${new Date(splitOffer.resetAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })} בערך` : ' במהלך 24 השעות הקרובות'}.
+                    לחלופין, תזמנו את השליחה למחר בשדה התזמון.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={sendingBroadcast}
+                      onClick={() => handleSendBroadcast({})}>
+                      שלח עכשיו בכל זאת
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSplitOffer(null)}>ביטול</button>
+                  </div>
+                </div>
+              )}
+
+              <button
+                className="btn btn-primary btn-full"
+                style={{ paddingBlock: 14 }}
+                onClick={() => handleSendBroadcast(scheduleAt ? { scheduledAt: new Date(scheduleAt).toISOString() } : {})}
+                disabled={
+                  (!messageText || !String(messageText).trim())
+                  || sendingBroadcast
+                  || planLoading
+                  || (plan?.eligibleCount || 0) === 0
+                  || (plan?.compliance?.blockers?.length || 0) > 0
+                }
+              >
+                {sendingBroadcast
+                  ? '⏳ יוצר משימה...'
+                  : scheduleAt
+                    ? `תזמן ל-${plan?.eligibleCount ?? 0} נמענים`
+                    : `שלח ל-${plan?.eligibleCount ?? 0} נמענים (${plan?.eligibleChildCount ?? 0} ילדים)`}
               </button>
+              <div style={{ fontSize: 10, color: 'var(--text-3)', textAlign: 'center', marginTop: -8 }}>
+                אחרי הלחיצה יש 30 שניות לבטל לפני שהשליחה מתחילה.
+              </div>
             </div>
           </div>
         )
@@ -850,32 +1066,78 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               <thead>
                 <tr>
                   <th>שם הקמפיין</th>
-                  <th>רשימה</th>
-                  <th>הודעה</th>
+                  <th>תבנית / הודעה</th>
                   <th>תאריך</th>
                   <th>נמענים</th>
+                  <th>נשלחו</th>
+                  <th>נכשלו</th>
+                  <th>נחסמו</th>
                   <th>סטטוס</th>
+                  <th>נשלח ע״י</th>
                 </tr>
               </thead>
               <tbody>
-                {broadcasts.length === 0 ? (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין קמפיינים בהיסטוריה</td></tr>
+                {loadingBroadcasts && broadcasts.length === 0 ? (
+                  <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>טוען…</td></tr>
+                ) : broadcasts.length === 0 ? (
+                  <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין קמפיינים בהיסטוריה</td></tr>
                 ) : (
-                  broadcasts.map(b => (
-                    <tr key={b.id}>
-                      <td style={{ fontWeight: 700 }}>{b.campaign_name}</td>
-                      <td>{b.list_name}</td>
-                      <td style={{ maxWidth: 200, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{b.message_text}</td>
-                      <td>{new Date(b.created_at).toLocaleDateString('he-IL')}</td>
-                      <td>{b.recipient_count}</td>
-                      <td><span className="badge badge-green">{b.status}</span></td>
-                    </tr>
-                  ))
+                  broadcasts.map(b => {
+                    const statusBadge = {
+                      completed: ['badge-green', 'הושלם'],
+                      sending: ['badge-blue', 'שולח…'],
+                      countdown: ['badge-blue', 'ממתין לשליחה'],
+                      scheduled: ['badge-amber', 'מתוזמן'],
+                      paused: ['badge-amber', 'מושהה'],
+                      stopping: ['badge-amber', 'עוצר…'],
+                      stopped: ['badge-gray', 'נעצר'],
+                      cancelled: ['badge-gray', 'בוטל'],
+                    }[b.status] || ['badge-gray', b.status];
+                    return (
+                      <tr
+                        key={b.id}
+                        style={{ cursor: b.legacy ? 'default' : 'pointer' }}
+                        onClick={() => { if (!b.legacy) setHistoryJobId(b.id); }}
+                        title={b.legacy ? 'קמפיין ישן — אין דוח מפורט' : 'לחיצה פותחת את הדוח המלא'}
+                      >
+                        <td style={{ fontWeight: 700 }}>{b.campaign_name}</td>
+                        <td style={{ maxWidth: 200, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                          {b.template_display || b.template_name || b.message_text}
+                        </td>
+                        <td>
+                          {new Date(b.created_at).toLocaleDateString('he-IL')}
+                          {b.scheduled_at && b.status === 'scheduled' && (
+                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                              ל-{new Date(b.scheduled_at).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          )}
+                        </td>
+                        <td>{b.recipient_count}</td>
+                        <td style={{ color: 'var(--green)' }}>{b.sent_count ?? '—'}</td>
+                        <td style={{ color: (b.failed_count || 0) > 0 ? 'var(--red)' : 'inherit' }}>{b.failed_count ?? '—'}</td>
+                        <td>{b.suppressed_count ?? '—'}</td>
+                        <td><span className={`badge ${statusBadge[0]}`}>{statusBadge[1]}</span></td>
+                        <td style={{ fontSize: 11, color: 'var(--text-3)' }}>{b.created_by?.name || '—'}</td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
         </div>
+      )}
+
+      {historyJobId && (
+        <Modal
+          title="דוח דיוור"
+          onClose={() => { setHistoryJobId(null); fetchBroadcasts(); }}
+        >
+          <BroadcastSendFlow
+            jobId={historyJobId}
+            onExit={() => { setHistoryJobId(null); fetchBroadcasts(); }}
+          />
+        </Modal>
       )}
 
       {showListsModal && (

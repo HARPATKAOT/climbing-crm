@@ -3,6 +3,8 @@ import { getGroupDays } from '../attendanceUtils.js';
 import { ageFromBirthDate } from './conversations.js';
 import { canSendFreeform } from './sessionWindow.js';
 import { studentGroupIds, studentInGroup } from '../studentGroups.js';
+import { normalizeWaPhone } from '../whatsappConnect.js';
+import { CHANNEL_PLACEHOLDER_NAMES } from '../db.js';
 
 const REGISTERED_STATUSES = new Set([
   'registered', 'active', 'health_signed', 'details_completed',
@@ -25,11 +27,32 @@ const REGISTERED_STATUSES = new Set([
  *   onlyOpenWindow: boolean
  * }
  */
+/**
+ * A recipient is a phone number, not a child and not a customer card.
+ *
+ * The same parent appears once per child in `students`, and sometimes twice in
+ * `parents` (050… vs 972… duplicates). Counting by card meant a parent with two
+ * matching children was two "recipients" — and paid-for twice. Matching still
+ * happens per child (the filters describe children); the result is then folded
+ * by normalized phone, so each number appears once, carrying every matched
+ * child behind it.
+ */
+function scoreParentCard(parent) {
+  let score = 0;
+  const name = String(parent?.name || '').trim();
+  if (name && !CHANNEL_PLACEHOLDER_NAMES.includes(name)) score += 4;
+  if (parent?.email) score += 2;
+  if (String(parent?.phone || '').startsWith('972')) score += 1;
+  if (parent?.marketing_opt_in !== false) score += 1;
+  return score;
+}
+
 export function previewAudience(filters = {}, { parents, students, groups } = {}) {
   const allParents = parents || db.get('parents') || [];
   const allStudents = students || db.get('students') || [];
   const allGroups = groups || db.get('groups') || [];
   const groupById = new Map(allGroups.map((g) => [g.id, g]));
+  const parentById = new Map(allParents.map((p) => [p.id, p]));
 
   const listKey = filters.listKey || null;
   // כשמסננים לפי קבוצה ספציפית — הרישום לחוג מספיק,
@@ -42,51 +65,116 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
       records.filter((r) => r.listName === listKey).map((r) => [r.parentId, r.subscribed !== false])
     );
   }
+  const isListSubscribed = (parent) =>
+    !listSubs || (listSubs.has(parent.id) ? listSubs.get(parent.id) : true);
 
-  const matchedParents = [];
-  const seen = new Set();
+  // phone key -> { cards: Map<parentId, parent>, students: Map<studentId, …> }
+  const byPhone = new Map();
+  // Removed people are collected, not dropped: the suppression panel shows
+  // them with their reason. A filter nobody can see is a filter nobody trusts.
+  const unsubscribedPhones = new Set();
+  const phoneKeyOf = (parent) =>
+    normalizeWaPhone(parent.phone) || `invalid:${parent.id}`;
+
+  // Opt-out and the 24h window belong to the phone, so duplicate cards that the
+  // filters skipped still count: the number is silenced (or open) whichever
+  // card recorded it.
+  const siblingsByPhone = new Map();
+  for (const parent of allParents) {
+    if (!parent?.phone) continue;
+    const key = normalizeWaPhone(parent.phone);
+    if (!key) continue;
+    if (!siblingsByPhone.has(key)) siblingsByPhone.set(key, []);
+    siblingsByPhone.get(key).push(parent);
+  }
+
+  const addCard = (parent) => {
+    const key = phoneKeyOf(parent);
+    let entry = byPhone.get(key);
+    if (!entry) {
+      entry = { key, cards: new Map(), students: new Map() };
+      byPhone.set(key, entry);
+    }
+    entry.cards.set(parent.id, parent);
+    return entry;
+  };
 
   for (const student of allStudents) {
     if (!matchStudent(student, filters, groupById)) continue;
-    const parent = allParents.find((p) => p.id === student.parentId);
-    if (!parent || seen.has(parent.id)) continue;
-    if (!matchParent(parent, filters, listSubs)) continue;
-    seen.add(parent.id);
-    matchedParents.push({
-      id: parent.id,
-      name: parent.name,
-      phone: parent.phone,
-      city: parent.city || '',
-      windowOpen: canSendFreeform(parent, 'whatsapp'),
-      studentName: student.name,
-      studentStatus: student.status,
-      age: ageFromBirthDate(student.birthDate),
-    });
+    const parent = parentById.get(student.parentId);
+    if (!parent) continue;
+    if (!matchParent(parent, filters)) continue;
+    if (!isListSubscribed(parent)) unsubscribedPhones.add(phoneKeyOf(parent));
+    const entry = addCard(parent);
+    if (!entry.students.has(student.id)) {
+      entry.students.set(student.id, {
+        id: student.id,
+        name: student.name || '',
+        status: student.status || '',
+        age: ageFromBirthDate(student.birthDate),
+        parentId: parent.id,
+      });
+    }
   }
 
   // Parents with no students still included if only parent filters apply and registered=any/no
   if (filters.includeParentsWithoutStudents) {
     for (const parent of allParents) {
-      if (seen.has(parent.id)) continue;
-      if (!matchParent(parent, filters, listSubs)) continue;
+      if (!matchParent(parent, filters)) continue;
       const kids = allStudents.filter((s) => s.parentId === parent.id);
       if (kids.length) continue;
-      matchedParents.push({
-        id: parent.id,
-        name: parent.name,
-        phone: parent.phone,
-        city: parent.city || '',
-        windowOpen: canSendFreeform(parent, 'whatsapp'),
-        studentName: '',
-        studentStatus: '',
-        age: null,
-      });
+      if (!isListSubscribed(parent)) unsubscribedPhones.add(phoneKeyOf(parent));
+      addCard(parent);
     }
   }
 
+  const recipients = [];
+  const removed = [];
+  let childCount = 0;
+  for (const entry of byPhone.values()) {
+    const cards = [...entry.cards.values()];
+    const primary = cards.reduce((best, card) =>
+      (scoreParentCard(card) > scoreParentCard(best) ? card : best), cards[0]);
+    const kids = [...entry.students.values()];
+    const siblings = siblingsByPhone.get(entry.key) || cards;
+    const optedOut = siblings.some((card) => card.marketing_opt_in === false);
+    const listUnsubscribed = unsubscribedPhones.has(entry.key);
+    const recipient = {
+      id: entry.key,
+      phone: entry.key.startsWith('invalid:') ? String(primary.phone || '') : entry.key,
+      invalidPhone: entry.key.startsWith('invalid:'),
+      name: primary.name || '',
+      parentId: primary.id,
+      parentIds: cards.map((card) => card.id),
+      city: primary.city || cards.find((card) => card.city)?.city || '',
+      marketingOptOut: optedOut,
+      listUnsubscribed,
+      windowOpen: siblings.some((card) => canSendFreeform(card, 'whatsapp')),
+      students: kids,
+      // Legacy fields for existing consumers (recipients viewer, old jobs).
+      studentName: kids.map((k) => k.name).filter(Boolean).join(' · '),
+      studentStatus: kids[0]?.status || '',
+      age: kids[0]?.age ?? null,
+    };
+    // The people the filters would once drop silently — the list unsubscribers
+    // and (under the default opt-in filter) the opted-out — go to `removed`,
+    // where the suppression panel can show them by name.
+    if (listUnsubscribed || (optedOut && filters.marketingOptIn === true)) {
+      removed.push(recipient);
+      continue;
+    }
+    childCount += kids.length;
+    recipients.push(recipient);
+  }
+
+  recipients.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'he'));
+
   return {
-    count: matchedParents.length,
-    recipients: matchedParents,
+    count: recipients.length,
+    childCount,
+    cardCount: recipients.reduce((sum, r) => sum + r.parentIds.length, 0),
+    recipients,
+    removed,
   };
 }
 
@@ -135,20 +223,16 @@ function matchStudent(student, filters, groupById) {
   return true;
 }
 
-function matchParent(parent, filters, listSubs) {
+function matchParent(parent, filters) {
   if (!parent?.phone) return false;
 
   if (Array.isArray(filters.cities) && filters.cities.length) {
     if (!filters.cities.includes(parent.city)) return false;
   }
 
-  if (filters.marketingOptIn === true && parent.marketing_opt_in === false) return false;
+  // marketingOptIn===true (ברירת המחדל) לא מסונן כאן: הנמען נאסף, מסומן
+  // marketingOptOut, ומוסר בסוף אל תוך `removed` — כדי שפאנל החסימות יראה אותו.
   if (filters.marketingOptIn === false && parent.marketing_opt_in !== false) return false;
-
-  if (listSubs) {
-    const subscribed = listSubs.has(parent.id) ? listSubs.get(parent.id) : true;
-    if (!subscribed) return false;
-  }
 
   if (filters.onlyOpenWindow && !canSendFreeform(parent, 'whatsapp')) return false;
 

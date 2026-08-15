@@ -686,7 +686,24 @@ import {
   deleteSegment,
   INTEREST_OPTIONS,
 } from './channels/segments.js';
-import { startBroadcastJob, getBroadcastJob, listBroadcastJobs } from './channels/broadcast.js';
+import {
+  startBroadcastJob,
+  getBroadcastJob,
+  listBroadcastJobs,
+  cancelBroadcastJob,
+  pauseBroadcastJob,
+  resumeBroadcastJob,
+  resendFailedRecipients,
+  sendBroadcastTest,
+  parentBroadcastHistory,
+  startBroadcastRunner,
+} from './channels/broadcast.js';
+import {
+  buildBroadcastPlan,
+  getBroadcastDefaults,
+  saveBroadcastDefaults,
+} from './channels/broadcastPlan.js';
+import { getMetaQuota } from './channels/metaQuota.js';
 import { mediaCredentialsStatus } from './channels/media.js';
 import {
   mailingPreferencesSnapshot,
@@ -2897,12 +2914,60 @@ app.delete('/api/saved-segments/:id', requireOwner, (req, res) => {
   res.json(deleteSegment(req.params.id));
 });
 
+// תוכנית שליחה מלאה: קהל מאוחד לפי טלפון, חסימות עם סיבות, עלות, שעות שקטות
+// ותצוגות מקדימות עם נתוני נמענים אמיתיים. אותה פונקציה בדיוק רצה גם בשליחה.
+app.post('/api/broadcast/plan', (req, res) => {
+  try {
+    const body = req.body || {};
+    const plan = buildBroadcastPlan({
+      filters: body.filters || {},
+      templateId: body.templateId || null,
+      customMessage: body.customMessage || '',
+      listKey: body.listKey || '',
+      overrides: Array.isArray(body.overrides) ? body.overrides : [],
+      recencyDays: body.recencyDays,
+      capHours: body.capHours,
+      sampleOffset: Number(body.sampleOffset) || 0,
+      sampleLimit: Math.min(Number(body.sampleLimit) || 12, 50),
+    });
+    // The full eligible list stays server-side; the client gets counts + samples.
+    const { eligible, ...rest } = plan;
+    res.json(rest);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// מכסת Meta: רמת המכסה ודירוג האיכות מה-API, וניצול חלון 24ש מהיומן המקומי.
+app.get('/api/broadcast/quota', async (req, res) => {
+  try {
+    res.json(await getMetaQuota({ force: req.query.refresh === '1' }));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/api/broadcast/defaults', (_req, res) => {
+  res.json(getBroadcastDefaults());
+});
+
+app.post('/api/broadcast/defaults', requireOwner, (req, res) => {
+  try {
+    res.json(saveBroadcastDefaults(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/broadcast/jobs', requireOwner, async (req, res) => {
   try {
-    const result = await startBroadcastJob(req.body || {});
+    const result = await startBroadcastJob(req.body || {}, { user: req.crmUser });
     if (!result.success) return res.status(400).json(result);
     res.json(result);
   } catch (err) {
+    if (err.quiet) {
+      return res.status(409).json({ error: err.message, quiet: err.quiet });
+    }
     res.status(400).json({ error: err.message });
   }
 });
@@ -2915,6 +2980,48 @@ app.get('/api/broadcast/jobs/:id', (req, res) => {
   const job = getBroadcastJob(req.params.id);
   if (!job) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
   res.json(job);
+});
+
+app.post('/api/broadcast/jobs/:id/cancel', requireOwner, (req, res) => {
+  const result = cancelBroadcastJob(req.params.id);
+  if (result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/broadcast/jobs/:id/pause', requireOwner, (req, res) => {
+  const result = pauseBroadcastJob(req.params.id);
+  if (result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/broadcast/jobs/:id/resume', requireOwner, (req, res) => {
+  const result = resumeBroadcastJob(req.params.id);
+  if (result.error) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+app.post('/api/broadcast/jobs/:id/resend-failed', requireOwner, (req, res) => {
+  try {
+    const { job, eligibleCount, undoSeconds } = resendFailedRecipients(req.params.id, { user: req.crmUser });
+    res.json({ success: true, jobId: job.id, recipientCount: eligibleCount, undoSeconds });
+  } catch (err) {
+    if (err.quiet) return res.status(409).json({ error: err.message, quiet: err.quiet });
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// שליחת בדיקה: ההודעה כפי שתישלח באמת, עם נתוני נמען אמיתי, למספר שבחרת.
+app.post('/api/broadcast/test-send', requireOwner, async (req, res) => {
+  try {
+    res.json(await sendBroadcastTest(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// היסטוריית הדיוורים של לקוח — לכרטיס הלקוח.
+app.get('/api/parents/:id/broadcasts', (req, res) => {
+  res.json(parentBroadcastHistory(req.params.id));
 });
 
 app.get('/api/channels/status', (_req, res) => {
@@ -20932,6 +21039,9 @@ app.listen(PORT, () => {
   // Campaigns + coupon expiry (from 10:00 Asia/Jerusalem, after the morning jobs)
   setTimeout(() => { runCampaignsIfDue(10); }, 90_000);
   setInterval(() => { runCampaignsIfDue(10); }, 15 * 60 * 1000);
+
+  // דיוור: ספירת ה-30 שניות לביטול, משימות מתוזמנות והמשך אחרי restart.
+  startBroadcastRunner();
 
   // AI assistant sweep over conversations that went quiet (from 03:00 Asia/Jerusalem)
   setInterval(() => { runNightlySweepIfDue(3); }, 15 * 60 * 1000);

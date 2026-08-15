@@ -53,11 +53,17 @@ function summaryList(values, emptyLabel) {
   return `${values.slice(0, 2).join(' · ')} ועוד ${values.length - 2}`;
 }
 
-function FilterCard({ icon: Icon, title, summary, count = 0, active = false, disabled = false, onClick }) {
+/**
+ * Every category gets its own colour from the project palette, so the grid can
+ * be scanned by colour and not only read. An active card (a chosen value, not
+ * "כולם") is tinted with the same colour — one glance shows which filters act.
+ */
+function FilterCard({ icon: Icon, title, summary, accent, count = 0, active = false, disabled = false, onClick }) {
   return (
     <button
       type="button"
       className={`segment-filter-card ${active ? 'is-active' : ''}`}
+      style={accent ? { '--filter-accent': accent } : undefined}
       onClick={onClick}
       disabled={disabled}
       aria-haspopup="dialog"
@@ -72,6 +78,19 @@ function FilterCard({ icon: Icon, title, summary, count = 0, active = false, dis
     </button>
   );
 }
+
+// הצבעים מהפלטה הקיימת של הפרויקט (טוקנים + מחזור הצבעים של הטאבים).
+const FILTER_ACCENTS = {
+  age: '#38BDF8',        // כחול
+  registered: '#34D399', // ירוק
+  list: '#FBBF24',       // ענבר
+  cities: '#2DD4BF',     // טורקיז
+  statuses: '#A78BFA',   // סגול
+  groups: '#FB923C',     // כתום
+  genders: '#F472B6',    // ורוד
+  interests: '#F87171',  // אדום
+  delivery: '#A5B4FC',   // אינדיגו
+};
 
 function PickerOption({ selected, label, description, color, onClick, disabled = false }) {
   return (
@@ -519,7 +538,15 @@ export default function SegmentBuilder({
           <div className="segment-recipient-list">
             {matchingRecipients.slice(0, 200).map((recipient) => (
               <div className="segment-recipient-row" key={recipient.id}>
-                <div><strong>{recipient.name}</strong><small>{[recipient.studentName, recipient.city].filter(Boolean).join(' · ')}</small></div>
+                <div>
+                  <strong>{recipient.name}</strong>
+                  <small>
+                    {[
+                      recipient.studentName ? `הורה של ${recipient.studentName}` : '',
+                      recipient.city,
+                    ].filter(Boolean).join(' · ')}
+                  </small>
+                </div>
                 <div className="segment-recipient-contact"><span dir="ltr">{recipient.phone}</span><small className={recipient.windowOpen ? 'is-open' : ''}>{recipient.windowOpen ? 'חלון פתוח' : 'חלון סגור'}</small></div>
               </div>
             ))}
@@ -548,8 +575,15 @@ export default function SegmentBuilder({
         <div className="segment-audience-summary-main">
           <span className="segment-audience-icon"><Users size={20} /></span>
           <div>
-            <strong>{loadingPreview ? 'מחשב קהל...' : `${preview.count} נמענים`}</strong>
-            <small>{activeFilterCount ? `${activeFilterCount} מסננים פעילים` : 'ללא סינון נוסף'}</small>
+            <strong>
+              {loadingPreview
+                ? 'מחשב קהל...'
+                : `${preview.count} נמענים · ${preview.childCount ?? 0} ילדים`}
+            </strong>
+            <small>
+              {activeFilterCount ? `${activeFilterCount} מסננים פעילים · ` : ''}
+              הסינון לפי מאפייני הילד; ההודעה נשלחת פעם אחת להורה
+            </small>
           </div>
         </div>
         <div className="segment-audience-actions">
@@ -590,15 +624,15 @@ export default function SegmentBuilder({
       </div>
 
       <div className="segment-filter-grid">
-        <FilterCard icon={CalendarDays} title="גיל" summary={ageSummary} active={f.ageMin !== '' || f.ageMax !== ''} onClick={() => openPicker('age')} />
-        <FilterCard icon={UserCheck} title="מצב הרשמה" summary={registeredSummary} active={f.registered !== 'any'} onClick={() => openPicker('registered')} />
-        <FilterCard icon={Hash} title="רשימת תפוצה" summary={f.groupIds?.length ? 'מושבת בעת סינון לפי קבוצה' : (selectedListLabel || 'כל הרשימות')} active={!!f.listKey} onClick={() => openPicker('list')} />
-        <FilterCard icon={MapPin} title="מקום מגורים" summary={summaryList(selectedCityNames, 'כל היישובים')} count={selectedCityNames.length} active={selectedCityNames.length > 0} onClick={() => openPicker('cities')} />
-        <FilterCard icon={Activity} title="סטטוס" summary={summaryList(selectedStatusNames, 'כל הסטטוסים')} count={selectedStatusNames.length} active={selectedStatusNames.length > 0} onClick={() => openPicker('statuses')} />
-        <FilterCard icon={UsersRound} title="קבוצות" summary={summaryList(selectedGroupNames, 'כל הקבוצות')} count={selectedGroupNames.length} active={selectedGroupNames.length > 0} onClick={() => openPicker('groups')} />
-        <FilterCard icon={UserRound} title="מגדר" summary={summaryList(selectedGenderNames, 'כולם')} count={selectedGenderNames.length} active={selectedGenderNames.length > 0} onClick={() => openPicker('genders')} />
-        <FilterCard icon={Tag} title="תחום עניין" summary={summaryList(f.interests || [], 'כל תחומי העניין')} count={(f.interests || []).length} active={(f.interests || []).length > 0} onClick={() => openPicker('interests')} />
-        <FilterCard icon={MessageSquareText} title="זכאות לשליחה" summary={deliverySummary} active={f.marketingOptIn !== EMPTY_FILTERS.marketingOptIn || !!f.onlyOpenWindow} onClick={() => openPicker('delivery')} />
+        <FilterCard icon={CalendarDays} accent={FILTER_ACCENTS.age} title="גיל" summary={ageSummary} active={f.ageMin !== '' || f.ageMax !== ''} onClick={() => openPicker('age')} />
+        <FilterCard icon={UserCheck} accent={FILTER_ACCENTS.registered} title="מצב הרשמה" summary={registeredSummary} active={f.registered !== 'any'} onClick={() => openPicker('registered')} />
+        <FilterCard icon={Hash} accent={FILTER_ACCENTS.list} title="רשימת תפוצה" summary={f.groupIds?.length ? 'מושבת בעת סינון לפי קבוצה' : (selectedListLabel || 'כל הרשימות')} active={!!f.listKey} onClick={() => openPicker('list')} />
+        <FilterCard icon={MapPin} accent={FILTER_ACCENTS.cities} title="מקום מגורים" summary={summaryList(selectedCityNames, 'כל היישובים')} count={selectedCityNames.length} active={selectedCityNames.length > 0} onClick={() => openPicker('cities')} />
+        <FilterCard icon={Activity} accent={FILTER_ACCENTS.statuses} title="סטטוס" summary={summaryList(selectedStatusNames, 'כל הסטטוסים')} count={selectedStatusNames.length} active={selectedStatusNames.length > 0} onClick={() => openPicker('statuses')} />
+        <FilterCard icon={UsersRound} accent={FILTER_ACCENTS.groups} title="קבוצות" summary={summaryList(selectedGroupNames, 'כל הקבוצות')} count={selectedGroupNames.length} active={selectedGroupNames.length > 0} onClick={() => openPicker('groups')} />
+        <FilterCard icon={UserRound} accent={FILTER_ACCENTS.genders} title="מגדר" summary={summaryList(selectedGenderNames, 'כולם')} count={selectedGenderNames.length} active={selectedGenderNames.length > 0} onClick={() => openPicker('genders')} />
+        <FilterCard icon={Tag} accent={FILTER_ACCENTS.interests} title="תחום עניין" summary={summaryList(f.interests || [], 'כל תחומי העניין')} count={(f.interests || []).length} active={(f.interests || []).length > 0} onClick={() => openPicker('interests')} />
+        <FilterCard icon={MessageSquareText} accent={FILTER_ACCENTS.delivery} title="זכאות לשליחה" summary={deliverySummary} active={f.marketingOptIn !== EMPTY_FILTERS.marketingOptIn || !!f.onlyOpenWindow} onClick={() => openPicker('delivery')} />
       </div>
 
       <div className="segment-save-panel">
