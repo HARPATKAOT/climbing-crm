@@ -929,8 +929,20 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               />
 
               {(plan?.compliance?.blockers || []).map((msg) => (
-                <div key={msg} className="alert alert-danger" style={{ fontSize: 12 }}>
-                  <AlertTriangle size={15} style={{ flexShrink: 0 }} /> {msg}
+                <div key={msg} className="alert alert-danger" style={{ fontSize: 12, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <AlertTriangle size={15} style={{ flexShrink: 0 }} /> {msg}
+                  </div>
+                  <div style={{ fontSize: 11, lineHeight: 1.6 }}>
+                    אם בתבנית יש משתנה פנוי — מפים אותו ל«קישור להעדפות דיוור» בטאב
+                    «תבניות Meta» (שינוי מיפוי לא דורש אישור מחדש). אם אין — יוצרים
+                    גרסה חדשה של התבנית עם שורת הסרה ושולחים לאישור Meta.
+                  </div>
+                  <div>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setActiveTab('templates')}>
+                      <FileText size={13} /> מעבר לטאב «תבניות Meta»
+                    </button>
+                  </div>
                 </div>
               ))}
               {(plan?.compliance?.warnings || []).map((msg) => (
@@ -1050,9 +1062,19 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                     ? `תזמן ל-${plan?.eligibleCount ?? 0} נמענים`
                     : `שלח ל-${plan?.eligibleCount ?? 0} נמענים (${plan?.eligibleChildCount ?? 0} ילדים)`}
               </button>
-              <div style={{ fontSize: 10, color: 'var(--text-3)', textAlign: 'center', marginTop: -8 }}>
-                אחרי הלחיצה יש 30 שניות לבטל לפני שהשליחה מתחילה.
-              </div>
+              {(plan?.compliance?.blockers?.length || 0) > 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--red)', textAlign: 'center', marginTop: -8, lineHeight: 1.5 }}>
+                  השליחה חסומה: {plan.compliance.blockers[0]}
+                </div>
+              ) : (plan?.eligibleCount || 0) === 0 && (plan?.suppressedCount || 0) > 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--amber)', textAlign: 'center', marginTop: -8, lineHeight: 1.5 }}>
+                  כל הנמענים נחסמו — פתחו את פאנל החסימות כדי לראות למה ולבטל חסימות במודע.
+                </div>
+              ) : (
+                <div style={{ fontSize: 10, color: 'var(--text-3)', textAlign: 'center', marginTop: -8 }}>
+                  אחרי הלחיצה יש 30 שניות לבטל לפני שהשליחה מתחילה.
+                </div>
+              )}
             </div>
           </div>
         )

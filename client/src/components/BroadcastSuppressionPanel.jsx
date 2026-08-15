@@ -98,15 +98,27 @@ export default function BroadcastSuppressionPanel({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  style={{ width: '100%', justifyContent: 'space-between', padding: '8px 12px' }}
+                  // .btn is nowrap — בעמודה צרה תווית הצד נשפכת מחוץ לכרטיס,
+                  // אז מרשים שבירת שורה בתוך הכפתור.
+                  style={{
+                    width: '100%',
+                    minWidth: 0,
+                    height: 'auto',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    whiteSpace: 'normal',
+                    textAlign: 'right',
+                    padding: '8px 12px',
+                    rowGap: 4,
+                  }}
                   onClick={() => setOpenReason(open ? null : code)}
                 >
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                    {open ? <ChevronDown size={14} /> : <ChevronLeft size={14} />}
-                    {REASON_LABELS[code] || rows[0]?.activeReason?.label || code}
-                    <span className="badge badge-gray">{rows.length}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, minWidth: 0 }}>
+                    {open ? <ChevronDown size={14} style={{ flexShrink: 0 }} /> : <ChevronLeft size={14} style={{ flexShrink: 0 }} />}
+                    <span style={{ minWidth: 0 }}>{REASON_LABELS[code] || rows[0]?.activeReason?.label || code}</span>
+                    <span className="badge badge-gray" style={{ flexShrink: 0 }}>{rows.length}</span>
                   </span>
-                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                     {overridable ? 'ניתן לעקיפה מודעת' : 'לא ניתן לעקיפה'}
                   </span>
                 </button>

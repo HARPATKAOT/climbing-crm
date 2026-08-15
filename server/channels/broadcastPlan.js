@@ -80,7 +80,7 @@ export function findLocalTemplate(templateId) {
   ) || null;
 }
 
-const OPT_OUT_WORDING = /הסר|הסרה|להסיר|הפסקת|העדפות\s*דיוור|unsubscribe|stop/i;
+const OPT_OUT_WORDING = /הסר|הסרה|להסיר|הפסק|הפסיק|לא\s*מעוניינ|העדפות\s*דיוור|unsubscribe|stop/i;
 
 /** בדיקת עמידה בחוק לתבנית שיווקית: מנגנון הסרה (חוסם) וזיהוי שולח (אזהרה). */
 export function marketingComplianceIssues(template, brandName = '') {
