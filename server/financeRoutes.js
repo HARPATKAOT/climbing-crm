@@ -19,6 +19,8 @@ import { FINANCE_FLAGS, financeFlag, financeId } from './financeCore.js';
 import { PROVIDER_CATALOG, credentialsFromEnv, fromCsvRows } from './bankProviders.js';
 import { ingestRawTransactions } from './bankIngestion.js';
 import { durableRecordingStore, runBankSync } from './bankSync.js';
+import { runFinanceNightly } from './financeNightly.js';
+import { reviveOutboxRow } from './icountOutbox.js';
 
 export const financeRouter = express.Router();
 
@@ -38,6 +40,15 @@ financeRouter.post('/bank-sync-scheduled', requireCronSecret, async (_req, res) 
     res.json(await runBankSync());
   } catch (error) {
     res.status(502).json({ error: error.message || 'משיכת תנועות הבנק נכשלה' });
+  }
+});
+
+// הג'וב הלילי: outbox, יישוב מול iCount, ledger ותחזית (כל חלק לפי דגל).
+financeRouter.post('/nightly-scheduled', requireCronSecret, async (_req, res) => {
+  try {
+    res.json(await runFinanceNightly());
+  } catch (error) {
+    res.status(502).json({ error: error.message || 'הריצה הלילית נכשלה' });
   }
 });
 
@@ -232,6 +243,48 @@ financeRouter.post('/bank-sync', async (_req, res) => {
     res.json(await runBankSync());
   } catch (error) {
     res.status(502).json({ error: error.message || 'משיכת תנועות הבנק נכשלה' });
+  }
+});
+
+// פאנל בריאות הסנכרון (FINANCE_SPEC 4.3.9): מה רץ, מה תקוע, ואיפה הפערים.
+financeRouter.get('/health', (_req, res) => {
+  const outbox = db.get('icount_outbox');
+  const outboxCounts = { pending: 0, sent: 0, failed: 0, dead: 0 };
+  for (const row of outbox) outboxCounts[row.status] = (outboxCounts[row.status] || 0) + 1;
+  const inboxOpen = db.get('finance_inbox_items').filter((row) => row.status === 'open');
+  const inboxCounts = {};
+  for (const item of inboxOpen) inboxCounts[item.item_type] = (inboxCounts[item.item_type] || 0) + 1;
+  const reconciliation = db.get('finance_reconciliation_items')
+    .filter((row) => row.month)
+    .sort((a, b) => String(b.month).localeCompare(String(a.month)))
+    .slice(0, 6);
+  res.json({
+    sync: financeSyncStatus(),
+    bank: db.getOne('finance_center_settings', 'bank_sync_status') || null,
+    nightly: db.getOne('finance_center_settings', 'nightly_status') || null,
+    outbox: { counts: outboxCounts, dead: outbox.filter((row) => row.status === 'dead') },
+    inbox: { open: inboxOpen.length, counts: inboxCounts },
+    reconciliation,
+  });
+});
+
+financeRouter.get('/outbox', (req, res) => {
+  const wanted = String(req.query.status || 'all');
+  const rows = db.get('icount_outbox')
+    .filter((row) => wanted === 'all' || row.status === wanted)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, 200);
+  res.json({ rows });
+});
+
+financeRouter.post('/outbox/:id/retry', async (req, res) => {
+  try {
+    const store = durableRecordingStore();
+    const row = reviveOutboxRow(store, req.params.id);
+    await store.flush();
+    res.json(row);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'החייאת האירוע נכשלה' });
   }
 });
 

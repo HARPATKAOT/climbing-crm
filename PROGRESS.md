@@ -30,9 +30,10 @@
 - קריטריון: ייבוא פעמיים = 0 כפילויות (טסט ✓); חיוב אשראי מרוכז מסווג settlement ולא נספר כהוצאה + אימות מחזור (טסט ✓); תשלומים עתידיים של Max → cash_flow_items (טסט ✓); 0 תנועות ביום עסקים = פריט שגיאה (טסט ✓); כשל אימות = פריט inbox בלי להפיל ריצה (טסט ✓).
 - קבצים: `server/bankProviders.js` (interface + מרכנתיל/Max + mock + CSV), `server/bankIngestion.js` (הצנרת), `server/bankSync.js` (תזמור + כתיבה עמידה), ראוטים ב-financeRoutes (`/accounts`, `/bank-sync`, `/inbox`), cron ב-render.yaml (04:30), ייבוא ה-CSV הקיים מזין גם את הצנרת החדשה.
 
-### שלב 1.5 — iCount דו-כיווני: outbox, reconciliation, פאנל בריאות — todo
-- קיים כבר: pull מלא (financeSync, cron כל 15 דק), push (invrec מהקופה, IPN). נבנה: outbox לכשלונות+retry+DLQ, reconciliation לילי → פריטי inbox, פאנל בריאות, סנכרון ספקים דו-כיווני.
-- קריטריון: טסט outbox idempotency; ג'וב reconciliation מדווח פערים כפריטים ולא בלוג.
+### שלב 1.5 — iCount דו-כיווני: outbox, reconciliation, פאנל בריאות — **done**
+- קיים כבר: pull מלא (financeSync, cron כל 15 דק), push (invrec מהקופה, IPN).
+- נבנה: `icountOutbox.js` (idempotency ✓, backoff ✓, DLQ→inbox ✓, שער sandbox ✓, retry מהממשק), `icountReconciliation.js` (השוואת גבייה↔מסמכים↔מע״מ פר חודש, פער מוסבר/לא-מוסבר → פריטי inbox ✓), `financeNightly.js` (ג'וב לילי מודולרי), ראוטים `/health`, `/outbox`, `/outbox/:id/retry`, `/nightly-scheduled` + cron ב-render.yaml (05:00).
+- הערה: דחיפת ספקים ל-iCount לא נתמכת ב-API הקיים (אין endpoint ספקים ב-icount.js) — מיזוג ב-pull בלבד, מתועד ב-DECISIONS.
 
 ### שלב 2 — קליטת חשבוניות: העלאה, מייל, parsing — todo
 - קריטריון: pipeline אחד לכל המקורות; חילוץ ספק+סכום+תאריך+ח.פ+מספר מסמך עם confidence; dedupe מול iCount.
