@@ -399,6 +399,16 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
                     {EXCLUDED_LABEL[row.excluded_reason] || row.excluded_reason}
                   </span>
                 )}
+                {/* מה העסקה הזו בפועל: חשבונית שיצאה, קישור תשלום שמחכה, או רישום ידני בלי שניהם. */}
+                {isOpenCharge && (
+                  <span className="badge badge-gray" style={{ fontSize: 10 }}>
+                    {row.has_charge_doc
+                      ? `יצאה חשבונית${row.icount_doc_number ? ` ${row.icount_doc_number}` : ''}`
+                      : row.payment_url
+                        ? 'קישור תשלום פעיל — מחכה שהלקוח ישלם'
+                        : 'רישום ידני — אין חשבונית ואין קישור תשלום'}
+                  </span>
+                )}
               </div>
               {expanded && items.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '2px 10px 4px', borderInlineStart: '2px solid var(--border)', fontSize: 12, color: 'var(--text-2)' }}>
