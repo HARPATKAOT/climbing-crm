@@ -105,12 +105,29 @@ const SCHEMA_PREAMBLE = [
 ];
 
 /**
- * Return a path to a copy of `file` with exactly the three preamble statements
- * commented out. Aborts if any of them is missing or appears more than once —
- * a dump that does not look like the one this was written against is a dump
- * this script has no business editing.
+ * Return a path to a copy of `file` with the statements a managed Supabase
+ * project refuses commented out, and a note of how many there were.
+ *
+ * Two classes, both verified against a real rehearsal rather than guessed:
+ *
+ *   1. The schema preamble. A fresh project already owns `public`, so
+ *      CREATE SCHEMA / ALTER SCHEMA OWNER / COMMENT ON SCHEMA all fail. These
+ *      three are matched character-for-character and the script aborts if the
+ *      dump does not contain exactly one of each — if the shape changed, it has
+ *      no business editing the file.
+ *
+ *   2. ALTER DEFAULT PRIVILEGES. These are owned by `supabase_admin` and
+ *      `postgres`, and our pooler role may not change them. They govern the
+ *      permissions of objects created in FUTURE, they are identical platform
+ *      defaults on any new project, and every one of them sits after the data.
+ *      Dropping them costs nothing; letting one abort the restore costs the
+ *      whole restore, 34 seconds and 18MB in.
+ *
+ * Ordinary GRANTs are deliberately NOT in this list. Those decide whether
+ * `anon` can read a table, which is the difference between a locked database
+ * and an open one, and they must fail loudly if they fail at all.
  */
-function neutralizePreamble(file, outDir) {
+function prepareRestoreFile(file, outDir) {
   const src = fs.readFileSync(file, 'utf8');
   let out = src;
 
@@ -126,9 +143,15 @@ function neutralizePreamble(file, outDir) {
     out = out.replace(stmt, `-- [02b-restore] skipped, already present in a fresh project:\n-- ${stmt}`);
   }
 
+  let defaultPrivileges = 0;
+  out = out.replace(/^ALTER DEFAULT PRIVILEGES .*$/gm, (line) => {
+    defaultPrivileges += 1;
+    return `-- [02b-restore] skipped, platform-managed: ${line}`;
+  });
+
   const dest = path.join(outDir, `${path.basename(file, '.sql')}.restore-ready.sql`);
   fs.writeFileSync(dest, out, 'utf8');
-  return dest;
+  return { dest, defaultPrivileges };
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
@@ -191,12 +214,20 @@ if (Number(existing) > 0 && !ALLOW_NONEMPTY) {
 
 // The order comes from the manifest, which is written by 02-dump alongside the
 // files — so the two can never drift apart.
+// `strict: false` means "make sure these things exist, and tell me what didn't".
+// 00-roles and 01-globals describe a managed platform: a fresh Supabase project
+// already ships most of the extensions, and some database-level settings belong
+// to Supabase and cannot be set by the role we connect as — the rehearsal died
+// here on ALTER DATABASE ... SET app.settings.jwt_exp, which is the dashboard's
+// JWT-expiry field wearing a SQL costume. Those are re-created by hand from
+// 06-cutover.md, not restored. Schema and data stay strict: there, a statement
+// that does not apply is data that will not be there.
 const ORDER = [
-  { file: '00-roles.sql', when: () => (manifest.roles?.custom || []).length > 0, note: 'custom roles' },
-  { file: '01-globals.sql', when: () => true, note: 'globals' },
-  { file: '02-public-complete.sql', when: () => true, note: 'public schema + data', neutralize: true },
-  { file: '07-auth-core-data.sql', when: () => true, note: 'auth.users + auth.identities' },
-  { file: '10-storage-buckets-data.sql', when: () => true, note: 'storage bucket definitions' },
+  { file: '00-roles.sql', when: () => (manifest.roles?.custom || []).length > 0, note: 'custom roles', strict: false },
+  { file: '01-globals.sql', when: () => true, note: 'extensions + settings', strict: false },
+  { file: '02-public-complete.sql', when: () => true, note: 'public schema + data', neutralize: true, strict: true },
+  { file: '07-auth-core-data.sql', when: () => true, note: 'auth.users + auth.identities', strict: true },
+  { file: '10-storage-buckets-data.sql', when: () => true, note: 'storage bucket definitions', strict: true },
 ];
 
 const planned = ORDER.filter((s) => fs.existsSync(path.join(dumpDir, s.file)) && s.when());
@@ -217,20 +248,30 @@ if (!CONFIRM) {
 const workDir = path.join(dumpDir, '.restore-ready');
 fs.mkdirSync(workDir, { recursive: true });
 
+/** Non-fatal statements that did not apply — surfaced again in the summary. */
+const skipped = [];
+
 say('');
 for (const [i, step] of planned.entries()) {
   const src = path.join(dumpDir, step.file);
-  const toRun = step.neutralize ? neutralizePreamble(src, workDir) : src;
+  let toRun = src;
   if (step.neutralize) {
-    say(`  · rewrote the three schema-preamble statements out of ${step.file}`);
+    const prepared = prepareRestoreFile(src, workDir);
+    toRun = prepared.dest;
+    say(`  · ${step.file}: commented out 3 schema-preamble statements` +
+        ` and ${prepared.defaultPrivileges} ALTER DEFAULT PRIVILEGES`);
+    skipped.push(
+      `${step.file}: 3 schema-preamble + ${prepared.defaultPrivileges} default-privilege statements (platform-managed)`
+    );
   }
 
   process.stdout.write(`  ${i + 1}/${planned.length} ${step.file} … `);
   const started = Date.now();
-  const r = runPsql([TARGET, '-v', 'ON_ERROR_STOP=1', '-q', '-f', toRun]);
+  const stopArg = step.strict ? ['-v', 'ON_ERROR_STOP=1'] : [];
+  const r = runPsql([TARGET, ...stopArg, '-q', '-f', toRun]);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
 
-  if (r.status !== 0) {
+  if (step.strict && r.status !== 0) {
     say('FAILED');
     say('');
     say((r.stderr || '').trim().split('\n').slice(-25).join('\n'));
@@ -239,7 +280,19 @@ for (const [i, step] of planned.entries()) {
       '  drop it and start from an empty project rather than re-running.'
     );
   }
-  say(`ok (${secs}s)`);
+
+  const errors = (r.stderr || '')
+    .split('\n')
+    .filter((l) => /^psql:.*ERROR:/.test(l))
+    .map((l) => l.replace(/^psql:[^:]*:\d+:\s*/, ''));
+
+  if (!step.strict && errors.length) {
+    say(`ok with ${errors.length} skipped (${secs}s)`);
+    for (const e of errors) say(`      skipped: ${e}`);
+    skipped.push(...errors.map((e) => `${step.file}: ${e}`));
+  } else {
+    say(`ok (${secs}s)`);
+  }
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -266,6 +319,14 @@ allOk = line('auth.users', users, expect['auth.users']) && allOk;
 allOk = line('auth.identities', identities, expect['auth.identities']) && allOk;
 allOk = line('storage.buckets', buckets, expect['storage.buckets']) && allOk;
 allOk = line('kv_collections rows', kv, expect.kv_collections) && allOk;
+
+if (skipped.length) {
+  say('');
+  say(`  ${skipped.length} statement(s) did not apply, all in the managed-platform files:`);
+  for (const s of skipped) say(`    · ${s}`);
+  say('  These are Supabase-owned settings. Re-create them by hand from');
+  say('  06-cutover.md — they are not data and nothing is missing from the CRM.');
+}
 
 say('');
 say('  NEXT: files are not in a database dump — run 03-copy-storage.mjs,');

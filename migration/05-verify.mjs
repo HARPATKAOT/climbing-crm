@@ -71,11 +71,16 @@
  * applied, so a NULL ACL is correctly reported as "PUBLIC has EXECUTE".
  *
  * ─── WHAT IT DOES *NOT* CHECK ───────────────────────────────────────────────
- * Nothing outside the two databases. In particular it cannot see whether
- * EVIDENCE_SIGNING_SECRET was set on Render to the OLD service_role key, and it
- * cannot see whether the Vercel client was rebuilt against the new anon key.
- * Both are mandatory and both are invisible from here; the run prints them as a
- * reminder on every outcome, PASS or FAIL.
+ * Nothing outside the two databases. It cannot see the HMAC signing secrets on
+ * Render, and it cannot see whether the Vercel client was rebuilt against the
+ * new anon key. Both are printed as a reminder on every outcome, PASS or FAIL.
+ *
+ * On the signing secrets specifically: an earlier draft of this kit said to
+ * pin EVIDENCE_SIGNING_SECRET to the old service_role key. That was wrong.
+ * EVIDENCE_SIGNING_SECRET and OTP_TOKEN_SECRET are both already set on the live
+ * service and their value is not the service_role key, so the signing key does
+ * not move during this cutover at all — and re-pointing either of them would
+ * invalidate every seal made since they were introduced. Leave them untouched.
  *
  * ─── USAGE ──────────────────────────────────────────────────────────────────
  *   node migration/05-verify.mjs --target-url "postgresql://postgres.NEWREF:...@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
@@ -2066,18 +2071,21 @@ async function main() {
   const printBlindSpots = () => {
     console.log('');
     console.log(bold('NOT CHECKED HERE — confirm by hand before cutover:'));
-    console.log('  1. EVIDENCE_SIGNING_SECRET on Render = the OLD project service_role key.');
+    console.log('  1. EVIDENCE_SIGNING_SECRET and OTP_TOKEN_SECRET on Render — LEAVE THEM ALONE.');
     console.log(
       dim('     signatureEvidence.js / otpService.js / mailingPreferences.js derive their HMAC key')
     );
     console.log(
-      dim('     from EVIDENCE_SIGNING_SECRET || OTP_TOKEN_SECRET || SUPABASE_SERVICE_ROLE_KEY, and')
+      dim('     from EVIDENCE_SIGNING_SECRET || OTP_TOKEN_SECRET || SUPABASE_SERVICE_ROLE_KEY. Both')
     );
     console.log(
-      dim('     neither dedicated secret is set — so the key IS the service_role key today. A new')
+      dim('     dedicated secrets ARE already set on the live service, and their value is NOT the')
     );
     console.log(
-      dim('     project regenerates it and every sealed declaration, waiver and unsubscribe link dies.')
+      dim('     service_role key — so the signing key does not move during this cutover. Re-pointing')
+    );
+    console.log(
+      dim('     either one at the old service_role key would itself break every seal made since.')
     );
     console.log('  2. Rebuild and redeploy the Vercel client in the same window.');
     console.log(dim('     VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are inlined at BUILD time.'));
