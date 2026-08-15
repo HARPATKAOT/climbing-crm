@@ -307,6 +307,20 @@ export function trackingStart(history = []) {
   return timestamps[0]?.toISOString() || null;
 }
 
+/** כל קישורי התשלום שעדיין פתוחים — חוב עומד, בלי תלות בתאריך היצירה. */
+export function openChargesSummary(sales = []) {
+  let count = 0;
+  let total = 0;
+  for (const sale of sales || []) {
+    if (String(sale?.status || '').trim().toLowerCase() !== 'pending_payment') continue;
+    const amount = Number(sale?.total ?? sale?.amount ?? 0);
+    if (!Number.isFinite(amount)) continue;
+    count += 1;
+    total += amount;
+  }
+  return { count, total };
+}
+
 export function calculateDashboardStats({
   sales = [],
   payments = [],
@@ -321,6 +335,7 @@ export function calculateDashboardStats({
       ...calculateDailySales(sales, now, payments),
       // הקשר לפני מספר: ההשוואה של „הכנסות היום” היא לאתמול.
       yesterdayTotal: calculateDailySales(sales, new Date(reference.getTime() - 24 * 60 * 60 * 1000), payments).total,
+      openCharges: openChargesSummary(sales),
     },
     funnel: {
       ...calculateFunnel(parents, students),
@@ -340,6 +355,21 @@ function saleDescription(sale) {
     })
     .filter(Boolean);
   return names.join(' · ') || 'מכירה בדלפק';
+}
+
+/** שורות המוצרים של העסקה, לפירוט בתוך המגירה. description נושא גם את שם ההנחה. */
+function saleItemLines(sale) {
+  const items = Array.isArray(sale?.items) ? sale.items : [];
+  return items.map((item) => {
+    const quantity = Number(item?.quantity) || 1;
+    const unitPrice = Number(item?.unitprice ?? item?.unit_price ?? 0);
+    return {
+      name: item?.description || item?.name || 'פריט',
+      quantity,
+      unit_price: Number.isFinite(unitPrice) ? unitPrice : 0,
+      line_total: Number.isFinite(unitPrice) ? Math.round(unitPrice * quantity * 100) / 100 : 0,
+    };
+  });
 }
 
 function customerNameFor({ row, parentById, studentById }) {
@@ -412,6 +442,8 @@ export function listTodayTransactions({
       excluded_reason: null,
       sale_id: sale?.id || payment.pos_sale_id || null,
       payment_id: paymentId || null,
+      payment_url: payment.payment_url || sale?.payment_url || null,
+      items: sale ? saleItemLines(sale) : [],
       icount_doc_number: payment.icount_doc_number || sale?.icount_doc_number || null,
       has_charge_doc: Boolean(payment.icount_doc_url || payment.icount_doc_number || sale?.icount_doc_url || sale?.icount_doc_number),
       has_refund_doc: Boolean(payment.refund_doc_number || sale?.refund_doc_number),
@@ -427,8 +459,9 @@ export function listTodayTransactions({
     const refundedToday = status === 'refunded' && israelDate(sale?.refunded_at || sale?.updated_at) === date;
     const cancelledToday = (status === 'cancelled' || status === 'canceled')
       && israelDate(sale?.cancelled_at || sale?.updated_at) === date;
-    const pendingFromToday = status === 'pending_payment' && israelDate(sale?.created_at) === date;
-    if (linkedPaymentCounted || (!completedToday && !refundedToday && !cancelledToday && !pendingFromToday)) continue;
+    // חיוב פתוח הוא חוב עומד — מוצג תמיד, לא רק אם הקישור נוצר היום.
+    const openCharge = status === 'pending_payment';
+    if (linkedPaymentCounted || (!completedToday && !refundedToday && !cancelledToday && !openCharge)) continue;
     const amount = Number(sale?.total ?? sale?.amount ?? 0);
     if (!Number.isFinite(amount)) continue;
     const counted = completedToday;
@@ -449,6 +482,8 @@ export function listTodayTransactions({
       excluded_reason: counted ? null : (refundedToday ? 'refunded' : cancelledToday ? 'cancelled' : 'pending'),
       sale_id: sale.id,
       payment_id: sale.payment_id || saleByPaymentLink.get(String(sale.id))?.id || null,
+      payment_url: sale.payment_url || saleByPaymentLink.get(String(sale.id))?.payment_url || null,
+      items: saleItemLines(sale),
       icount_doc_number: sale.icount_doc_number || null,
       has_charge_doc: Boolean(sale.icount_doc_url || sale.icount_doc_number),
       has_refund_doc: Boolean(sale.refund_doc_url || sale.refund_doc_number),
@@ -461,6 +496,7 @@ export function listTodayTransactions({
   return {
     ...totals,
     yesterdayTotal: calculateDailySales(sales, dayBefore, payments).total,
+    openCharges: openChargesSummary(sales),
     rows,
   };
 }
