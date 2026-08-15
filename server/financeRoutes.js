@@ -38,6 +38,8 @@ import {
   instructorProfitability,
   laborCostRows,
 } from './payrollCost.js';
+import { monthlySeries, plStatement, rebuildLedger } from './financeLedger.js';
+import { cashFlowTimeline, rebuildCashFlowForecast } from './financeCashFlow.js';
 
 export const financeRouter = express.Router();
 
@@ -441,6 +443,55 @@ financeRouter.post('/matching/manual', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message || 'הקישור הידני נכשל' });
   }
+});
+
+// ─── ספר החשבונות, רווח והפסד ותזרים (שלב 6) ──────────────────────────────
+
+financeRouter.post('/ledger/rebuild', async (_req, res) => {
+  try {
+    if (!financeFlag('ledger')) return res.status(409).json({ error: 'ספר החשבונות כבוי (דגל ledger)' });
+    const store = durableRecordingStore();
+    const ledger = rebuildLedger(store);
+    const forecast = rebuildCashFlowForecast(store);
+    await store.flush();
+    res.json({ ledger, forecast });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'בניית ספר החשבונות נכשלה' });
+  }
+});
+
+financeRouter.get('/pl', (req, res) => {
+  const { from, to } = period(req);
+  const basis = req.query.basis === 'accrual' ? 'accrual' : 'cash';
+  res.json({
+    ...plStatement({ entries: db.get('finance_ledger_entries'), categories: db.get('finance_categories'), from, to, basis }),
+    monthly: monthlySeries({ entries: db.get('finance_ledger_entries'), basis, months: 12 }),
+  });
+});
+
+financeRouter.get('/cashflow', (req, res) => {
+  const days = Math.min(365, Math.max(7, Number(req.query.days) || 90));
+  res.json(cashFlowTimeline({ items: db.get('finance_cash_flow_items'), days }));
+});
+
+// רווחיות פר מרכז חושפת עלות מדריך פרטנית — לכן גם כאן שער hr.
+financeRouter.get('/profit-centers', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'רווחיות פר חוג כוללת נתוני שכר — נדרשת הרשאת HR' });
+  }
+  const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : new Date().toISOString().slice(0, 7);
+  const factor = employerCostFactor(db.get('finance_center_settings'));
+  const { rows } = laborCostRows({ workAssignments: db.get('work_assignments'), factor });
+  res.json({
+    month,
+    classes: classProfitability({
+      groups: db.get('groups'),
+      enrollments: db.get('enrollments'),
+      laborRows: rows,
+      month,
+    }),
+    activities: costByKey(rows.filter((row) => row.month === month), 'activity_id'),
+  });
 });
 
 // ─── עלות שכר ורווחיות פר חוג/מדריך (שלב 5) — מידע רגיש, שער hr נוסף ───────
