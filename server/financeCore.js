@@ -57,6 +57,7 @@ export const FINANCE_CENTER_TABLES = [
   'finance_cc_cycles',        // מחזורי חיוב אשראי, לאימות settlement
   'finance_rules',            // מנוע חוקים: ספק→קטגוריה/מרכז
   'finance_inbox_items',      // תיבת הנכנס הפיננסית
+  'finance_ingested_documents', // חשבוניות שנקלטו מקובץ/מייל (שלב 2)
   'finance_center_settings',  // דגלים והגדרות
   'icount_outbox',            // תור הנפקות עם idempotency
   'icount_links',             // מיפוי ישות מקומית ↔ מזהה iCount

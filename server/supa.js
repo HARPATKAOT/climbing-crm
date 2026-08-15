@@ -255,6 +255,7 @@ export const OPERATIONAL_TABLES = [
   'finance_cc_cycles',
   'finance_rules',
   'finance_inbox_items',
+  'finance_ingested_documents',
   'finance_center_settings',
   'icount_outbox',
   'icount_links',

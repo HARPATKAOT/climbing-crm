@@ -10,6 +10,7 @@ import { icount } from './icount.js';
 import { durableRecordingStore } from './bankSync.js';
 import { processOutbox } from './icountOutbox.js';
 import { runIcountReconciliation } from './icountReconciliation.js';
+import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
 import { rebuildLedger } from './financeLedger.js';
 import { rebuildCashFlowForecast } from './financeCashFlow.js';
 
@@ -30,6 +31,9 @@ export async function runFinanceNightly({ now = new Date() } = {}) {
   };
 
   await part('outbox', 'icount_outbox', () => processOutbox(store, { icountClient: icount, now }));
+  await part('email', 'doc_ingestion', async () => (gmailConfigured()
+    ? runEmailIngestion(store, { provider: createGmailProvider() })
+    : { skipped: true, reason: 'Gmail לא מחובר (חסם B2)' }));
   await part('reconciliation', 'reconciliation', () =>
     Promise.resolve(runIcountReconciliation(store, { now: now.toISOString() })));
   await part('ledger', 'ledger', () => Promise.resolve(rebuildLedger(store, { now: now.toISOString() })));

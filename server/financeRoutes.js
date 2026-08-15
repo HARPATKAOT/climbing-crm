@@ -21,6 +21,8 @@ import { ingestRawTransactions } from './bankIngestion.js';
 import { durableRecordingStore, runBankSync } from './bankSync.js';
 import { runFinanceNightly } from './financeNightly.js';
 import { reviveOutboxRow } from './icountOutbox.js';
+import { ingestDocumentFile } from './documentIngestion.js';
+import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
 
 export const financeRouter = express.Router();
 
@@ -285,6 +287,67 @@ financeRouter.post('/outbox/:id/retry', async (req, res) => {
     res.json(row);
   } catch (error) {
     res.status(400).json({ error: error.message || 'החייאת האירוע נכשלה' });
+  }
+});
+
+// ─── קליטת מסמכים: pipeline אחד להעלאה, מייל וצילום (שלב 2) ────────────────
+
+financeRouter.post('/documents/upload', async (req, res) => {
+  try {
+    if (!financeFlag('doc_ingestion')) return res.status(409).json({ error: 'קליטת מסמכים כבויה (דגל doc_ingestion)' });
+    const raw = String(req.body?.data || '');
+    const match = raw.match(/^data:(application\/pdf|image\/jpeg|image\/png);base64,(.+)$/);
+    if (!match) return res.status(400).json({ error: 'אפשר לצרף PDF, JPG או PNG בלבד' });
+    if (raw.length > 11_000_000) return res.status(413).json({ error: 'הקובץ גדול מדי; המגבלה היא 8MB' });
+    const store = durableRecordingStore();
+    const result = ingestDocumentFile(store, {
+      fileName: String(req.body?.file_name || 'מסמך'),
+      mimeType: match[1],
+      base64Data: match[2],
+      source: req.body?.source === 'mobile' ? 'mobile' : 'upload',
+      uploadedBy: req.crmUser?.email || null,
+    });
+    await store.flush();
+    return res.status(result.created ? 201 : 200).json({
+      document: { ...result.document, data: undefined },
+      created: result.created,
+      merged_with: result.merged_with,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'קליטת המסמך נכשלה' });
+  }
+});
+
+financeRouter.get('/documents', (req, res) => {
+  const wanted = String(req.query.status || 'all');
+  const rows = db.get('finance_ingested_documents')
+    .filter((row) => wanted === 'all' || row.status === wanted)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, 500)
+    .map((row) => ({ ...row, data: undefined, has_file: Boolean(row.data) }));
+  res.json({ rows, total: db.get('finance_ingested_documents').length });
+});
+
+financeRouter.get('/documents/:id/download', (req, res) => {
+  const row = db.getOne('finance_ingested_documents', req.params.id);
+  const match = String(row?.data || '').match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return res.status(404).json({ error: 'הקובץ לא נמצא' });
+  res.setHeader('Content-Type', match[1]);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.file_name || 'invoice')}`);
+  return res.send(Buffer.from(match[2], 'base64'));
+});
+
+financeRouter.post('/email-sync', async (_req, res) => {
+  try {
+    if (!gmailConfigured()) {
+      return res.status(409).json({ error: 'תיבת המייל עדיין לא מחוברת — נדרשים מפתחות Google (חסם B2 ב-PROGRESS.md)' });
+    }
+    const store = durableRecordingStore();
+    const summary = await runEmailIngestion(store, { provider: createGmailProvider() });
+    await store.flush();
+    res.json(summary);
+  } catch (error) {
+    res.status(502).json({ error: error.message || 'קליטת המייל נכשלה' });
   }
 });
 

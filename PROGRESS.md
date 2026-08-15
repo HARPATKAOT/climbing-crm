@@ -35,8 +35,9 @@
 - נבנה: `icountOutbox.js` (idempotency ✓, backoff ✓, DLQ→inbox ✓, שער sandbox ✓, retry מהממשק), `icountReconciliation.js` (השוואת גבייה↔מסמכים↔מע״מ פר חודש, פער מוסבר/לא-מוסבר → פריטי inbox ✓), `financeNightly.js` (ג'וב לילי מודולרי), ראוטים `/health`, `/outbox`, `/outbox/:id/retry`, `/nightly-scheduled` + cron ב-render.yaml (05:00).
 - הערה: דחיפת ספקים ל-iCount לא נתמכת ב-API הקיים (אין endpoint ספקים ב-icount.js) — מיזוג ב-pull בלבד, מתועד ב-DECISIONS.
 
-### שלב 2 — קליטת חשבוניות: העלאה, מייל, parsing — todo
-- קריטריון: pipeline אחד לכל המקורות; חילוץ ספק+סכום+תאריך+ח.פ+מספר מסמך עם confidence; dedupe מול iCount.
+### שלב 2 — קליטת חשבוניות: העלאה, מייל, parsing — **done** (מייל חי ממתין ל-B2, OCR ל-B4)
+- נבנה: `documentParsing.js` (שכבת טקסט PDF כולל ToUnicode לעברית + חילוץ שדות עם confidence + זיהוי קישורי חשבוניות), `documentIngestion.js` (pipeline אחד, dedupe קובץ+עסקי, מיזוג מול iCount, פריטי inbox לספק חדש/ביטחון נמוך), `emailIngestion.js` (ספק Gmail ב-REST + mock), ראוטים `/documents/*`, `/email-sync`, וחלק email בג'וב הלילי.
+- קריטריון 90% דיוק — לא ניתן לאימות בלי חשבוניות אמיתיות; מכוסה בטסטים על טקסט סינתטי (12 ✓). קובץ בלי שכבת טקסט נקלט ל-review, לא הולך לאיבוד.
 
 ### שלב 3 — מנוע התאמה רבים-לרבים + תיבת נכנס + מסך התאמה — todo
 - קריטריון: unit tests למנוע הניקוד (סכום 40/תאריך 25/ספק 25/מזהים 10, ספים 90/60); alias learning; אין ספירה כפולה (settlement guard בטסט); inbox API + counter בסיידבר.

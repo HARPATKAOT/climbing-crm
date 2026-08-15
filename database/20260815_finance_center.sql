@@ -197,6 +197,33 @@ create table if not exists public.finance_inbox_items (
 );
 create index if not exists finance_inbox_status_idx on public.finance_inbox_items(status, item_type);
 
+create table if not exists public.finance_ingested_documents (
+  id text primary key,
+  source text not null check (source in ('upload','email','mobile','link')),
+  file_name text not null default '',
+  mime_type text not null default 'application/pdf',
+  file_hash text not null unique,
+  data text,                          -- base64 data-url; מועמד למעבר ל-storage
+  email_message_id text,
+  extraction_method text,
+  supplier_id text,
+  supplier_match_method text,
+  supplier_name text not null default '',
+  supplier_tax_id text,
+  doc_number text,
+  allocation_number text,             -- מספר הקצאה — pull בלבד, לעולם לא מיוצר
+  issue_date date,
+  total_gross_agorot bigint,
+  vat_agorot bigint,
+  confidence numeric(4,2) not null default 0,
+  dedupe_key text,
+  matched_expense_id text,
+  status text not null default 'parsed' check (status in ('parsed','needs_review','merged','archived')),
+  uploaded_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists finance_ingested_docs_dedupe_idx on public.finance_ingested_documents(dedupe_key);
+
 create table if not exists public.icount_outbox (
   id text primary key,
   event_type text not null,           -- pos_invrec / refund_doc / client_upsert ...
