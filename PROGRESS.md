@@ -17,7 +17,7 @@
 - קריטריון: סעיף 0 במפרט מלא מקוד אמיתי; PROGRESS/DECISIONS קיימים; דוח recon שמור.
 - תוצרים: `FINANCE_SPEC.md` (סעיף 0 + 13 מולאו), `docs/finance/RECON.md` (מפה מלאה + ERD), `DECISIONS.md`.
 
-### שלב 0 — סכמת finance + מיגרציות — **doing**
+### שלב 0 — סכמת finance + מיגרציות — **done**
 - קריטריון: טבלאות חדשות רשומות וזמינות; SQL twin עולה ויורד נקי; ERD; טסטים עוברים.
 - טבלאות חדשות (kv, רישום ב-OPERATIONAL_TABLES): `financial_accounts`, `finance_transactions`,
   `finance_matches`, `finance_categories`, `finance_cost_centers`, `finance_cost_allocations`,
