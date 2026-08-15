@@ -17,6 +17,31 @@ import { chooseExpenseRows } from './finance.js';
 import { rebuildLedger } from './financeLedger.js';
 import { rebuildCashFlowForecast } from './financeCashFlow.js';
 
+const israelHour = (now) => Number(new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Jerusalem', hour: '2-digit', hour12: false,
+}).format(now));
+const israelDate = (value) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(value instanceof Date ? value : new Date(value));
+
+/** טהור, לטסטים: האם הריצה הלילית כבר הגיע זמנה היום. חלון: מ-04:00. */
+export function isNightlyDue(statusRow, now = new Date()) {
+  if (israelHour(now) < 4) return false;
+  if (!statusRow?.last_run_at) return true;
+  return israelDate(statusRow.last_run_at) !== israelDate(now);
+}
+
+/**
+ * רשת ביטחון ל-cron: ה-cron הייעודי מוגדר ב-render.yaml, אבל אם הוא לא
+ * נוצר בפועל — ה-cron הקיים של סנכרון iCount (כל 15 דקות) קורא לכאן,
+ * והריצה הלילית מתבצעת פעם ביום מהקריאה הראשונה אחרי 04:00.
+ */
+export async function runFinanceNightlyIfDue({ now = new Date() } = {}) {
+  const status = db.getOne('finance_center_settings', 'nightly_status');
+  if (!isNightlyDue(status, now)) return { skipped: true, reason: 'כבר רצה היום או לפני החלון' };
+  return runFinanceNightly({ now });
+}
+
 export async function runFinanceNightly({ now = new Date() } = {}) {
   const report = { started_at: now.toISOString(), parts: {} };
   const store = durableRecordingStore();

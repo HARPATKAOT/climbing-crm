@@ -3,6 +3,7 @@ process.env.LOCAL_DURABLE_STORAGE = '1';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rebuildLedger, plStatement, monthlySeries } from './financeLedger.js';
+import { isNightlyDue } from './financeNightly.js';
 import { rebuildCashFlowForecast, detectRecurringExpenses, cashFlowTimeline } from './financeCashFlow.js';
 
 function makeStore(seed = {}) {
@@ -255,6 +256,18 @@ test('forecast rebuild is idempotent and projects enrollments income', () => {
   assert.equal(first.income, 3);
   const income = store.get('finance_cash_flow_items').find((row) => row.source_type === 'recurring_income');
   assert.equal(income.amount_agorot, 38000);
+});
+
+test('nightly due-check: once a day, only after 04:00 Israel time', () => {
+  const at = (iso) => new Date(iso);
+  // 02:00 בלילה בישראל (23:00 UTC) — לפני החלון
+  assert.equal(isNightlyDue(null, at('2026-08-14T23:00:00Z')), false);
+  // 05:00 בבוקר בישראל (02:00 UTC), אף פעם לא רצה — כן
+  assert.equal(isNightlyDue(null, at('2026-08-15T02:00:00Z')), true);
+  // רצה כבר היום — לא
+  assert.equal(isNightlyDue({ last_run_at: '2026-08-15T02:05:00Z' }, at('2026-08-15T09:00:00Z')), false);
+  // רצה אתמול — כן
+  assert.equal(isNightlyDue({ last_run_at: '2026-08-14T02:05:00Z' }, at('2026-08-15T02:00:00Z')), true);
 });
 
 test('timeline accumulates and finds the minimum point', () => {

@@ -19,7 +19,7 @@ import { FINANCE_FLAGS, financeFlag, financeId } from './financeCore.js';
 import { PROVIDER_CATALOG, credentialsFromEnv, fromCsvRows } from './bankProviders.js';
 import { ingestRawTransactions } from './bankIngestion.js';
 import { durableRecordingStore, runBankSync } from './bankSync.js';
-import { runFinanceNightly } from './financeNightly.js';
+import { runFinanceNightly, runFinanceNightlyIfDue } from './financeNightly.js';
 import { reviveOutboxRow } from './icountOutbox.js';
 import { ingestDocumentFile } from './documentIngestion.js';
 import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
@@ -47,6 +47,10 @@ export const financeRouter = express.Router();
 // middleware, but fail closed unless the dedicated header secret is present.
 financeRouter.post('/sync-scheduled', requireCronSecret, async (_req, res) => {
   try {
+    // רשת ביטחון: אם ה-cron הלילי הייעודי לא קיים, הריצה הלילית נתפסת כאן —
+    // ברקע, בלי לעכב את הסנכרון עצמו, לכל היותר פעם ביום.
+    runFinanceNightlyIfDue().catch((error) =>
+      console.error('finance nightly (piggyback) failed:', error?.message || error));
     res.json(await runFinanceSync({ full: false, sources: ['notion', 'icount'] }));
   } catch (error) {
     res.status(502).json({ error: error.message || 'סנכרון הנתונים נכשל' });
