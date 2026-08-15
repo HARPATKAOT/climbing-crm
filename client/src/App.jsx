@@ -582,6 +582,7 @@ export default function App() {
                 students={students}
                 parents={parents}
                 groups={groups}
+                setStudents={setStudents}
                 setParents={setParents}
                 onNavigate={navigate}
               />

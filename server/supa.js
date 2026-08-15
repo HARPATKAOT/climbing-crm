@@ -239,6 +239,8 @@ export const OPERATIONAL_TABLES = [
   // לעובד יחיד. אוסף kv, ולכן שדה חדש נשמר בלי מיגרציית סכימה.
   'payroll_periods',
   'company_payments',
+  // יומן פעולות כספיות (זיכוי/ביטול/שליחת מסמך) — append-only, בלי עדכונים.
+  'finance_audit_log',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.

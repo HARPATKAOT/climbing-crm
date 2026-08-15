@@ -1215,23 +1215,238 @@ input, select, textarea { font-family: var(--font); }
   font-size: 11px;
   font-weight: 700;
 }
-.daily-work-funnel-stages {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--border);
+/* ── משפך v2: שלבים עם אייקון וצבע מקובץ הסטטוסים, אחוזי מעבר ביניהם ────── */
+.dw-funnel-strip {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
-.daily-work-funnel-stages > div {
-  min-width: 0;
-  padding: 11px 8px;
+.dw-funnel-stage {
+  flex: 1;
+  min-width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.dw-funnel-stage:hover,
+.dw-funnel-stage:focus-visible {
+  background: rgba(255,255,255,0.04);
+  border-color: var(--border);
+  outline: none;
+}
+.dw-funnel-stage.is-empty { opacity: 0.45; }
+.dw-funnel-stage-icon {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.dw-funnel-stage strong { font-size: 19px; line-height: 1.2; }
+.dw-funnel-stage .dw-funnel-label {
+  font-size: 10px;
+  color: var(--text-3);
   text-align: center;
-  background: var(--bg-card);
+  line-height: 1.3;
+  max-width: 110px;
 }
-.daily-work-funnel-stages strong { display: block; color: var(--text-1); font-size: 18px; }
-.daily-work-funnel-stages span { display: block; margin-top: 2px; color: var(--text-3); font-size: 10px; }
+.dw-funnel-bar {
+  width: 100%;
+  max-width: 64px;
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+.dw-funnel-bar > i { display: block; height: 100%; border-radius: 2px; }
+.dw-funnel-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+.dw-funnel-rate {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dw-rate-good { color: #6EE7B7; background: rgba(52,211,153,0.12); }
+.dw-rate-mid  { color: #FCD34D; background: rgba(251,191,36,0.12); }
+.dw-rate-low  { color: #FCA5A5; background: rgba(248,113,113,0.12); }
+.dw-rate-none { color: var(--text-3); background: rgba(255,255,255,0.05); }
+.dw-funnel-rate.is-bottleneck { box-shadow: 0 0 0 1px rgba(248,113,113,0.55); }
+.dw-funnel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.dw-funnel-foot-note { font-size: 11px; color: var(--text-3); }
+
+/* ── כרטיסי KPI לחיצים ──────────────────────────────────────────────────── */
+.dw-kpi { text-align: right; cursor: pointer; width: 100%; }
+.dw-kpi:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.dw-kpi-chips { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.dw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.dw-chip:hover, .dw-chip:focus-visible { background: rgba(255,255,255,0.07); border-color: var(--border-hover); outline: none; }
+
+/* ── שורת עדכון ורענון ─────────────────────────────────────────────────── */
+.dw-heading-meta { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; }
+
+/* ── מקטע ריק שמתכווץ לשורה אחת ────────────────────────────────────────── */
+.dw-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 18px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.dw-collapsed.is-ok { color: #6EE7B7; }
+.dw-collapsed h2 { margin: 0; font-size: 13px; font-weight: 700; color: var(--text-2); display: inline; }
+
+/* ── שלד טעינה ─────────────────────────────────────────────────────────── */
+.dw-skeleton-row {
+  height: 52px;
+  margin: 10px 18px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 75%);
+  background-size: 200% 100%;
+  animation: dw-shimmer 1.4s infinite linear;
+}
+@keyframes dw-shimmer { to { background-position: -200% 0; } }
+
+/* ── Drawer צדדי ───────────────────────────────────────────────────────── */
+.dw-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 520;
+  display: flex;
+  justify-content: flex-start;
+}
+.dw-drawer {
+  width: min(480px, 100vw);
+  height: 100%;
+  background: var(--bg-card);
+  border-inline-start: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  animation: dw-slide-in 0.22s ease;
+}
+@keyframes dw-slide-in { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.dw-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.dw-drawer-title { flex: 1; min-width: 0; }
+.dw-drawer-title h2 { margin: 0; font-size: 15px; color: var(--text-1); }
+.dw-drawer-title span { display: block; margin-top: 2px; font-size: 11px; color: var(--text-3); }
+.dw-drawer-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.dw-drawer-filters { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.dw-chip.active { background: rgba(56,189,248,0.14); border-color: rgba(56,189,248,0.4); color: #7DD3FC; }
+
+/* ── שורת עסקה ב-Drawer ────────────────────────────────────────────────── */
+.dw-sale-row { padding: 11px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.dw-sale-main { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.dw-sale-main strong { font-size: 13px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw-sale-amount { font-weight: 800; font-size: 14px; flex-shrink: 0; }
+.dw-sale-amount.excluded { text-decoration: line-through; color: var(--text-3); font-weight: 600; }
+.dw-sale-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--text-3); }
+.dw-sale-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── תצוגה מקדימה של הודעה ומענה מהיר ─────────────────────────────────── */
+.dw-msg-preview {
+  font-size: 12px;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  text-align: right;
+}
+.dw-msg-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 18px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+}
+.dw-msg-reply-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ── מרכז המשימות: בחירה מרובה ─────────────────────────────────────────── */
+.dw-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(56,189,248,0.05);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.dw-check { accent-color: var(--blue); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+
+/* ── שורת משפחה ב-Drawer של המשפך ─────────────────────────────────────── */
+.dw-family-row { padding: 11px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; }
+.dw-family-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dw-family-head strong { font-size: 13px; color: var(--text-1); cursor: pointer; }
+.dw-family-head strong:hover { color: var(--blue); }
+.dw-family-kids { display: flex; gap: 5px; flex-wrap: wrap; }
+.dw-error-box {
+  margin: 14px 18px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(239,68,68,0.25);
+  background: rgba(239,68,68,0.07);
+  color: #FCA5A5;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .daily-work-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1302,11 +1517,11 @@ input, select, textarea { font-family: var(--font); }
   .global-search .search-input { width: 160px; }
   .global-search .search-input:focus { width: 200px; }
   .daily-work-funnel-heading { align-items: flex-start; flex-direction: column; }
-  .daily-work-funnel-stages { grid-template-columns: 1fr; }
-  .daily-work-funnel-stages > div { display: flex; align-items: center; justify-content: space-between; text-align: right; }
-  .daily-work-funnel-stages strong { order: 2; }
   .daily-work-row { align-items: flex-start; padding: 12px; }
   .daily-work-row-actions { flex-direction: column; align-items: flex-end; }
+  .daily-work-heading { flex-wrap: wrap; gap: 8px; }
+  .dw-drawer { width: 100vw; border-inline-start: 0; }
+  .dw-funnel-stage { min-width: 84px; }
 }
 @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 640px) { .stats-grid { grid-template-columns: 1fr; } }

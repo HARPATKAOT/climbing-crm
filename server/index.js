@@ -532,7 +532,7 @@ import {
   getForm101Url,
   saveForm101Url,
 } from './employeeOnboardingForm.js';
-import { calculateDashboardStats } from './dashboardStats.js';
+import { calculateDashboardStats, funnelFamilies, listTodayTransactions } from './dashboardStats.js';
 import { validateUploadedDocument } from './uploadedDocument.js';
 import { unsupportedStudentEditFields } from './studentUpdateSecurity.js';
 import {
@@ -1230,6 +1230,44 @@ app.get('/api/dashboard/stats', async (req, res) => {
       students: db.get('students') || [],
       history: db.get('lead_status_history') || [],
     })));
+  }
+});
+
+// עסקאות היום — הרשימה שמאחורי מספר ההכנסות במסך העבודה. כספים בלבד.
+app.get('/api/dashboard/today-sales', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'finance')) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות בעסקאות היום' });
+  }
+  try {
+    const [sales, payments, parents, students] = await readTables(
+      'pos_sales',
+      'payments',
+      'parents',
+      'students'
+    );
+    res.json(listTodayTransactions({ sales, payments, parents, students }));
+  } catch (error) {
+    console.error('GET /api/dashboard/today-sales failed:', error.message);
+    res.json(listTodayTransactions({
+      sales: db.get('pos_sales') || [],
+      payments: db.get('payments') || [],
+      parents: db.get('parents') || [],
+      students: db.get('students') || [],
+    }));
+  }
+});
+
+// המשפחות שמאחורי כל שלב במשפך — לדפדוף מתוך מסך העבודה. גישת מודול לקוחות.
+app.get('/api/dashboard/funnel-families', async (req, res) => {
+  if (!accessAtLeast(req.crmUser, 'customers', 'view')) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות ברשימת הלידים' });
+  }
+  try {
+    const [parents, students] = await readTables('parents', 'students');
+    res.json(funnelFamilies(parents, students));
+  } catch (error) {
+    console.error('GET /api/dashboard/funnel-families failed:', error.message);
+    res.json(funnelFamilies(db.get('parents') || [], db.get('students') || []));
   }
 });
 
@@ -11157,6 +11195,14 @@ app.post('/api/payments/:id/send-invoice', async (req, res) => {
     }
 
     console.log(`📄 [payment] invoice sent payment=${payment.id} kind=${kind} doc=${docnum || '-'}`);
+    await recordFinanceAudit({
+      action: 'send_invoice',
+      paymentId: payment.id,
+      saleId: payment.pos_sale_id || null,
+      amount: payment.amount,
+      actor: req.crmUser?.email || req.crmUser?.name || null,
+      details: `kind=${kind} doc=${docnum || '-'}`,
+    });
     res.json({ success: true, url, docNumber: docnum, phone });
   } catch (err) {
     console.error('payment invoice send error:', err.message);
@@ -11297,6 +11343,15 @@ app.post('/api/payments/:id/manual-refund', requireOwner, async (req, res) => {
       + (updated?.refund_policy_exception ? ' · חריגה ממדיניות' : '')
       + ` · ${req.crmUser?.email || 'לא ידוע'}`
     );
+    await recordFinanceAudit({
+      action: 'partial_refund',
+      paymentId: payment.id,
+      saleId: payment.pos_sale_id || null,
+      amount: result.amount,
+      reason,
+      actor: req.crmUser?.email || req.crmUser?.name || null,
+      details: `doc=${payment.icount_doc_number || '-'}`,
+    });
     res.json({ success: true, ...result, payment: updated });
   } catch (err) {
     console.error('manual refund error:', err.message);
@@ -15318,6 +15373,38 @@ function cancelPunch(pass, punch, { cancelledBy, reason }) {
   return { pass: updated, punch: cancelled };
 }
 
+/**
+ * יומן פעולות כספיות — שורה לכל זיכוי, ביטול ושליחת מסמך: מי, מתי, כמה ולמה.
+ * append-only בכוונה: אין עדכון ואין מחיקה. כישלון ברישום לא מפיל את הפעולה —
+ * היא כבר קרתה — אלא נרשם ללוג השרת.
+ */
+async function recordFinanceAudit({
+  action,
+  saleId = null,
+  paymentId = null,
+  amount = null,
+  reason = '',
+  actor = null,
+  details = '',
+} = {}) {
+  try {
+    const result = await db.appendOnly('finance_audit_log', {
+      id: `fa${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      action,
+      sale_id: saleId,
+      payment_id: paymentId,
+      amount: Number.isFinite(Number(amount)) ? Number(amount) : null,
+      reason: String(reason || ''),
+      actor: actor || 'system',
+      details: String(details || ''),
+      at: new Date().toISOString(),
+    });
+    if (result?.ok === false) console.warn('⚠️ [audit] finance audit append failed:', result.error);
+  } catch (err) {
+    console.warn('⚠️ [audit] finance audit append failed:', err.message);
+  }
+}
+
 app.get('/api/pos/sales', async (req, res) => {
   let sales = db.get('pos_sales') || [];
 
@@ -15512,6 +15599,125 @@ app.get('/api/pos/sales/:id/invoice', async (req, res) => {
   }
 });
 
+/** איתור קישור המסמך של עסקה בלי שורת תשלום — אותם שני צעדים כמו מסלול ההורדה. */
+async function resolveSaleDocUrl(sale, kind) {
+  const docnum = kind === 'refund' ? sale.refund_doc_number : sale.icount_doc_number;
+  const doctype = kind === 'refund'
+    ? sale.refund_doctype || sale.icount_doctype || 'invrec'
+    : sale.icount_doctype || 'invrec';
+  let url = kind === 'refund' ? sale.refund_doc_url : sale.icount_doc_url;
+  if (url || !icount.isConfigured()) return { url: url || null, docnum };
+
+  if (kind === 'charge' && sale.icount_doc_id) {
+    try {
+      const info = await icount.getDoc(sale.icount_doc_id);
+      url = info?.doc_url || info?.docurl || info?.doc?.doc_url || info?.doc?.docurl || null;
+    } catch (err) {
+      console.warn('⚠️ [POS send-invoice] doc lookup failed:', err.message);
+    }
+  }
+  if (!url && docnum) {
+    try {
+      const info = await icount.getDocInfo({ doctype, docnum });
+      const docInfo = info.doc_info || info;
+      url = docInfo?.doc_url || docInfo?.docurl || info?.doc_url || info?.docurl || null;
+    } catch (err) {
+      console.warn('⚠️ [POS send-invoice] doc info lookup failed:', err.message);
+    }
+  }
+  if (url) {
+    const patch = kind === 'refund'
+      ? { refund_doc_url: url, updated_at: new Date().toISOString() }
+      : { icount_doc_url: url, updated_at: new Date().toISOString() };
+    const updated = db.update('pos_sales', sale.id, patch);
+    if (updated) await persistCore('pos_sales', updated);
+  }
+  return { url: url || null, docnum };
+}
+
+/**
+ * שליחה חוזרת של מסמך העסקה ללקוח בוואטסאפ — מתוך מסך העבודה או הקופה.
+ * לעסקת דלפק בלי כרטיס לקוח אפשר למסור מספר טלפון מפורש בגוף הבקשה.
+ */
+app.post('/api/pos/sales/:id/send-invoice', async (req, res) => {
+  try {
+    const sale = db.getOne('pos_sales', req.params.id);
+    if (!sale) return res.status(404).json({ error: 'עסקה לא נמצאה' });
+
+    if (req.crmUser?.role === 'staff') {
+      const today = new Date().toISOString().slice(0, 10);
+      const allowed =
+        String(sale.sold_by || '') === String(req.crmUser.email || '') ||
+        String(sale.created_at || '').slice(0, 10) === today;
+      if (!allowed) return res.status(403).json({ error: 'אין הרשאה לשלוח מסמך לעסקה זו' });
+    }
+
+    const kind = String(req.body?.kind || 'charge') === 'refund' ? 'refund' : 'charge';
+    // כשיש שורת תשלום מקושרת המסמכים כבר עליה — אותו מסלול איתור כמו בתיק הלקוח.
+    const payment =
+      (sale.payment_id && db.getOne('payments', sale.payment_id)) ||
+      (db.get('payments') || []).find((p) => String(p.pos_sale_id) === String(sale.id)) ||
+      null;
+    const { url, docnum } = payment
+      ? await resolvePaymentDocUrl(payment, kind)
+      : await resolveSaleDocUrl(sale, kind);
+    if (!url) {
+      return res.status(404).json({
+        error: kind === 'refund'
+          ? 'אין מסמך זיכוי לשליחה'
+          : 'אין חשבונית לשליחה — ייתכן שהמסמך עדיין לא הופק במערכת החיוב',
+      });
+    }
+
+    const parent = sale.parent_id ? db.getOne('parents', sale.parent_id) : null;
+    const student = sale.student_id ? db.getOne('students', sale.student_id) : null;
+    const phone = normalizePhone(req.body?.phone || sale.customer_phone || parent?.phone || student?.phone);
+    if (!phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה — לעסקה אין כרטיס לקוח' });
+
+    const profile = await getBusinessProfile();
+    const itemsText = (Array.isArray(sale.items) ? sale.items : [])
+      .map((item) => item?.name)
+      .filter(Boolean)
+      .join(' · ');
+    const text = buildInvoiceWhatsAppText({
+      businessName: profile?.display_name,
+      parentName: sale.customer_name || parent?.name || student?.name,
+      description: itemsText || 'רכישה בדלפק',
+      amount: sale.total,
+      docNumber: docnum,
+      url,
+      kind,
+    });
+
+    // clip:false — קישור המסמך לא ייחתך על ידי מגבלת אורך התשובה.
+    const result = await whatsappService.sendTextMessage(phone, text, false, {
+      clip: false,
+      parentId: parent?.id || null,
+      studentId: sale.student_id || null,
+    });
+    if (!result?.success) {
+      return res.status(502).json({
+        error: result?.error
+          || 'שליחת ההודעה נכשלה — ייתכן שחלון 24 השעות סגור ואין תבנית מאושרת למסמכים',
+      });
+    }
+
+    await recordFinanceAudit({
+      action: 'send_invoice',
+      saleId: sale.id,
+      paymentId: payment?.id || null,
+      amount: sale.total,
+      actor: req.crmUser?.email || req.crmUser?.name || null,
+      details: `kind=${kind} doc=${docnum || '-'}`,
+    });
+    console.log(`📄 [POS] invoice sent sale=${sale.id} kind=${kind} doc=${docnum || '-'}`);
+    res.json({ success: true, url, docNumber: docnum, phone });
+  } catch (err) {
+    console.error('POS invoice send error:', err.message);
+    res.status(502).json({ error: err.message || 'שליחת החשבונית נכשלה' });
+  }
+});
+
 app.post('/api/pos/sales/:id/refund', async (req, res) => {
   try {
     if (!icount.isConfigured()) {
@@ -15655,6 +15861,14 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
     console.log(
       `↩️ [POS] refund sale=${sale.id} doc=${sale.icount_doc_number} → cancel=${cancellation.docnum || 'already-cancelled'}`
     );
+    await recordFinanceAudit({
+      action: 'refund',
+      saleId: sale.id,
+      amount: sale.total,
+      reason,
+      actor: req.crmUser?.email || req.crmUser?.name || null,
+      details: `doc=${sale.icount_doc_number || '-'} cancel=${cancellation.docnum || 'already-cancelled'}`,
+    });
 
     res.json({
       sale: updatedSale,
@@ -15775,6 +15989,13 @@ app.post('/api/pos/sales/:id/cancel', async (req, res) => {
     console.log(
       `🚫 [POS] cancelled unpaid sale=${sale.id} total=${sale.total} by=${req.crmUser?.email || 'system'}`
     );
+    await recordFinanceAudit({
+      action: 'cancel',
+      saleId: sale.id,
+      amount: sale.total,
+      reason,
+      actor: req.crmUser?.email || req.crmUser?.name || null,
+    });
 
     res.json({
       sale: updatedSale,
