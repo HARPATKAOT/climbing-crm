@@ -23,6 +23,12 @@ import { runFinanceNightly } from './financeNightly.js';
 import { reviveOutboxRow } from './icountOutbox.js';
 import { ingestDocumentFile } from './documentIngestion.js';
 import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
+import {
+  learnAlias,
+  matchableDocuments,
+  proposeMatches,
+  unmatchedExpenseSummary,
+} from './matchingEngine.js';
 
 export const financeRouter = express.Router();
 
@@ -287,6 +293,144 @@ financeRouter.post('/outbox/:id/retry', async (req, res) => {
     res.json(row);
   } catch (error) {
     res.status(400).json({ error: error.message || 'החייאת האירוע נכשלה' });
+  }
+});
+
+// ─── מנוע ההתאמה רבים-לרבים + מסך ההתאמה (שלב 3) ───────────────────────────
+
+function matchingContext() {
+  return {
+    transactions: db.get('finance_transactions'),
+    documents: matchableDocuments({
+      expenses: chooseExpenseRows(db.get('finance_expenses')),
+      ingested: db.get('finance_ingested_documents'),
+      suppliers: db.get('finance_suppliers'),
+    }),
+    existingMatches: db.get('finance_matches'),
+  };
+}
+
+function matchingState() {
+  const { transactions, documents, existingMatches } = matchingContext();
+  const allocated = new Map();
+  for (const match of existingMatches.filter((row) => ['proposed', 'confirmed'].includes(row.status))) {
+    allocated.set(String(match.document_id), (allocated.get(String(match.document_id)) || 0) + Math.abs(match.allocated_agorot || 0));
+  }
+  return {
+    transactions: transactions
+      .filter((row) => row.status !== 'voided')
+      .sort((a, b) => String(b.booking_date).localeCompare(String(a.booking_date)))
+      .slice(0, 500),
+    documents: documents
+      .map((doc) => ({ ...doc, remaining_agorot: Math.max(0, doc.gross_agorot - (allocated.get(String(doc.id)) || 0)) }))
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, 500),
+    matches: existingMatches
+      .filter((row) => row.status !== 'superseded')
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))),
+    unmatched: unmatchedExpenseSummary({ transactions, matches: existingMatches }),
+  };
+}
+
+financeRouter.post('/matching/run', async (_req, res) => {
+  try {
+    if (!financeFlag('matching_v2')) return res.status(409).json({ error: 'מנוע ההתאמה כבוי (דגל matching_v2)' });
+    const proposals = proposeMatches(matchingContext());
+    const store = durableRecordingStore();
+    for (const proposal of proposals) store.insert('finance_matches', proposal);
+    await store.flush();
+    res.json({ proposed: proposals.filter((row) => row.status === 'proposed').length,
+      auto_confirmed: proposals.filter((row) => row.status === 'confirmed').length,
+      state: matchingState() });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'הרצת ההתאמה נכשלה' });
+  }
+});
+
+financeRouter.get('/matching/state', (_req, res) => res.json(matchingState()));
+
+async function decideMatch(req, res, status) {
+  const match = db.getOne('finance_matches', req.params.id);
+  if (!match) return res.status(404).json({ error: 'ההתאמה לא נמצאה' });
+  const store = durableRecordingStore();
+  store.update('finance_matches', match.id, {
+    ...match,
+    status,
+    method: 'manual',
+    matched_by: req.crmUser?.email || null,
+    matched_at: new Date().toISOString(),
+  });
+  // אישור ידני מלמד alias — הפיצ'ר שהופך את המערכת לחכמה עם הזמן (5.2).
+  if (status === 'confirmed') {
+    const transaction = db.getOne('finance_transactions', match.transaction_id);
+    const document = matchingContext().documents.find((doc) => String(doc.id) === String(match.document_id));
+    const supplier = document?.supplier_id ? db.getOne('finance_suppliers', document.supplier_id) : null;
+    if (supplier && transaction?.merchant_raw) {
+      const { supplier: updated, learned } = learnAlias(supplier, transaction.merchant_raw);
+      if (learned) store.update('finance_suppliers', supplier.id, updated);
+    }
+  }
+  await store.flush();
+  return res.json({ ok: true, state: matchingState() });
+}
+
+financeRouter.post('/matching/:id/confirm', (req, res) => decideMatch(req, res, 'confirmed')
+  .catch((error) => res.status(500).json({ error: error.message })));
+financeRouter.post('/matching/:id/reject', (req, res) => decideMatch(req, res, 'rejected')
+  .catch((error) => res.status(500).json({ error: error.message })));
+
+financeRouter.post('/matching/confirm-batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    const store = durableRecordingStore();
+    let confirmed = 0;
+    for (const id of ids) {
+      const match = db.getOne('finance_matches', id);
+      if (!match || match.status !== 'proposed') continue;
+      store.update('finance_matches', id, {
+        ...match, status: 'confirmed', method: 'manual',
+        matched_by: req.crmUser?.email || null, matched_at: new Date().toISOString(),
+      });
+      confirmed += 1;
+    }
+    await store.flush();
+    res.json({ confirmed, state: matchingState() });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'אישור ההתאמות נכשל' });
+  }
+});
+
+financeRouter.post('/matching/manual', async (req, res) => {
+  try {
+    const transaction = db.getOne('finance_transactions', String(req.body?.transaction_id || ''));
+    const { documents } = matchingContext();
+    const document = documents.find((doc) => String(doc.id) === String(req.body?.document_id || ''));
+    if (!transaction || !document) return res.status(404).json({ error: 'תנועה או מסמך לא נמצאו' });
+    const allocated = Number(req.body?.allocated_agorot) || Math.min(Math.abs(transaction.amount_agorot), document.gross_agorot);
+    if (!Number.isInteger(allocated) || allocated <= 0) return res.status(400).json({ error: 'סכום הקצאה לא תקין (אגורות שלמות)' });
+    const store = durableRecordingStore();
+    const match = store.insert('finance_matches', {
+      id: financeId('fmt'),
+      transaction_id: String(transaction.id),
+      document_id: String(document.id),
+      document_source: document.source,
+      allocated_agorot: allocated,
+      confidence: 100,
+      score_breakdown: { manual: true },
+      method: 'manual',
+      status: 'confirmed',
+      matched_by: req.crmUser?.email || null,
+      matched_at: new Date().toISOString(),
+    });
+    const supplier = document.supplier_id ? db.getOne('finance_suppliers', document.supplier_id) : null;
+    if (supplier && transaction.merchant_raw) {
+      const { supplier: updated, learned } = learnAlias(supplier, transaction.merchant_raw);
+      if (learned) store.update('finance_suppliers', supplier.id, updated);
+    }
+    await store.flush();
+    res.status(201).json({ match, state: matchingState() });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'הקישור הידני נכשל' });
   }
 });
 
