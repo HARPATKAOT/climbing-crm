@@ -109,12 +109,23 @@ export const TRANSACTION_KINDS = [
 
 // חיוב חברת אשראי בחשבון הבנק — תקבול מרוכז, לא הוצאה. הרשימה מכסה את
 // המנפיקים הישראליים; Max הוא הכרטיס העסקי בפועל.
+// זהירות: \b ב-JavaScript עובד רק מול אותיות לטיניות — מול עברית הוא מת.
+// לכן מילים עבריות קצרות נבדקות עם גבולות רווח/קצה מפורשים.
 const SETTLEMENT_PATTERNS = [
   /מקס\s?איט|max\s?it|לאומי\s?קארד|leumi\s?card/i,
-  /\bמקס\b|\bmax\b/i,
+  /(^|\s)מקס(\s|$)|\bmax\b/i,
   /ישראכרט|isracard/i,
-  /כרטיסי אשראי|כאל\b|\bcal\b/i,
+  /כרטיסי אשראי|(^|\s)כאל(\s|$)|\bcal\b/i,
   /דיינרס|diners|אמריקן אקספרס|american express|amex/i,
+];
+
+// העברת משכורות מהבנק. השכר עצמו נרשם בספר מתוך payroll_periods (הסכומים
+// הפר-עובדיים), ולכן שורת הבנק היא סילוק ההתחייבות — transfer, לא הוצאה —
+// אחרת אותה משכורת נספרת פעמיים. בכוונה בלי המילה 'שכר' לבדה: היא תופסת
+// גם 'שכר דירה'.
+const SALARY_TRANSFER_PATTERNS = [
+  /משכורת|משכורות/,
+  /מס[\"׳']?ב|masav/i,
 ];
 
 // הפקדות סליקה של iCount / מסליקה כלשהי לחשבון — תקבול מרוכז של קבלות.
@@ -152,8 +163,13 @@ export function classifyTransactionKind({
   if (accountType === 'bank' && amountAgorot > 0 && CLEARING_DEPOSIT_PATTERNS.some((p) => p.test(text))) {
     return 'settlement';
   }
+  if (accountType === 'bank' && amountAgorot < 0 && SALARY_TRANSFER_PATTERNS.some((p) => p.test(text))) {
+    return 'transfer';
+  }
   if (TRANSFER_PATTERNS.some((p) => p.test(text))) return 'transfer';
   if (FEE_PATTERNS.some((p) => p.test(text))) return 'fee';
+  // זיכוי מבית עסק על הכרטיס — כסף שחוזר, מקטין הוצאות (נכנס לרווחיות).
+  if (accountType === 'credit_card' && amountAgorot > 0) return 'refund';
   return amountAgorot >= 0 ? 'income' : 'expense';
 }
 

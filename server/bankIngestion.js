@@ -152,12 +152,21 @@ function settleCycle(store, settlementRow) {
  */
 export function ingestRawTransactions(store, { account, rawTxns = [], now = todayStr() } = {}) {
   if (!account?.id) throw new Error('חשבון חסר בקליטת תנועות');
-  const existingHashes = new Set(store.get('finance_transactions').map((row) => row.dedupe_hash));
+  const existing = store.get('finance_transactions');
+  const existingHashes = new Set(existing.map((row) => row.dedupe_hash));
+  // גשר בין מקורות: תנועה שנקלטה פעם מ-CSV ועכשיו מגיעה מה-scraper (או להפך)
+  // היא אותו כסף — המוסד שונה בגלל חשבון ה-CSV הזמני, אז הזהות היא
+  // תאריך+סכום+תיאור. חשבונות אמיתיים שונים לא חולקים מפתח כזה בפועל.
+  const crossKey = (row) => `${row.booking_date}|${row.amount_agorot}|${String(row.raw_description).trim().toLowerCase().replace(/\s+/g, ' ')}`;
+  const crossSourceKeys = new Set(existing
+    .filter((row) => String(row.account_id) !== String(account.id))
+    .map(crossKey));
   const summary = {
     fetched: rawTxns.length,
     inserted: 0,
     duplicates: 0,
     invalid: 0,
+    pending_skipped: 0,
     future_installments: 0,
     settlements: 0,
   };
@@ -171,7 +180,11 @@ export function ingestRawTransactions(store, { account, rawTxns = [], now = toda
       continue;
     }
     if (row.amount_agorot === 0) { summary.invalid += 1; continue; }
+    // תנועה שטרם נסלקה (pending) שאינה תשלום עתידי — מדלגים: כשהיא תיסלק
+    // היא תחזור עם תאריך/סכום סופיים, וקליטת שני השלבים הייתה מכפילה אותה.
+    if (rawTxn.pending && row.kind !== 'installment_future') { summary.pending_skipped += 1; continue; }
     if (existingHashes.has(row.dedupe_hash)) { summary.duplicates += 1; continue; }
+    if (crossSourceKeys.has(crossKey(row))) { summary.duplicates += 1; continue; }
     existingHashes.add(row.dedupe_hash);
 
     if (account.type === 'credit_card' && row.kind === 'expense') {
@@ -200,6 +213,35 @@ export function ingestRawTransactions(store, { account, rawTxns = [], now = toda
       row.cc_cycle_id = settleCycle(store, row) || null;
       store.update('finance_transactions', row.id, row);
     }
+  }
+  return summary;
+}
+
+/**
+ * הבשלת תשלומים עתידיים: תשלום שסומן installment_future ותאריכו הגיע הוא
+ * מעכשיו הוצאה אמיתית — נכנס לרווחיות, מצטרף למחזור האשראי שלו, ופריט
+ * התזרים שלו מסומן כסולק. בלי זה תשלומים 2+ לעולם לא היו נספרים (הריצה
+ * החוזרת נחסמת ב-dedupe) והמחזור היה מתריע על פער שווא.
+ */
+export function matureInstallments(store, { now = todayStr() } = {}) {
+  const summary = { matured: 0 };
+  for (const transaction of store.get('finance_transactions')) {
+    if (transaction.kind !== 'installment_future' || transaction.booking_date > now) continue;
+    const account = store.get('financial_accounts').find((row) => String(row.id) === String(transaction.account_id));
+    const matured = { ...transaction, kind: 'expense' };
+    if (account?.type === 'credit_card') {
+      matured.cc_cycle_id = accumulateCycle(store, account, matured);
+    }
+    store.update('finance_transactions', transaction.id, matured);
+    const cashFlowItem = store.get('finance_cash_flow_items').find((row) =>
+      row.source_type === 'installment' && String(row.source_id) === String(transaction.id));
+    if (cashFlowItem && !cashFlowItem.settled_transaction_id) {
+      store.update('finance_cash_flow_items', cashFlowItem.id, {
+        ...cashFlowItem,
+        settled_transaction_id: String(transaction.id),
+      });
+    }
+    summary.matured += 1;
   }
   return summary;
 }

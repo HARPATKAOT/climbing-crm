@@ -37,8 +37,12 @@ function paidPaymentDate(payment) {
  */
 export function reconcileMonth(store, { month, payments = [], documents = [], now }) {
   const monthPayments = payments.filter((payment) => {
-    const status = normalizePaymentStatus(payment.status, { amount: payment.amount });
-    return status === 'paid' && monthOf(paidPaymentDate(payment)) === month;
+    const status = normalizePaymentStatus(payment.status, {
+      amount: payment.amount,
+      refundAmount: payment.refund_amount,
+    });
+    // החזר חלקי הוא עדיין גבייה — היתרה שנשארה נספרת.
+    return ['paid', 'partial_refund'].includes(status) && monthOf(paidPaymentDate(payment)) === month;
   });
   const monthDocs = documents.filter((doc) => monthOf(doc.document_date) === month);
   const recognized = monthDocs.filter((doc) =>

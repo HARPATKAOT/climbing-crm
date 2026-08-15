@@ -2,7 +2,7 @@ process.env.LOCAL_DURABLE_STORAGE = '1';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ingestRawTransactions, syncAccount, isIsraelBusinessDay } from './bankIngestion.js';
+import { ingestRawTransactions, syncAccount, isIsraelBusinessDay, matureInstallments } from './bankIngestion.js';
 import { createMockProvider, fromCsvRows, credentialsFromEnv, normalizeScrapedTransaction } from './bankProviders.js';
 import { countsTowardProfit } from './financeCore.js';
 
@@ -162,6 +162,89 @@ test('auth failure creates an inbox item and does not throw', async () => {
   // ריצה שנייה לא מכפילה את הפריט
   await syncAccount(store, { account: cardAccount, provider: failing, since: '2026-07-01', now: '2026-08-12' });
   assert.equal(store.get('finance_inbox_items').filter((row) => row.item_type === 'auth_required').length, 1);
+});
+
+test('matured installments become expenses, join their cycle and settle the forecast item (review fix #3)', () => {
+  const store = makeStore({ financial_accounts: [cardAccount] });
+  ingestRawTransactions(store, {
+    account: cardAccount,
+    rawTxns: [
+      cardTxn({ amountShekels: -300, installments: { number: 1, total: 3 }, date: '2026-08-05' }),
+      cardTxn({ externalId: 'e2', amountShekels: -300, installments: { number: 2, total: 3 }, date: '2026-09-05', pending: true }),
+    ],
+    now: '2026-08-10',
+  });
+  // חודש עבר — תשלום 2 הגיע לפירעון
+  const result = matureInstallments(store, { now: '2026-09-06' });
+  assert.equal(result.matured, 1);
+  const rows = store.get('finance_transactions');
+  assert.equal(rows.filter((row) => row.kind === 'expense').length, 2);
+  assert.equal(rows.filter((row) => row.kind === 'installment_future').length, 0);
+  // המחזור של ספטמבר מכיל עכשיו את התשלום שהבשיל
+  const septemberCycle = store.get('finance_cc_cycles').find((cycle) => cycle.cycle_month === '2026-09');
+  assert.equal(septemberCycle.expected_agorot, 30000);
+  // פריט התזרים סומן כסולק ולא יופיע יותר בצפי
+  const cashFlowItem = store.get('finance_cash_flow_items')[0];
+  assert.ok(cashFlowItem.settled_transaction_id);
+  // ריצה שנייה לא עושה כלום
+  assert.equal(matureInstallments(store, { now: '2026-09-07' }).matured, 0);
+});
+
+test('pending non-installment rows are skipped until they clear (review fix #8)', () => {
+  const store = makeStore();
+  const result = ingestRawTransactions(store, {
+    account: cardAccount,
+    rawTxns: [cardTxn({ pending: true, date: '2026-08-09' })],
+    now: '2026-08-10',
+  });
+  assert.equal(result.pending_skipped, 1);
+  assert.equal(store.get('finance_transactions').length, 0);
+});
+
+test('the same real transaction from csv and scraper accounts is one row (review fix #12)', () => {
+  const store = makeStore();
+  const csvAccount = { id: 'acc_csv', type: 'credit_card', institution: 'csv', last4: '9922' };
+  ingestRawTransactions(store, { account: csvAccount, rawTxns: [cardTxn()], now: '2026-08-10' });
+  const second = ingestRawTransactions(store, { account: cardAccount, rawTxns: [cardTxn()], now: '2026-08-10' });
+  assert.equal(second.duplicates, 1);
+  assert.equal(store.get('finance_transactions').length, 1);
+});
+
+test('salary bank transfers classify as transfer, card credits as refund (review fixes #2, #5)', () => {
+  const store = makeStore();
+  ingestRawTransactions(store, {
+    account: bankAccount,
+    rawTxns: [cardTxn({ externalId: 's1', amountShekels: -4000, description: 'העברת משכורת - מסב' })],
+    now: '2026-08-10',
+  });
+  ingestRawTransactions(store, {
+    account: cardAccount,
+    rawTxns: [cardTxn({ externalId: 'r1', amountShekels: 120, description: 'זיכוי מבית עסק' })],
+    now: '2026-08-10',
+  });
+  const rows = store.get('finance_transactions');
+  assert.equal(rows.find((row) => row.external_id === 's1').kind, 'transfer');
+  assert.equal(rows.find((row) => row.external_id === 'r1').kind, 'refund');
+});
+
+test('hebrew settlement words match without latin word boundaries (review fix #13)', () => {
+  const store = makeStore();
+  ingestRawTransactions(store, {
+    account: bankAccount,
+    rawTxns: [cardTxn({ externalId: 'b1', amountShekels: -900, description: 'מקס פיננסים' })],
+    now: '2026-08-10',
+  });
+  assert.equal(store.get('finance_transactions')[0].kind, 'settlement');
+});
+
+test('csv signs: card credit is positive, bank credit column is income (review fix #4)', () => {
+  const rows = fromCsvRows([
+    { account_type: 'credit_card', transaction_date: '2026-08-03', description: 'זיכוי', amount: 50, amount_negative: true },
+    { account_type: 'credit_card', transaction_date: '2026-08-03', description: 'חיוב', amount: 80, amount_negative: false },
+    { account_type: 'bank', transaction_date: '2026-08-03', description: 'הפקדה', amount: 200, amount_negative: false, amount_header: 'זכות' },
+    { account_type: 'bank', transaction_date: '2026-08-03', description: 'חיוב', amount: 300, amount_negative: true },
+  ]);
+  assert.deepEqual(rows.map((row) => row.amountShekels), [50, -80, 200, -300]);
 });
 
 test('mercantile needs three credential fields, max two — no shared shape', () => {

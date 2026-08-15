@@ -130,19 +130,33 @@ export function createMockProvider(providerKey, transactions = []) {
   };
 }
 
-/** מתאם ל-CSV הקיים (financeAutomation.parseFinanceCsv) — אותו RawTxn. */
+/**
+ * מתאם ל-CSV הקיים (financeAutomation.parseFinanceCsv) — אותו RawTxn.
+ * הסימן: תא שלילי/בסוגריים בכרטיס = זיכוי מבית עסק (כסף חוזר, חיובי);
+ * בבנק = חיוב (שלילי). תא חיובי = חיוב בכרטיס; בבנק — תלוי בעמודה:
+ * עמודת 'זכות' היא כסף נכנס, כל השאר חיוב. מוגבל מטבעו — משיכת בנק
+ * אמיתית (B1) היא המקור המלא, וה-CSV גשר.
+ */
 export function fromCsvRows(rows = []) {
-  return rows.map((row) => ({
-    externalId: String(row.external_id || ''),
-    date: String(row.transaction_date || '').slice(0, 10),
-    processedDate: String(row.transaction_date || '').slice(0, 10),
-    // ה-CSV הקיים שומר סכום מוחלט של חיוב — במרכז הפיננסי הוצאה היא שלילית.
-    amountShekels: -Math.abs(Number(row.amount) || 0),
-    description: String(row.description || ''),
-    memo: '',
-    installments: null,
-    pending: false,
-    source: 'csv',
-    raw: { source: 'csv', id: row.id },
-  }));
+  return rows.map((row) => {
+    const absolute = Math.abs(Number(row.amount) || 0);
+    const isBank = row.account_type === 'bank';
+    const creditColumn = /זכות|credit/i.test(String(row.amount_header || ''));
+    let amountShekels;
+    if (row.amount_negative) amountShekels = isBank ? -absolute : absolute;
+    else if (isBank && creditColumn) amountShekels = absolute;
+    else amountShekels = -absolute;
+    return {
+      externalId: String(row.external_id || ''),
+      date: String(row.transaction_date || '').slice(0, 10),
+      processedDate: String(row.transaction_date || '').slice(0, 10),
+      amountShekels,
+      description: String(row.description || ''),
+      memo: '',
+      installments: null,
+      pending: false,
+      source: 'csv',
+      raw: { source: 'csv', id: row.id },
+    };
+  });
 }

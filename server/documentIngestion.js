@@ -62,6 +62,9 @@ export function ingestDocumentFile(store, {
 
   const existing = store.get('finance_ingested_documents').find((row) => row.file_hash === fileHash);
   if (existing) return { document: existing, created: false, merged_with: existing.matched_expense_id || null };
+  const findByBusinessKey = (dedupeKey) => (dedupeKey
+    ? store.get('finance_ingested_documents').find((row) => row.dedupe_key && row.dedupe_key === dedupeKey)
+    : null);
 
   const { text, method } = mimeType === 'application/pdf'
     ? extractPdfText(buffer)
@@ -69,6 +72,15 @@ export function ingestDocumentFile(store, {
   const fields = extractInvoiceFields(text);
   const { supplier, method: supplierMethod } = supplierGuess(store, fields);
   const icountTwin = matchingIcountExpense(store, fields);
+
+  // אותה חשבונית כשני קבצים שונים (מייל + צילום): הזהות העסקית מכריעה.
+  const businessKey = documentDedupeKey({
+    supplierTaxId: fields.supplier_tax_id || '',
+    docNumber: fields.doc_number || '',
+    grossAgorot: fields.total_gross != null ? toAgorot(fields.total_gross) : 0,
+  });
+  const businessTwin = findByBusinessKey(businessKey);
+  if (businessTwin) return { document: businessTwin, created: false, merged_with: businessTwin.matched_expense_id || null };
 
   const needsReview = fields.confidence < REVIEW_THRESHOLD;
   const document = store.insert('finance_ingested_documents', {
@@ -90,11 +102,7 @@ export function ingestDocumentFile(store, {
     total_gross_agorot: fields.total_gross != null ? toAgorot(fields.total_gross) : null,
     vat_agorot: fields.vat_amount != null ? toAgorot(fields.vat_amount) : null,
     confidence: fields.confidence,
-    dedupe_key: documentDedupeKey({
-      supplierTaxId: fields.supplier_tax_id || '',
-      docNumber: fields.doc_number || '',
-      grossAgorot: fields.total_gross != null ? toAgorot(fields.total_gross) : 0,
-    }),
+    dedupe_key: businessKey,
     matched_expense_id: icountTwin?.id || null,
     status: icountTwin ? 'merged' : (needsReview ? 'needs_review' : 'parsed'),
     uploaded_by: uploadedBy,

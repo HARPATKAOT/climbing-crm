@@ -89,6 +89,7 @@ export function parseFinanceCsv(csvText, defaults = {}) {
       errors.push(`שורה ${index + 2}: תאריך או סכום אינם תקינים`);
       return;
     }
+    const rawAmountCell = clean(values[amountIndex]);
     const row = {
       provider: clean(defaults.provider) || 'manual_csv',
       account_type: defaults.account_type === 'bank' ? 'bank' : 'credit_card',
@@ -96,6 +97,10 @@ export function parseFinanceCsv(csvText, defaults = {}) {
       transaction_date: date,
       description: clean(values[descriptionIndex]) || 'תנועה ללא תיאור',
       amount,
+      // כיוון הכסף לצרכני המשך (המרכז הפיננסי): amount נשאר מוחלט לתאימות,
+      // אבל הסימן המקורי והכותרת נשמרים כדי שזיכוי לא ייקלט כחיוב.
+      amount_negative: /^\(|^-/.test(rawAmountCell),
+      amount_header: headers[amountIndex] || '',
       currency: clean(defaults.currency) || 'ILS',
       external_id: idIndex >= 0 ? clean(values[idIndex]) : '',
       source: 'csv',

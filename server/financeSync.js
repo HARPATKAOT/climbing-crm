@@ -167,7 +167,25 @@ export async function syncNotionFinance() {
     ({ suppliers, expenses } = snapshot);
     mode = 'snapshot';
   }
-  await persistCollection('finance_suppliers', suppliers);
+  // מיזוג, לא דריסה: המרכז הפיננסי כותב על שורות הספקים שדות משלו
+  // (aliases נלמדים, קטגוריית ברירת מחדל, תנאי תשלום) — סנכרון Notion שרץ
+  // כל 15 דקות אסור לו למחוק אותם.
+  const existingSuppliers = new Map(db.get('finance_suppliers').map((row) => [String(row.id), row]));
+  const mergedSuppliers = suppliers.map((supplier) => {
+    const existing = existingSuppliers.get(String(supplier.id));
+    if (!existing) return supplier;
+    return {
+      ...supplier,
+      aliases: existing.aliases || supplier.aliases,
+      default_category_id: existing.default_category_id ?? supplier.default_category_id ?? null,
+      payment_terms: existing.payment_terms ?? supplier.payment_terms ?? null,
+      is_recurring: existing.is_recurring ?? supplier.is_recurring ?? false,
+      tax_id: existing.tax_id ?? supplier.tax_id,
+    };
+  });
+  const notionIds = new Set(mergedSuppliers.map((row) => String(row.id)));
+  const nonNotionSuppliers = db.get('finance_suppliers').filter((row) => !notionIds.has(String(row.id)));
+  await persistCollection('finance_suppliers', [...mergedSuppliers, ...nonNotionSuppliers]);
   const existingIcount = db.get('finance_expenses').filter((row) => row.source === 'icount');
   const reconciled = reconcileExpenses([...existingIcount, ...expenses]);
   await persistCollection('finance_expenses', [...existingIcount, ...reconciled]);

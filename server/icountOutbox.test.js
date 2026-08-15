@@ -97,7 +97,7 @@ test('client_upsert maintains icount_links', async () => {
   });
   await processOutbox(store, {
     icountClient: { ensureClient: async () => ({ clientId: '777', created: true }) },
-    allowRealDocs: false, // client upsert אינו מסמך — מותר גם מחוץ לפרודקשן
+    allowRealDocs: true, // גם client_upsert חסום מחוץ לפרודקשן
   });
   const link = store.get('icount_links')[0];
   assert.equal(link.entity_type, 'parent');

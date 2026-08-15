@@ -82,9 +82,17 @@ export function rebuildLedger(store, { now = new Date().toISOString() } = {}) {
     from: '2010-01-01',
     to: now.slice(0, 10),
   });
+  // מסמך iCount שטרם נפרע במלואו — היתרה הפתוחה אינה מזומן שנכנס.
+  const remainingByDocnum = new Map(store.get('finance_documents')
+    .filter((doc) => doc.docnum && Number(doc.remaining_sum) > 0)
+    .map((doc) => [String(doc.docnum), toAgorot(Number(doc.remaining_sum) || 0)]));
   for (const row of paymentsReport.rows) {
-    const amount = toAgorot(Number(row.net_amount) || 0);
-    if (!amount || !row.date) continue;
+    let collected = toAgorot(Number(row.gross_collected) || 0);
+    if (row.accounting_only && row.document_number) {
+      collected = Math.max(0, collected - (remainingByDocnum.get(String(row.document_number)) || 0));
+    }
+    const refunded = toAgorot(Number(row.refund_amount) || 0);
+    if ((!collected && !refunded) || !row.date) continue;
     let costCenterId = null;
     if (row.activity_ids?.length === 1) {
       const activity = activitiesById.get(String(row.activity_ids[0]));
@@ -92,25 +100,49 @@ export function rebuildLedger(store, { now = new Date().toISOString() } = {}) {
         type: 'activity', refTable: 'activities', refId: row.activity_ids[0], name: activity?.name,
       });
     }
-    add({
-      entry_date: row.date,
-      period: monthOf(row.date),
-      amount_agorot: amount,
+    const base = {
       basis: 'cash',
       category_id: INCOME_CATEGORY_BY_SOURCE[row.source] || 'cat_income',
       cost_center_id: costCenterId,
       source_type: 'payment',
-      source_id: String(row.id),
       description: row.description || '',
-    });
-    summary.cash_income += 1;
+    };
+    if (collected) {
+      add({
+        ...base,
+        entry_date: row.date,
+        period: monthOf(row.date),
+        amount_agorot: collected,
+        source_id: String(row.id),
+      });
+      summary.cash_income += 1;
+    }
+    // החזר נרשם ביום שבו הכסף חזר — לא מכווץ רטרואקטיבית את חודש המכירה.
+    if (refunded) {
+      const refundDate = String(row.refunded_at || row.date).slice(0, 10);
+      add({
+        ...base,
+        entry_date: refundDate,
+        period: monthOf(refundDate),
+        amount_agorot: -refunded,
+        source_id: `${row.id}:refund`,
+        description: `החזר: ${row.description || ''}`,
+      });
+      summary.cash_income += 1;
+    }
   }
 
   // ── הוצאות: תנועות בנק/אשראי הן האמת במזומן ─────────────────────────────
-  const confirmedMatches = store.get('finance_matches').filter((match) => match.status === 'confirmed');
-  const matchedDocIds = new Set(confirmedMatches.map((match) => String(match.document_id)));
+  // מסמך שיש לו התאמה פתוחה — מאושרת או מוצעת — לא נספר שוב במזומן:
+  // הצעה בציון 60+ אומרת שזה כנראה אותו כסף, וספירה כפולה גרועה מהקצאה
+  // שגויה. הצעה שנדחית (rejected) מחזירה את המסמך לספירה בריצה הבאה.
+  const openMatches = store.get('finance_matches').filter((match) => ['confirmed', 'proposed'].includes(match.status));
+  const matchedDocIds = new Set(openMatches.map((match) => String(match.document_id)));
   for (const transaction of store.get('finance_transactions')) {
-    if (!countsTowardProfit(transaction.kind) || transaction.kind === 'income') continue;
+    if (!countsTowardProfit(transaction.kind)) continue;
+    // תנועת הכנסה בבנק היא כמעט תמיד הפקדה של הכנסה שכבר נספרה מהתשלומים —
+    // נכנסת לספר רק אחרי סיווג ידני מפורש (kind refund בכרטיס כן נספר).
+    if (transaction.kind === 'income' && !(transaction.status === 'classified' && transaction.category_id)) continue;
     if (transaction.status === 'voided') continue;
     add({
       entry_date: transaction.booking_date,

@@ -414,11 +414,15 @@ financeRouter.post('/matching/confirm-batch', async (req, res) => {
 financeRouter.post('/matching/manual', async (req, res) => {
   try {
     const transaction = db.getOne('finance_transactions', String(req.body?.transaction_id || ''));
-    const { documents } = matchingContext();
-    const document = documents.find((doc) => String(doc.id) === String(req.body?.document_id || ''));
+    const state = matchingState();
+    const document = state.documents.find((doc) => String(doc.id) === String(req.body?.document_id || ''));
     if (!transaction || !document) return res.status(404).json({ error: 'תנועה או מסמך לא נמצאו' });
-    const allocated = Number(req.body?.allocated_agorot) || Math.min(Math.abs(transaction.amount_agorot), document.gross_agorot);
+    // תקרות: היתרה שטרם הוקצתה במסמך, וסכום התנועה — הקצאה לא ממציאה כסף.
+    const ceiling = Math.min(Math.abs(transaction.amount_agorot), document.remaining_agorot ?? document.gross_agorot);
+    if (ceiling <= 0) return res.status(409).json({ error: 'המסמך כבר מוקצה במלואו' });
+    const allocated = Number(req.body?.allocated_agorot) || ceiling;
     if (!Number.isInteger(allocated) || allocated <= 0) return res.status(400).json({ error: 'סכום הקצאה לא תקין (אגורות שלמות)' });
+    if (allocated > ceiling) return res.status(400).json({ error: `ההקצאה חורגת מהיתרה (${ceiling} אג׳)` });
     const store = durableRecordingStore();
     const match = store.insert('finance_matches', {
       id: financeId('fmt'),
@@ -475,8 +479,12 @@ financeRouter.get('/ledger/entries', (req, res) => {
   const wantedPeriod = String(req.query.period || '');
   const wantedCategory = String(req.query.category_id || '');
   const { from, to } = period(req);
+  // שורות שכר במזומן הן משכורת פר עובד — בלי הרשאת hr רואים רק את הצבירה
+  // החודשית המצרפית, לא את השורות הפרטניות.
+  const canSeePayroll = hasSensitiveAccess(req.crmUser, 'hr');
   const rows = db.get('finance_ledger_entries')
     .filter((entry) => entry.basis === basis && !entry.voided_at)
+    .filter((entry) => canSeePayroll || entry.source_type !== 'payroll' || !String(entry.source_id).startsWith('paid:'))
     .filter((entry) => (wantedPeriod ? entry.period === wantedPeriod : dateInRange(entry.entry_date, from, to)))
     .filter((entry) => !wantedCategory || String(entry.category_id || 'uncategorized') === wantedCategory)
     .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)))

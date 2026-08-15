@@ -109,14 +109,34 @@ export function createMockEmailProvider(messages = []) {
  * ריצת קליטה אחת. הודעה שכבר נקלטה (email_message_id) מדולגת — idempotent.
  * קישורי חשבוניות מדומיינים מוכרים מורדים ונקלטים כקובץ.
  */
+const MAX_LINK_DOWNLOAD_BYTES = 12_000_000;
+
+/**
+ * הורדה קשוחה: בלי לעקוב אחרי redirect לדומיין אחר (SSRF), עם תקרת גודל.
+ * הדומיין אומת ב-findInvoiceLinks — ההגנה כאן היא על מה שקורה אחרי הקליק.
+ */
+async function safeDownloadLink(url) {
+  const response = await fetch(url, { redirect: 'manual' });
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    const target = response.headers.get('location') || '';
+    const sameHost = (() => {
+      try { return new URL(target, url).hostname === new URL(url).hostname; } catch { return false; }
+    })();
+    if (!sameHost) throw new Error('הקישור מפנה לדומיין אחר — לא מוריד');
+    return safeDownloadLink(new URL(target, url).toString());
+  }
+  if (!response.ok) throw new Error(`הורדת קישור נכשלה: ${response.status}`);
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared > MAX_LINK_DOWNLOAD_BYTES) throw new Error('הקובץ המקושר גדול מדי');
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_LINK_DOWNLOAD_BYTES) throw new Error('הקובץ המקושר גדול מדי');
+  return buffer.toString('base64');
+}
+
 export async function runEmailIngestion(store, {
   provider,
   cursor = null,
-  downloadLink = async (url) => {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`הורדת קישור נכשלה: ${response.status}`);
-    return Buffer.from(await response.arrayBuffer()).toString('base64');
-  },
+  downloadLink = safeDownloadLink,
 } = {}) {
   if (!financeFlag('doc_ingestion')) return { skipped: true, reason: 'דגל doc_ingestion כבוי' };
   const summary = { messages: 0, ingested: 0, merged: 0, duplicates: 0, link_downloads: 0, errors: 0 };

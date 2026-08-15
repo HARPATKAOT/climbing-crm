@@ -8,9 +8,12 @@ import { db } from './db.js';
 import { financeFlag } from './financeCore.js';
 import { icount } from './icount.js';
 import { durableRecordingStore } from './bankSync.js';
+import { matureInstallments } from './bankIngestion.js';
 import { processOutbox } from './icountOutbox.js';
 import { runIcountReconciliation } from './icountReconciliation.js';
 import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
+import { matchableDocuments, proposeMatches } from './matchingEngine.js';
+import { chooseExpenseRows } from './finance.js';
 import { rebuildLedger } from './financeLedger.js';
 import { rebuildCashFlowForecast } from './financeCashFlow.js';
 
@@ -34,6 +37,27 @@ export async function runFinanceNightly({ now = new Date() } = {}) {
   await part('email', 'doc_ingestion', async () => (gmailConfigured()
     ? runEmailIngestion(store, { provider: createGmailProvider() })
     : { skipped: true, reason: 'Gmail לא מחובר (חסם B2)' }));
+  // תשלומים עתידיים שתאריכם הגיע הופכים להוצאה ומצטרפים למחזור האשראי.
+  await part('installments', 'bank_ingestion', () =>
+    Promise.resolve(matureInstallments(store, { now: now.toISOString().slice(0, 10) })));
+  // מנוע ההתאמה רץ לפני הספר: התאמה (גם מוצעת) היא מה שמונע ספירה כפולה
+  // של הוצאה שמופיעה גם כתנועת אשראי וגם כמסמך iCount.
+  await part('matching', 'matching_v2', () => {
+    const proposals = proposeMatches({
+      transactions: db.get('finance_transactions'),
+      documents: matchableDocuments({
+        expenses: chooseExpenseRows(db.get('finance_expenses')),
+        ingested: db.get('finance_ingested_documents'),
+        suppliers: db.get('finance_suppliers'),
+      }),
+      existingMatches: db.get('finance_matches'),
+    });
+    for (const proposal of proposals) store.insert('finance_matches', proposal);
+    return Promise.resolve({
+      proposed: proposals.filter((row) => row.status === 'proposed').length,
+      auto_confirmed: proposals.filter((row) => row.status === 'confirmed').length,
+    });
+  });
   await part('reconciliation', 'reconciliation', () =>
     Promise.resolve(runIcountReconciliation(store, { now: now.toISOString() })));
   await part('ledger', 'ledger', () => Promise.resolve(rebuildLedger(store, { now: now.toISOString() })));

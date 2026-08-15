@@ -70,7 +70,9 @@ async function dispatchEvent(store, row, icountClient) {
   }
 }
 
-const DOCUMENT_EVENTS = new Set(['invrec_create', 'refund_doc', 'doc_cancel']);
+// כל האירועים חסומים מחוץ לפרודקשן — גם client_upsert: לקוח בדיקה אמיתי
+// בספרים של iCount הוא זיהום שקשה לנקות.
+const GATED_EVENTS = new Set(['invrec_create', 'refund_doc', 'doc_cancel', 'client_upsert']);
 
 /**
  * ריצת worker אחת: מושך את הממתינים שהגיע זמנם, שולח, ומעדכן.
@@ -90,7 +92,7 @@ export async function processOutbox(store, {
 
   for (const row of due) {
     summary.processed += 1;
-    if (DOCUMENT_EVENTS.has(row.event_type) && !allowRealDocs) {
+    if (GATED_EVENTS.has(row.event_type) && !allowRealDocs) {
       // סביבת פיתוח: המסמך לא נוצר באמת, והשורה מסומנת ככזו במפורש.
       store.update('icount_outbox', row.id, {
         ...row,

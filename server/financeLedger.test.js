@@ -77,6 +77,54 @@ test('an unmatched paid expense document does count in cash basis', () => {
   assert.equal(cashExpenses.length, 2);
 });
 
+test('a PROPOSED match already suppresses the duplicate cash entry (review fix #1)', () => {
+  const seed = baseSeed();
+  seed.finance_matches = [{ id: 'm1', transaction_id: 't1', document_id: 'icount:5', allocated_agorot: 35400, status: 'proposed' }];
+  const store = makeStore(seed);
+  rebuildLedger(store, { now: NOW });
+  const cashExpenses = store.get('finance_ledger_entries')
+    .filter((row) => !row.voided_at && row.basis === 'cash' && row.amount_agorot < 0);
+  assert.equal(cashExpenses.length, 1, 'הצעה בציון 60+ מספיקה כדי לא לספור פעמיים');
+  assert.equal(cashExpenses[0].source_type, 'transaction');
+  // דחייה מחזירה את המסמך לספירה
+  store.tables.finance_matches[0].status = 'rejected';
+  rebuildLedger(store, { now: NOW });
+  assert.equal(store.get('finance_ledger_entries')
+    .filter((row) => !row.voided_at && row.basis === 'cash' && row.amount_agorot < 0).length, 2);
+});
+
+test('a refund is booked on its own date, not netted into the sale month (review fix #9)', () => {
+  const seed = baseSeed();
+  seed.payments = [{
+    id: 'p1', status: 'refunded', amount: 354, refund_amount: 100,
+    paid_at: '2026-06-05T10:00:00Z', refunded_at: '2026-08-09T10:00:00Z',
+  }];
+  const store = makeStore(seed);
+  rebuildLedger(store, { now: NOW });
+  const income = store.get('finance_ledger_entries')
+    .filter((row) => !row.voided_at && row.source_type === 'payment');
+  const sale = income.find((row) => row.amount_agorot > 0);
+  const refund = income.find((row) => row.amount_agorot < 0);
+  assert.equal(sale.period, '2026-06');
+  assert.equal(sale.amount_agorot, 35400);
+  assert.equal(refund.period, '2026-08');
+  assert.equal(refund.amount_agorot, -10000);
+});
+
+test('a bank income row enters the ledger only after explicit classification (review fix #5)', () => {
+  const seed = baseSeed();
+  seed.finance_transactions.push(
+    { id: 'in1', kind: 'income', status: 'new', booking_date: '2026-08-06', amount_agorot: 50000, raw_description: 'זיכוי ריבית' },
+    { id: 'in2', kind: 'income', status: 'classified', category_id: 'cat_income', booking_date: '2026-08-07', amount_agorot: 60000, raw_description: 'החזר מס' },
+  );
+  const store = makeStore(seed);
+  rebuildLedger(store, { now: NOW });
+  const txnIncome = store.get('finance_ledger_entries')
+    .filter((row) => !row.voided_at && row.source_type === 'transaction' && row.amount_agorot > 0);
+  assert.equal(txnIncome.length, 1);
+  assert.equal(txnIncome[0].source_id, 'in2');
+});
+
 test('rebuilding twice neither duplicates nor grows', () => {
   const store = makeStore(baseSeed());
   rebuildLedger(store, { now: NOW });
