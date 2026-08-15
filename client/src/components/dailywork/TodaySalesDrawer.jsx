@@ -26,7 +26,13 @@ function timeLabel(value) {
   if (!value) return '';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+  const time = parsed.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+  const dayOf = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+  // חיוב פתוח ישן מציג גם תאריך — אחרת הוא נראה כאילו נוצר היום.
+  if (dayOf(parsed) !== dayOf(new Date())) {
+    return `${parsed.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', timeZone: 'Asia/Jerusalem' })} · ${time}`;
+  }
+  return time;
 }
 
 function shekel(value) {
@@ -224,6 +230,7 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
   const rows = useMemo(() => {
     const list = Array.isArray(data?.rows) ? data.rows : [];
     if (filter === 'all') return list;
+    if (filter === 'pending') return list.filter((row) => row.excluded_reason === 'pending');
     return list.filter((row) => row.bucket === filter);
   }, [data, filter]);
 
@@ -292,6 +299,16 @@ export default function TodaySalesDrawer({ initialFilter = 'all', isOwner = fals
         {methodChip('cash', 'מזומן', data?.cash)}
         {methodChip('online', 'סליקה', data?.online)}
         {Number(data?.other || 0) > 0 && methodChip('other', 'אחר', data?.other)}
+        {Number(data?.openCharges?.count || 0) > 0 && (
+          <button
+            type="button"
+            className={`dw-chip ${filter === 'pending' ? 'active' : ''}`}
+            style={filter === 'pending' ? undefined : { color: '#FCD34D' }}
+            onClick={() => setFilter(filter === 'pending' ? 'all' : 'pending')}
+          >
+            חיובים פתוחים · {data.openCharges.count} · {shekel(data.openCharges.total)}
+          </button>
+        )}
         <button type="button" className="dw-chip" onClick={() => { setLoading(true); load(); }} aria-label="רענון הרשימה">
           <RefreshCw size={11} className={loading ? 'spin' : undefined} /> רענון
         </button>

@@ -472,6 +472,16 @@ export default function DailyWork({
                 <button type="button" className="dw-chip" onClick={() => setDrawer({ type: 'sales', filter: 'online' })}>
                   סליקה {shekel(dailySales?.online)}
                 </button>
+                {Number(dailySales?.openCharges?.count || 0) > 0 && (
+                  <button
+                    type="button"
+                    className="dw-chip"
+                    style={{ color: '#FCD34D', borderColor: 'rgba(251,191,36,0.35)' }}
+                    onClick={() => setDrawer({ type: 'sales', filter: 'pending' })}
+                  >
+                    {dailySales.openCharges.count} חיובים פתוחים · {shekel(dailySales.openCharges.total)}
+                  </button>
+                )}
               </>
             )}
           />

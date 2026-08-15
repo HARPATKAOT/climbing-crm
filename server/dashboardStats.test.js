@@ -228,6 +228,14 @@ test('today transactions: counted rows sum to the daily total, refunds stay visi
       created_at: '2026-08-13T08:00:00.000Z',
     },
     {
+      // חיוב פתוח ישן — חוב עומד, חייב להופיע גם כשהקישור לא נוצר היום.
+      id: 'old-open-link',
+      status: 'pending_payment',
+      total: 400,
+      payment_method: 'online',
+      created_at: '2026-07-20T08:00:00.000Z',
+    },
+    {
       id: 'old-sale',
       status: 'paid',
       total: 999,
@@ -261,6 +269,12 @@ test('today transactions: counted rows sum to the daily total, refunds stay visi
     { counted: pendingRow.counted, reason: pendingRow.excluded_reason },
     { counted: false, reason: 'pending' }
   );
+  const oldPendingRow = result.rows.find((r) => r.sale_id === 'old-open-link');
+  assert.deepEqual(
+    { counted: oldPendingRow.counted, reason: oldPendingRow.excluded_reason },
+    { counted: false, reason: 'pending' }
+  );
+  assert.deepEqual(result.openCharges, { count: 2, total: 650 });
   assert.equal(result.rows.some((r) => r.sale_id === 'old-sale'), false);
   const cashRow = result.rows.find((r) => r.sale_id === 'cash-only');
   assert.equal(cashRow.description, 'כניסה לקיר ×2');
