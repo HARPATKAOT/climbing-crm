@@ -469,6 +469,21 @@ financeRouter.get('/pl', (req, res) => {
   });
 });
 
+// drill-down: מכל מספר בדוח עד שורת המקור הבודדת שיצרה אותו.
+financeRouter.get('/ledger/entries', (req, res) => {
+  const basis = req.query.basis === 'accrual' ? 'accrual' : 'cash';
+  const wantedPeriod = String(req.query.period || '');
+  const wantedCategory = String(req.query.category_id || '');
+  const { from, to } = period(req);
+  const rows = db.get('finance_ledger_entries')
+    .filter((entry) => entry.basis === basis && !entry.voided_at)
+    .filter((entry) => (wantedPeriod ? entry.period === wantedPeriod : dateInRange(entry.entry_date, from, to)))
+    .filter((entry) => !wantedCategory || String(entry.category_id || 'uncategorized') === wantedCategory)
+    .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)))
+    .slice(0, 500);
+  res.json({ rows, total: rows.length });
+});
+
 financeRouter.get('/cashflow', (req, res) => {
   const days = Math.min(365, Math.max(7, Number(req.query.days) || 90));
   res.json(cashFlowTimeline({ items: db.get('finance_cash_flow_items'), days }));

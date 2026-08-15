@@ -2183,6 +2183,19 @@ select option, select optgroup {
 .finance-matching-panes .is-matched-row { opacity: .5; }
 .finance-inbox-row.is-focused { background: color-mix(in srgb, var(--purple) 9%, transparent); box-shadow: inset 3px 0 0 var(--purple); }
 .finance-automation-hero p svg { vertical-align: -2px; margin-inline-end: 4px; color: var(--amber); }
+/* FinChart (שלב 7) */
+.finchart { width: 100%; height: auto; display: block; font-family: inherit; }
+.finchart-spark { display: block; margin-top: 6px; opacity: .85; }
+.finchart-donut { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.finchart-legend { display: grid; gap: 7px; font-size: 12px; color: var(--text-2); }
+.finchart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 6px; }
+.finchart-legend b { font-variant-numeric: tabular-nums; }
+.finance-basis-bar { justify-content: space-between; }
+.finance-basis-toggle { display: flex; gap: 6px; }
+.finance-aging { display: grid; gap: 10px; }
+.finance-aging > div { display: grid; grid-template-columns: 70px 1fr 110px; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+.finance-aging i { display: block; height: 10px; border-radius: 999px; background: linear-gradient(90deg, var(--amber), var(--coral)); min-width: 4px; }
+.finance-aging b { direction: ltr; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }
 
 @media (max-width: 1180px) {
   .finance-toolbar { align-items: flex-start; flex-direction: column; }.finance-metrics { grid-template-columns: repeat(3, 1fr); }.finance-sales-metrics, .finance-payment-metrics { grid-template-columns: repeat(2, 1fr); }.finance-grid-two { grid-template-columns: 1fr; }.finance-expense-fields { grid-template-columns: repeat(2, 1fr); }.finance-connectors { grid-template-columns: 1fr 1fr; }.finance-intake-stats { grid-template-columns: repeat(3, 1fr); }.finance-payment-filters { grid-template-columns: repeat(3, minmax(150px, 1fr)); }.finance-payment-search { grid-column: span 3; }.finance-payment-detail-grid { grid-template-columns: repeat(3, 1fr); }

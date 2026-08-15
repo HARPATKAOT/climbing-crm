@@ -11,6 +11,7 @@ import {
 import AppSelect from './AppSelect.jsx';
 import { icountClientUrl } from '../utils/icountLinks.js';
 import MatchingCentre from './finance/MatchingCentre.jsx';
+import ProfitDashboard from './finance/ProfitDashboard.jsx';
 
 // הצבעים מקובעים עם --tab-accent: מחזור הצבעים של .tab-pill תלוי מיקום,
 // והוספת טאב באמצע הייתה מזיזה את הצבע של כל מי שאחריו.
@@ -504,6 +505,29 @@ const readFile = (file, mode = 'data-url') => new Promise((resolve, reject) => {
   else reader.readAsDataURL(file);
 });
 
+/** פאנל בריאות הסנכרון (FINANCE_SPEC 4.3.9) — מה רץ, מה תקוע, איפה הפערים. */
+function SyncHealthPanel() {
+  const [health, setHealth] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    fetchJson('/api/finance/health').then(setHealth).catch(() => setFailed(true));
+  }, []);
+  if (failed || !health) return null;
+  const lastRun = health.sync?.lastRun;
+  const gapMonths = (health.reconciliation || []).filter((row) => row.status !== 'balanced');
+  return <article className="card finance-panel finance-quality">
+    <header><div><h2>בריאות הסנכרון</h2><p>iCount, בנק, והג'וב הלילי</p></div></header>
+    <div className="finance-quality-list">
+      <span><CloudCog /> סנכרון iCount אחרון: {lastRun ? `${formatDateTime(lastRun.started_at)} · ${lastRun.status === 'completed' ? 'תקין' : lastRun.status}` : 'טרם רץ'}</span>
+      <span><RefreshCw /> משיכת בנק: {health.bank?.last_run_at ? formatDateTime(health.bank.last_run_at) : 'ממתינה להפעלה (חסם B1)'}</span>
+      <span><Clock3 /> ריצה לילית: {health.nightly?.last_run_at ? formatDateTime(health.nightly.last_run_at) : 'טרם רצה'}</span>
+      <span><Send /> תור הנפקות: {number.format(health.outbox?.counts?.pending || 0)} ממתינים · {number.format((health.outbox?.dead || []).length)} כשלים סופיים</span>
+      <span><AlertTriangle /> תיבת נכנס: {number.format(health.inbox?.open || 0)} פריטים פתוחים</span>
+      <span><Scale /> יישוב חודשי: {gapMonths.length ? `${gapMonths.length} חודשים עם פער — ראה מרכז התאמות` : 'אפס פערים בחודשים שנבדקו'}</span>
+    </div>
+  </article>;
+}
+
 function MatchBadge({ match }) {
   if (match?.status === 'matched') return <span className="finance-match-badge is-matched"><CheckCircle2 size={13} /> מותאם {Math.round((match.confidence || 0) * 100)}%</span>;
   if (match?.status === 'review') return <span className="finance-match-badge is-review"><AlertTriangle size={13} /> לבדיקה {Math.round((match.confidence || 0) * 100)}%</span>;
@@ -530,6 +554,7 @@ export default function FinancialReports() {
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
   const [automation, setAutomation] = useState({ summary: {}, settings: {}, transactions: [], expenses: [] });
+  const [featureFlags, setFeatureFlags] = useState({});
   const [automationBusy, setAutomationBusy] = useState(false);
   const [invoiceFile, setInvoiceFile] = useState(null);
   const [bankImport, setBankImport] = useState({ account_type: 'credit_card', provider: '', account_last4: '', file: null });
@@ -549,6 +574,7 @@ export default function FinancialReports() {
         fetchJson('/api/finance/automation'),
       ]);
       setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setSalesBreakdown(salesBody); setPaymentsReport(paymentsBody); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
+      fetchJson('/api/finance/flags').then(setFeatureFlags).catch(() => setFeatureFlags({}));
     } catch (loadError) { setError(loadError.message); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -693,7 +719,9 @@ export default function FinancialReports() {
       <div className="finance-expense-fields"><label><span>תיאור *</span><input className="input" required value={expenseForm.name} onChange={(e) => setExpenseForm((value) => ({ ...value, name: e.target.value }))} /></label><label><span>תאריך *</span><input className="input" type="date" required value={expenseForm.expense_date} onChange={(e) => setExpenseForm((value) => ({ ...value, expense_date: e.target.value }))} /></label><label><span>סכום כולל *</span><input className="input" type="number" min="0.01" step="0.01" required value={expenseForm.amount_gross} onChange={(e) => setExpenseForm((value) => ({ ...value, amount_gross: e.target.value }))} /></label><label><span>ספק</span><input className="input" value={expenseForm.supplier_name} onChange={(e) => setExpenseForm((value) => ({ ...value, supplier_name: e.target.value }))} /></label><label><span>סיווגים, מופרדים בפסיק</span><input className="input" value={expenseForm.categories} onChange={(e) => setExpenseForm((value) => ({ ...value, categories: e.target.value }))} /></label><label><span>מספר מסמך</span><input className="input" value={expenseForm.document_number} onChange={(e) => setExpenseForm((value) => ({ ...value, document_number: e.target.value }))} /></label><label><span>אמצעי תשלום</span><select className="select" value={expenseForm.payment_method} onChange={(e) => setExpenseForm((value) => ({ ...value, payment_method: e.target.value }))}><option value="">לא צוין</option><option value="credit_card">כרטיס אשראי</option><option value="bank_transfer">העברה בנקאית</option><option value="cash">מזומן</option></select></label><label><span>הערה</span><input className="input" value={expenseForm.note} onChange={(e) => setExpenseForm((value) => ({ ...value, note: e.target.value }))} /></label><label className="finance-file-field"><span>חשבונית / קבלה</span><input type="file" accept="application/pdf,image/jpeg,image/png" onChange={(e) => setInvoiceFile(e.target.files?.[0] || null)} /><strong><FileUp size={15} />{invoiceFile?.name || 'בחירת קובץ'}</strong></label></div>
       <div className="finance-expense-checks"><label><input type="checkbox" checked={expenseForm.includes_vat} onChange={(e) => setExpenseForm((value) => ({ ...value, includes_vat: e.target.checked }))} />הסכום כולל מע״מ</label><label><input type="checkbox" checked={expenseForm.paid} onChange={(e) => setExpenseForm((value) => ({ ...value, paid: e.target.checked }))} />שולם</label><button className="btn btn-primary" disabled={savingExpense}>{savingExpense ? 'שומר…' : 'שמירת הוצאה'}</button></div>
     </form>}
-    <div className="tab-bar finance-tabs">{TABS.map(([key, label, Icon, accent]) => <button key={key} className={`tab-pill ${tab === key ? 'active' : ''}`} style={accent ? { '--tab-accent': accent } : undefined} onClick={() => setTab(key)}><Icon size={16} />{label}</button>)}</div>
+    <div className="tab-bar finance-tabs">{TABS
+      .filter(([key]) => key !== 'matching' || featureFlags.matching_v2 === true)
+      .map(([key, label, Icon, accent]) => <button key={key} className={`tab-pill ${tab === key ? 'active' : ''}`} style={accent ? { '--tab-accent': accent } : undefined} onClick={() => setTab(key)}><Icon size={16} />{label}</button>)}</div>
     {loading ? <div className="finance-loading"><RefreshCw className="spin" /> טוען דוחות…</div> : <>
       {(tab === 'overview' || tab === 'revenue') && <><section className="finance-metrics">
         <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" />
@@ -727,7 +755,9 @@ export default function FinancialReports() {
         <div className="finance-security-note"><ShieldCheck size={16} /><span>המערכת שומרת רק תנועות ו־4 ספרות אחרונות — ללא סיסמת בנק, ללא מספר כרטיס מלא וללא הרשאת ביצוע פעולות.</span></div>
       </div>}
       {tab === 'matching' && <MatchingCentre />}
-      {tab === 'profit' && <section className="finance-metrics finance-profit-metrics"><Metric label="רווח תפעולי" value={kpi.operating_profit} note="הכנסה נטו פחות הוצאות נטו" icon={Scale} color={kpi.operating_profit >= 0 ? '#34D399' : '#F87171'} /><Metric label="תזרים" value={kpi.cash_flow} note="גבייה בפועל פחות הוצאות ששולמו" icon={WalletCards} color={kpi.cash_flow >= 0 ? '#2DD4BF' : '#F87171'} /><Metric label="צבר עתידי" value={kpi.pipeline} note="אינו הכנסה" icon={TrendingUp} color="#A78BFA" /></section>}
+      {tab === 'profit' && featureFlags.dashboard_v2 && <ProfitDashboard from={from} to={to} />}
+      {tab === 'profit' && !featureFlags.dashboard_v2 && <section className="finance-metrics finance-profit-metrics"><Metric label="רווח תפעולי" value={kpi.operating_profit} note="הכנסה נטו פחות הוצאות נטו" icon={Scale} color={kpi.operating_profit >= 0 ? '#34D399' : '#F87171'} /><Metric label="תזרים" value={kpi.cash_flow} note="גבייה בפועל פחות הוצאות ששולמו" icon={WalletCards} color={kpi.cash_flow >= 0 ? '#2DD4BF' : '#F87171'} /><Metric label="צבר עתידי" value={kpi.pipeline} note="אינו הכנסה" icon={TrendingUp} color="#A78BFA" /></section>}
+      {tab === 'reconciliation' && <SyncHealthPanel />}
       {tab === 'reconciliation' && <section className="finance-grid-two"><article className="card finance-panel finance-quality"><header><div><h2>מצב התאמות</h2><p>התאמות רכות אינן מאוחדות אוטומטית</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(reconciliation.counts?.matched || 0)} התאמות ודאיות</span><span><AlertTriangle /> {number.format(reconciliation.counts?.review || 0)} דורשות בדיקה</span><span><FileSearch /> {number.format(reconciliation.counts?.notion_only || 0)} רק ב־Notion</span><span><PackageSearch /> {number.format(reconciliation.counts?.missing_date || 0)} ללא תאריך · {number.format(reconciliation.counts?.missing_amount || 0)} ללא סכום</span></div></article><article className="card finance-panel"><header><div><h2>כללי מניעת כפילויות</h2><p>מספר מסמך + ספק + סכום הוא מפתח ודאי.</p></div></header><div className="finance-rule"><CheckCircle2 />iCount גובר בהתאמה ודאית.</div><div className="finance-rule"><AlertTriangle />תאריך + ספק + סכום דורש אישור.</div><div className="finance-rule"><FileSearch />אין שינוי של נתונים ב־Notion.</div></article></section>}
     </>}
   </div>;
