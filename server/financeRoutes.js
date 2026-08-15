@@ -30,6 +30,14 @@ import {
   unmatchedExpenseSummary,
 } from './matchingEngine.js';
 import { applyRules, learnRule, seedCategories, vatSummary } from './financeCategories.js';
+import {
+  classProfitability,
+  costByKey,
+  effectiveCostPerHour,
+  employerCostFactor,
+  instructorProfitability,
+  laborCostRows,
+} from './payrollCost.js';
 
 export const financeRouter = express.Router();
 
@@ -434,6 +442,48 @@ financeRouter.post('/matching/manual', async (req, res) => {
     res.status(500).json({ error: error.message || 'הקישור הידני נכשל' });
   }
 });
+
+// ─── עלות שכר ורווחיות פר חוג/מדריך (שלב 5) — מידע רגיש, שער hr נוסף ───────
+
+financeRouter.get('/payroll-cost', async (req, res) => {
+  try {
+    if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+      return res.status(403).json({ error: 'נתוני שכר דורשים הרשאת HR' });
+    }
+    if (!financeFlag('payroll_cost')) return res.status(409).json({ error: 'ניתוח עלות שכר כבוי (דגל payroll_cost)' });
+    const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : new Date().toISOString().slice(0, 7);
+    const factor = employerCostFactor(db.get('finance_center_settings'));
+    const { rows, unpriced } = laborCostRows({ workAssignments: db.get('work_assignments'), factor });
+    const monthRows = rows.filter((row) => row.month === month);
+    const classRows = classProfitability({
+      groups: db.get('groups'),
+      enrollments: db.get('enrollments'),
+      laborRows: rows,
+      month,
+    });
+    const employeeNames = new Map(db.get('employees').map((employee) => [String(employee.id), employee.name || '']));
+    const withName = (row) => ({ ...row, employee_name: employeeNames.get(String(row.employee_id)) || row.employee_id });
+    res.json({
+      month,
+      employer_cost_factor: factor,
+      factor_note: 'עלות מעביד מוערכת: ברוטו × מקדם. כיול במסך ההגדרות; אינה תחליף לחישוב רו״ח.',
+      per_employee: effectiveCostPerHour(monthRows).map(withName),
+      per_class: classRows,
+      per_activity: costByKey(monthRows, 'activity_id'),
+      per_instructor: instructorProfitability({ classRows, laborRows: rows, month }).map(withName),
+      unpriced_assignments: unpriced.filter((row) => monthOfDate(row.date) === month).length,
+      totals: {
+        wage_agorot: monthRows.reduce((sum, row) => sum + row.wage_agorot, 0),
+        employer_cost_agorot: monthRows.reduce((sum, row) => sum + row.employer_cost_agorot, 0),
+        hours: Math.round(monthRows.reduce((sum, row) => sum + row.hours, 0) * 100) / 100,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'חישוב עלות השכר נכשל' });
+  }
+});
+
+const monthOfDate = (value) => String(value || '').slice(0, 7);
 
 // ─── קטגוריות, מנוע חוקים, ספקים ומע״מ (שלב 4) ─────────────────────────────
 
