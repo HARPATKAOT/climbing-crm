@@ -1,0 +1,3 @@
+# Database dumps hold customer PII and auth identities. Never commit them.
+*
+!.gitignore

@@ -1,0 +1,3 @@
+# migration ledgers hold customer file paths — keep them out of git
+*.json
+!.gitignore
