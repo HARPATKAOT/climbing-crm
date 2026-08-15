@@ -1848,6 +1848,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                         {childLabel ? ` · מאת ${childLabel}` : ''}
                         {m.template_id || m.template_name ? ` · תבנית${templateLabel(m, templates)}` : ''}
                         {m.is_ai ? ' · בוט' : ''}
+                        {m.source === 'broadcast' ? ' · 📢 דיוור מסיבי' : ''}
+                        {m.source === 'broadcast_test' ? ' · בדיקת דיוור' : ''}
                       </span>
                     </div>
                     {!m.deleted_at && m.status !== 'deleted' && (

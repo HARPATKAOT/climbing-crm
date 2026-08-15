@@ -159,6 +159,13 @@ export const OPERATIONAL_TABLES = [
   'broadcast_campaigns',
   'broadcast_lists',
   'broadcast_list_defs',
+  // משימות דיוור + נמעניהן עברו ל-kv: לטבלאות ה-SQL הייעודיות שלהן עמודות
+  // קבועות שאינן מכילות את שדות המשימה החדשים (תזמון, undo, חסימות), ומיגרציית
+  // סכימה אי אפשר להריץ מכאן. הרישום כאן גובר על DIRECT_TABLES בכל נתיבי
+  // הקריאה/כתיבה; שורות ישנות מהטבלאות הייעודיות מועתקות ל-kv חד-פעמית
+  // ב-migrateLegacyBroadcastRows שבמודול הדיוור.
+  'broadcast_jobs',
+  'broadcast_recipients',
   'check_ins',
   // הסרות ידניות מטבלת „ממתינים לטיפול” בדלפק — שורה שהוסרה לא חוזרת באותו יום.
   'checkin_dismissals',
@@ -863,6 +870,34 @@ export const supa = {
       const chunk = data || [];
       all.push(...chunk);
       if (chunk.length < pageSize) break;
+    }
+    const m = mapperFor(table);
+    return all.map(m.fromRow);
+  },
+
+  /**
+   * Read a table's rows straight from its dedicated Postgres table, even when
+   * the table name is also routed to kv_collections. Exists for the one-time
+   * migration of legacy broadcast_jobs/broadcast_recipients rows (which lived
+   * in dedicated tables whose fixed columns cannot hold the new job fields)
+   * into kv_collections, where the new send pipeline keeps them.
+   */
+  async readDirectTableRaw(table) {
+    if (!client) return null;
+    const pageSize = 1000;
+    const all = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await client
+        .from(table)
+        .select('*')
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        console.error(`Supabase readDirectTableRaw(${table}) failed:`, error.message);
+        return null;
+      }
+      all.push(...(data || []));
+      if ((data || []).length < pageSize) break;
     }
     const m = mapperFor(table);
     return all.map(m.fromRow);
