@@ -82,7 +82,11 @@ export function findLocalTemplate(templateId) {
 
 const OPT_OUT_WORDING = /הסר|הסרה|להסיר|הפסק|הפסיק|לא\s*מעוניינ|העדפות\s*דיוור|unsubscribe|stop/i;
 
-/** בדיקת עמידה בחוק לתבנית שיווקית: מנגנון הסרה (חוסם) וזיהוי שולח (אזהרה). */
+/**
+ * בדיקת תבנית שיווקית — המלצות בלבד, לא חסימה. הבעלים ביקש במפורש שלא לחסום:
+ * ההגנה המחייבת ממילא נאכפת במקום אחר — מי שביקש להסיר את עצמו חסום לתמיד
+ * במנוע החסימות, והבוט מטפל אוטומטית במי שמשיב «הסר».
+ */
 export function marketingComplianceIssues(template, brandName = '') {
   const blockers = [];
   const warnings = [];
@@ -94,7 +98,7 @@ export function marketingComplianceIssues(template, brandName = '') {
     || (Array.isArray(template?.buttons) ? template.buttons : [])
       .some((b) => OPT_OUT_WORDING.test(String(b?.text || '')));
   if (!hasOptOut) {
-    blockers.push('לתבנית השיווקית אין מנגנון הסרה — הוסיפו משתנה «קישור להעדפות דיוור» או נוסח הסרה מפורש');
+    warnings.push('מומלץ (לא חובה): שורת הסרה בתבנית שיווקית — למשל «להסרה השיבו הסר». מי שכבר ביקש להסיר חסום אוטומטית בכל מקרה');
   }
   const brand = String(brandName || DEFAULT_BUSINESS_PROFILE.display_name || '').trim();
   if (brand && !text.includes(brand)) {
