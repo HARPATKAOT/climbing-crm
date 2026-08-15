@@ -1,38 +1,9 @@
 // Central data store - mock data that mimics a real DB
 // Will be replaced with actual Supabase calls later
 
-export const STATUSES = {
-  lead_new:         { label: 'ליד חדש', badge: 'badge-blue',   color: '#818CF8' },
-  details_completed:{ label: 'מילא פרטים', badge: 'badge-cyan', color: '#67E8F9' },
-  health_signed:    { label: 'חתם הצהרה', badge: 'badge-amber',  color: '#FCD34D' },
-  pending_signup:   { label: 'ממתין להרשמה', badge: 'badge-amber',  color: '#FBBF24' },
-  awaiting_parent_confirmation: { label: 'שמור · ממתין לאישור הורה', badge: 'badge-amber', color: '#FBBF24' },
-  awaiting_centre_confirmation: { label: 'שמור · ממתין למתנ״ס', badge: 'badge-purple', color: '#C084FC' },
-  intro_scheduled:  { label: 'נקבע אימון הכירות', badge: 'badge-cyan',  color: '#67E8F9' },
-  intro_paid:       { label: 'שילם - ממתין להכירות', badge: 'badge-purple', color: '#C084FC' },
-  registered:       { label: 'חוג פעיל', badge: 'badge-green',  color: '#34D399' },
-  past_registered:  { label: 'היה רשום בשנה האחרונה', badge: 'badge-cyan', color: '#7DD3FC' },
-  waitlist:         { label: 'רשימת המתנה', badge: 'badge-gray',   color: '#9DA5BE' },
-  archived:         { label: 'ארכיון', badge: 'badge-gray',   color: '#5A6380' },
-};
-
-// The customer journey has one deliberate order everywhere it is presented.
-// Keeping the order separate from the object makes filters and pickers immune
-// to future metadata edits or alphabetic sorting.
-export const STATUS_PROGRESS_ORDER = [
-  'lead_new',
-  'details_completed',
-  'health_signed',
-  'pending_signup',
-  'awaiting_parent_confirmation',
-  'awaiting_centre_confirmation',
-  'intro_scheduled',
-  'intro_paid',
-  'registered',
-  'past_registered',
-  'waitlist',
-  'archived',
-];
+// סטטוסי הלקוח עברו לקובץ קונפיגורציה ייעודי (statusConfig.js) שמחזיק גם את
+// האייקון והצבע של כל סטטוס. הייצוא מחדש כאן משאיר את כל היבוא הקיים תקף.
+export { STATUSES, STATUS_PROGRESS_ORDER } from './statusConfig.js';
 
 export const DAYS_HEB = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳'];
 export const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי'];
