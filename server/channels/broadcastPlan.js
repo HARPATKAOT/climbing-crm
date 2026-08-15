@@ -211,6 +211,17 @@ export function buildBroadcastPlan({
     ? marketingComplianceIssues(template, brandName)
     : { blockers: [], warnings: [] };
 
+  // דיוור שיווקי יוצא רק לרשימת תפוצה מוגדרת (בקשת הבעלים, 2026-08-15):
+  // ככה הסרה לפי נושא — «טיולים» כן, «קייטנות» לא — באמת קובעת מי מקבל מה.
+  // סינון לפי קבוצה פטור: הודעה לקבוצה ספציפית היא פנייה תפעולית לחבריה.
+  const hasGroupFilter = Array.isArray(filters.groupIds) && filters.groupIds.length > 0;
+  const hasContent = !!template || !!String(customMessage || '').trim();
+  if (hasContent && marketing && !effectiveList && !hasGroupFilter) {
+    compliance.blockers.push(
+      'דיוור שיווקי נשלח רק לרשימת תפוצה מוגדרת — בחרו רשימה במסנן «רשימת תפוצה». כך מי שהסיר את עצמו מנושא מסוים באמת לא יקבל אותו'
+    );
+  }
+
   // עלות: רק תבניות מחויבות; הודעה חופשית בחלון פתוח היא שיחת שירות חינמית.
   const category = String(template?.category || 'UTILITY').toUpperCase();
   const perMessage = template ? (Number(defaults.rates[category]) || 0) : 0;

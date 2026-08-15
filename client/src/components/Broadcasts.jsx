@@ -933,15 +933,10 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   <div style={{ display: 'flex', gap: 8 }}>
                     <AlertTriangle size={15} style={{ flexShrink: 0 }} /> {msg}
                   </div>
-                  <div style={{ fontSize: 11, lineHeight: 1.6 }}>
-                    אם בתבנית יש משתנה פנוי — מפים אותו ל«קישור להעדפות דיוור» בטאב
-                    «תבניות Meta» (שינוי מיפוי לא דורש אישור מחדש). אם אין — יוצרים
-                    גרסה חדשה של התבנית עם שורת הסרה ושולחים לאישור Meta.
-                  </div>
-                  <div>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setActiveTab('templates')}>
-                      <FileText size={13} /> מעבר לטאב «תבניות Meta»
-                    </button>
+                  <div style={{ fontSize: 11, lineHeight: 1.6, color: 'var(--text-2)' }}>
+                    פתחו את כרטיס «רשימת תפוצה» בבחירת הקהל ובחרו רשימה. להוספת
+                    רשימות נושא חדשות («טיולים», «קייטנות»…) — כפתור «עריכת רשימות
+                    תפוצה» בתוך אותו כרטיס.
                   </div>
                 </div>
               ))}
