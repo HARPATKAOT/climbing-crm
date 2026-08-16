@@ -317,6 +317,10 @@ function signedFormFor(studentIds = []) {
 }
 
 const student = (id) => db.getOne('students', id);
+/** Every group the trainee actually sits in — enrollments, not the one pointer. */
+const studentGroupIdsOf = (id) => (db.get('enrollments') || [])
+  .filter((row) => String(row.student_id) === String(id) && !row.end_date)
+  .map((row) => String(row.group_id));
 const followUps = () => db.get(FOLLOWUP_COLLECTION) || [];
 const journal = () => db.get('bot_actions') || [];
 
@@ -868,6 +872,44 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
     assert.match(result.ציוד.קישור, /\/api\/e\//);
     assert.match(result.ציוד.הסבר, /ציוד מהבית/);
     assert.match(result.הערה, /אין צורך בפעולה נוספת/);
+  });
+});
+
+test('«ראשון ורביעי» הוא זוג של פעמיים בשבוע, לא שתי אפשרויות לבחור ביניהן', async () => {
+  // תמר ביקשה „קבוצת תיכון ראשון ורביעי”. שתי הקבוצות התאימו, הכלי החזיר
+  // „יותר מקבוצה אחת מתאימה”, והבוט אמר לה שיש כפילות בכרטיס של נעמי — דבר
+  // שלא היה ולא נברא, ובוודאי לא משהו שהכלי אמר.
+  const sunday = {
+    id: 'g-teen-sun', name: 'חטיבה + תיכון — יום א׳ 18:40', ageCategory: 'חטיבה + תיכון',
+    day: 0, time: '18:40', maxSlots: 12, priceWeek: 315, priceTwice: 430,
+    signupLinkWeek: 'https://centre.example/teen-1', signupLinkTwice: 'https://centre.example/teen-2',
+  };
+  const wednesday = { ...sunday, id: 'g-teen-wed', name: 'חטיבה + תיכון — יום ד׳ 18:40', day: 3 };
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ id: 's-teen', name: 'נעמי כהן', birthDate: '2008-08-04' })],
+    groups: [sunday, wednesday],
+    health_declarations: [declarationFor('s-teen')],
+    participation_waivers: [waiverFor('s-teen')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: 'נעמי', studentId: 's-teen', band: 'תיכון', frequency: 'פעמיים בשבוע',
+    });
+
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    // שני הימים, לא אחד: המדריך של יום רביעי צריך לדעת עליה גם.
+    assert.deepEqual(
+      studentGroupIdsOf('s-teen').sort(),
+      ['g-teen-sun', 'g-teen-wed']
+    );
+
+    // פעם בשבוע — עדיין שאלה לגיטימית, אבל בלי לרמוז על תקלה בכרטיס.
+    const once = await tools.startSignup({
+      childName: 'נעמי', studentId: 's-teen', band: 'תיכון', frequency: 'פעם בשבוע',
+    });
+    assert.match(once.error || '', /יש לשאול את הלקוח לאיזו מהן/);
+    assert.match(once.error || '', /אינה בעיה בכרטיס/);
   });
 });
 

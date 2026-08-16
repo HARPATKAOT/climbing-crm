@@ -31,8 +31,10 @@ import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
 import { isOpenIdea, openActivityIdeas } from './activityIdeas.js';
 import {
+  TWICE_WEEKLY,
   frequencyForRequest,
   groupsForFrequency,
+  pairedTwiceWeeklyGroup,
 } from './placementHold.js';
 import {
   HOLD_COLLECTION,
@@ -1166,9 +1168,22 @@ function pickSingleGroup({ groupId = '', grade, band, day, time, frequency } = {
     if (exact.length) groups = exact;
   }
   if (!groups.length) return { error: 'אין קבוצה מתאימה במערכת — יש להעביר לצוות' };
+  // „קבוצת תיכון ראשון ורביעי” matched both days of one twice-weekly offering,
+  // and two matches read as an ambiguity the customer has to resolve. They are
+  // not two options — they are the two halves of the thing she asked for. The
+  // mother was told instead that „יש כפילות בכרטיס של נעמי”, which was neither
+  // true nor anything the tool had said.
+  const twiceWeeklyPair = groups.length === 2
+    && String(frequency || '').trim() === TWICE_WEEKLY
+    && String(pairedTwiceWeeklyGroup(groups, groups[0])?.id || '') === String(groups[1].id);
+  if (twiceWeeklyPair) {
+    const [primary] = [...groups].sort((a, b) => Number(a.day) - Number(b.day));
+    return { group: primary };
+  }
   if (groups.length > 1) {
     return {
-      error: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו',
+      error: 'יותר מקבוצה אחת מתאימה — יש לשאול את הלקוח לאיזו מהן, ולציין את הימים והשעות. '
+        + 'זו אינה תקלה ואינה בעיה בכרטיס הלקוח.',
       קבוצות_אפשריות: groups.map((g) => ({
         שכבה: g.ageCategory || '',
         ...groupScheduleFields(g),
