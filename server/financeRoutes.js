@@ -184,7 +184,7 @@ financeRouter.get('/sales-breakdown', (req, res) => {
 
 financeRouter.get('/payments', (req, res) => {
   const { from, to } = period(req);
-  res.json(buildPaymentsReport({
+  const report = buildPaymentsReport({
     documents: db.get('finance_documents'),
     lines: db.get('finance_document_lines'),
     paymentEvents: db.get('finance_payment_events'),
@@ -197,7 +197,13 @@ financeRouter.get('/payments', (req, res) => {
     customerPasses: db.get('customer_passes'),
     from,
     to,
-  }));
+  });
+  // תקרת שורות כמו ב-/transactions — אבל חוב פתוח תמיד עובר אותה, שלא
+  // ניצור שוב "חוב בלתי נראה". summary והפילטרים נשארים על מלוא הנתונים.
+  const pageSize = Math.min(2000, Math.max(1, Number(req.query.pageSize) || 500));
+  const rows = report.rows.filter((row, index) =>
+    index < pageSize || (row.is_debt && ['pending', 'open', 'quoted'].includes(row.status)));
+  res.json({ ...report, rows, total: report.rows.length });
 });
 
 financeRouter.get('/reconciliation', (_req, res) => {

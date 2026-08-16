@@ -14,7 +14,12 @@ import { syncAccount } from './bankIngestion.js';
 
 const OVERLAP_DAYS = 45;
 
-/** Store מעל db שרושם כל שורה שנגעו בה, ומקבע אותן בבת אחת בסוף. */
+/**
+ * Store מעל db שרושם כל שורה שנגעו בה, ומקבע אותן בבת אחת בסוף.
+ * זהירות: הכתיבות מקומיות בלבד עד flush() — skipSync מכבה את ה-upsert הצף
+ * פר-שורה (הוא זה שהפיל את השרת ב-OOM על ריצה של אלפי שורות), ו-deferFlush
+ * דוחה את כתיבת db.json. מי שלא קורא ל-flush() לא כתב כלום ל-Supabase.
+ */
 export function durableRecordingStore() {
   const touched = new Map();
   const record = (table, row) => {
@@ -24,12 +29,12 @@ export function durableRecordingStore() {
   return {
     get: (table) => db.get(table),
     insert: (table, row) => {
-      const saved = db.insert(table, row);
+      const saved = db.insert(table, row, { skipSync: true, deferFlush: true });
       record(table, saved);
       return saved;
     },
     update: (table, id, row) => {
-      const saved = db.update(table, id, row) || row;
+      const saved = db.update(table, id, row, { skipSync: true, deferFlush: true }) || row;
       record(table, saved);
       return saved;
     },
