@@ -19,10 +19,8 @@ import {
 } from './broadcastSuppression.js';
 import { resolveTemplateVariableValues } from './templateVarFields.js';
 import { quietStatus, DEFAULT_QUIET_CONFIG } from './quietHours.js';
-import {
-  appendMailingPreferencesFooter,
-  buildMailingPreferencesUrl,
-} from '../mailingPreferences.js';
+import { appendMailingPreferencesFooter } from '../mailingPreferences.js';
+import { shortMailingPreferencesUrl } from '../mailingShortLinks.js';
 import { DEFAULT_BUSINESS_PROFILE } from '../businessProfile.js';
 
 /**
@@ -113,12 +111,14 @@ export function renderMessageForRecipient({ template, customMessage, recipient, 
     const owner = parent || { id: recipient?.parentId, phone: recipient?.phone };
     return {
       header: '',
-      body: appendMailingPreferencesFooter(String(customMessage || ''), owner),
+      body: appendMailingPreferencesFooter(String(customMessage || ''), owner, {
+        url: shortMailingPreferencesUrl(owner),
+      }),
       footer: '',
       buttons: [],
     };
   }
-  const preferenceUrl = parent ? buildMailingPreferencesUrl(parent) : '';
+  const preferenceUrl = parent ? shortMailingPreferencesUrl(parent) : '';
   const overrides = Array.isArray(template.variables)
     ? template.variables.map((v) => (
       v && typeof v === 'object' && v.field === 'mailing_preferences' ? preferenceUrl : null

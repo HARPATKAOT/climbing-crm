@@ -166,6 +166,9 @@ export const OPERATIONAL_TABLES = [
   // ב-migrateLegacyBroadcastRows שבמודול הדיוור.
   'broadcast_jobs',
   'broadcast_recipients',
+  // קודים קצרים ללינקים אישיים (העדפות דיוור) — חייבים לשרוד restart, אחרת
+  // קישור שכבר נשלח ללקוח מת.
+  'short_links',
   'check_ins',
   // הסרות ידניות מטבלת „ממתינים לטיפול” בדלפק — שורה שהוסרה לא חוזרת באותו יום.
   'checkin_dismissals',

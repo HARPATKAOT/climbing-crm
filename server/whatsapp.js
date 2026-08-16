@@ -102,6 +102,7 @@ import {
   handleMailingPreferenceConversation,
   hasActiveMailingPreferenceFlow,
 } from './mailingPreferences.js';
+import { shortMailingPreferencesUrl } from './mailingShortLinks.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -1745,8 +1746,8 @@ export const whatsappService = {
         parent,
         text,
         origin: process.env.PUBLIC_APP_URL,
+        url: shortMailingPreferencesUrl(parent),
         persistParent: (row) => persistCore('parents', row),
-        persistList: (row) => persistCore('broadcast_lists', row),
       });
       parent = findPrimaryParent(normalizedPhone) || parent;
       await whatsappService.sendBotReply(normalizedPhone, preferenceResult.reply, {

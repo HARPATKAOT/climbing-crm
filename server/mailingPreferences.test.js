@@ -91,23 +91,29 @@ test('a durable write failure is reported instead of claiming success', async ()
   );
 });
 
-test('bot asks for lists, accepts several numbers and leaves the bot enabled', async () => {
+test('a removal request gets the personal link only — no chat menu', async () => {
   const database = fakeDb();
   const parent = database.store.parents[0];
-  const first = await handleMailingPreferenceConversation({
-    database, parent, text: 'הסר אותי', origin: 'http://localhost:3000', now: new Date('2026-08-14T10:00:00Z'),
+  const result = await handleMailingPreferenceConversation({
+    database, parent, text: 'הסר אותי', url: 'https://app.kirboaz.co.il/api/mp/abc123',
+    now: new Date('2026-08-14T10:00:00Z'),
   });
-  assert.equal(first.pending, true);
-  assert.match(first.reply, /1\. תפעולי/);
-  assert.match(first.reply, /2\. שיווקי/);
-  assert.match(first.reply, /mailing-preferences/);
-
-  const second = await handleMailingPreferenceConversation({
-    database, parent, text: '2', origin: 'http://localhost:3000', now: new Date('2026-08-14T10:01:00Z'),
-  });
-  assert.deepEqual(second.removed, ['marketing']);
-  assert.equal(database.store.subscriptions.marketing, false);
+  assert.equal(result.handled, true);
+  assert.match(result.reply, /https:\/\/app\.kirboaz\.co\.il\/api\/mp\/abc123/);
+  // אין תפריט ממוספר ואין שינוי מנויים מהצ׳אט — הבחירה נעשית בדף.
+  assert.doesNotMatch(result.reply, /1\. /);
+  assert.equal(database.store.subscriptions.marketing, true);
   assert.equal(parent.bot_opted_out, undefined);
+});
+
+test('stale numbered-menu flow state is cleared when the link is sent', async () => {
+  const database = fakeDb();
+  const parent = database.store.parents[0];
+  parent.bot_intake = { kind: 'mailing_preferences', startedAt: '2026-08-14T09:59:00Z' };
+  await handleMailingPreferenceConversation({
+    database, parent, text: '2', url: 'https://x/mp/1', now: new Date('2026-08-14T10:00:00Z'),
+  });
+  assert.equal(parent.bot_intake, null);
 });
 
 test('leaving one topic keeps global marketing consent; leaving all topics ends it', async () => {
@@ -130,26 +136,3 @@ test('leaving one topic keeps global marketing consent; leaving all topics ends 
   assert.equal(parent.marketing_opt_in, false);
 });
 
-test('the bot menu carries each list\'s emoji icon', async () => {
-  const database = fakeDb();
-  database.store.lists = [
-    { key: 'operational', label: 'תפעולי', icon: 'bell', sortOrder: 0 },
-    { key: 'field_trips', label: 'טיולים וימי שטח', icon: 'compass', sortOrder: 1 },
-  ];
-  const result = await handleMailingPreferenceConversation({
-    database, parent: database.store.parents[0], text: 'הסר אותי', now: new Date('2026-08-14T10:00:00Z'),
-  });
-  assert.match(result.reply, /1\. 🔔 תפעולי/);
-  assert.match(result.reply, /2\. 🧭 טיולים וימי שטח/);
-});
-
-test('explicit all removes every mailing list immediately', async () => {
-  const database = fakeDb();
-  const parent = database.store.parents[0];
-  const result = await handleMailingPreferenceConversation({
-    database, parent, text: 'הסר אותי מכל הרשימות', now: new Date('2026-08-14T10:00:00Z'),
-  });
-  assert.deepEqual(result.removed, ['operational', 'marketing']);
-  assert.deepEqual(database.store.subscriptions, { operational: false, marketing: false });
-  assert.equal(parent.marketing_opt_in, false);
-});

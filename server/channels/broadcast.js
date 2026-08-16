@@ -16,10 +16,8 @@ import { whatsappService } from '../whatsapp.js';
 import { canSendFreeform } from './sessionWindow.js';
 import { REASON_META } from './broadcastSuppression.js';
 import { resolveTemplateVariableValues } from './templateVarFields.js';
-import {
-  appendMailingPreferencesFooter,
-  buildMailingPreferencesUrl,
-} from '../mailingPreferences.js';
+import { appendMailingPreferencesFooter } from '../mailingPreferences.js';
+import { shortMailingPreferencesUrl } from '../mailingShortLinks.js';
 import {
   buildBroadcastPlan,
   findLocalTemplate,
@@ -221,7 +219,7 @@ async function sendToRecipient(job, recipient, { template }) {
         ? students.find((s) => s.parentId === parent.id || s.parent_id === parent.id)
         : null)
       || null;
-    const preferenceUrl = buildMailingPreferencesUrl(parent || {
+    const preferenceUrl = shortMailingPreferencesUrl(parent || {
       id: recipient.parent_id,
       phone: recipient.phone,
     });
@@ -249,9 +247,9 @@ async function sendToRecipient(job, recipient, { template }) {
   if (!windowOpen) {
     return { success: false, error: 'חלון 24 שעות סגור' };
   }
-  const message = appendMailingPreferencesFooter(job.message_text, parent || {
-    id: recipient.parent_id,
-    phone: recipient.phone,
+  const footerOwner = parent || { id: recipient.parent_id, phone: recipient.phone };
+  const message = appendMailingPreferencesFooter(job.message_text, footerOwner, {
+    url: shortMailingPreferencesUrl(footerOwner),
   });
   return whatsappService.sendTextMessage(recipient.phone, message, false, {
     parentId: recipient.parent_id,
@@ -621,7 +619,7 @@ export async function sendBroadcastTest({
     : null;
 
   if (template) {
-    const preferenceUrl = parent ? buildMailingPreferencesUrl(parent) : '';
+    const preferenceUrl = parent ? shortMailingPreferencesUrl(parent) : '';
     const overrides = Array.isArray(template.variables)
       ? template.variables.map((v) => (
         v && typeof v === 'object' && v.field === 'mailing_preferences' ? preferenceUrl : null

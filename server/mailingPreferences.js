@@ -173,134 +173,48 @@ export function hasActiveMailingPreferenceFlow(parent, now = Date.now()) {
   return Number.isFinite(startedAt) && startedAt > 0 && Number(now) - startedAt <= FLOW_TTL_MS;
 }
 
-function wantsAllListsRemoved(text) {
-  const raw = String(text || '').trim();
-  return /(?:הסר|הסירו|תסירו|להסיר|הפסק|תפסיקו|בטל|בטלו).*(?:הכל|כולם|כל\s+(?:ה)?רשימות|כל\s+(?:ה)?הודעות)/u.test(raw)
-    || /(?:מכל|מכול)\s+(?:רשימות\s+)?(?:הדיוור|התפוצה)/u.test(raw)
-    || /^(?:0|הכל|כולם)$/u.test(raw);
-}
-
-function selectedListKeys(text, defs) {
-  const raw = String(text || '').trim().toLowerCase();
-  const selected = new Set();
-  for (const match of raw.matchAll(/(?:^|[^\d])(\d{1,2})(?=$|[^\d])/g)) {
-    const index = Number(match[1]) - 1;
-    if (defs[index]) selected.add(defs[index].key);
-  }
-  defs.forEach((list) => {
-    const label = String(list.label || '').trim().toLowerCase();
-    if (label && raw.includes(label)) selected.add(list.key);
-  });
-  return [...selected];
-}
-
-/** אימוג׳י לכל רשימה בתפריט הבוט — וואטסאפ הוא טקסט, וזה מה שהופך תפריט לסריק. */
-const LIST_ICON_EMOJI = {
-  bell: '🔔',
-  mountain: '🧗',
-  compass: '🧭',
-  tent: '⛺',
-  party: '🎉',
-  megaphone: '📣',
-};
-
-function selectionPrompt(defs, url, prefix = '') {
-  const choices = defs.map((list, index) => {
-    const emoji = LIST_ICON_EMOJI[list.icon] || '';
-    return `${index + 1}. ${emoji ? `${emoji} ` : ''}${list.label}`;
-  }).join('\n');
-  return [
-    prefix,
-    'בשמחה. מאילו רשימות להפסיק לקבל הודעות?',
-    choices,
-    '0. מכל הרשימות',
-    '',
-    'אפשר להשיב במספר אחד או בכמה מספרים, למשל: 1, 2.',
-    url ? `לעריכה מלאה של ההעדפות: ${url}` : '',
-  ].filter(Boolean).join('\n');
-}
-
-async function persistFlowParent(row, persistParent) {
-  if (!row) throw new Error('כרטיס הלקוח לא נמצא');
-  const durable = await persistParent(row);
-  if (durable?.ok === false) throw new Error('שמירת בחירת הדיוור במסד נכשלה');
-}
-
+/**
+ * לקוח שמבקש להסיר את עצמו מקבל קישור אישי (מקוצר) לעמוד ההעדפות — בלי
+ * תפריט שאלות בצ׳אט. שם הוא מסמן כל רשימה בנפרד, והשמירה מאשרת בוואטסאפ.
+ * (הבעלים בחר בזרימה הזאת במקום התפריט הממוספר, 2026-08-15.)
+ */
 export async function handleMailingPreferenceConversation({
   database,
   parent,
-  text,
+  text: _text,
   origin = '',
+  url = '',
   persistParent = async () => {},
-  persistList = async () => {},
   now = new Date(),
 } = {}) {
-  const defs = sortedListDefs(database);
-  const url = buildMailingPreferencesUrl(parent, { origin, now: now.getTime() });
-  const active = hasActiveMailingPreferenceFlow(parent, now.getTime());
-  const raw = String(text || '').trim();
-
-  if (!defs.length) return { handled: true, reply: 'לא נמצאו כרגע רשימות דיוור לעריכה.' };
-
-  if (active && /^(?:בטל|ביטול|לא\s+משנה|עזוב)$/u.test(raw)) {
+  // Older cards may still carry the numbered-menu flow state — clear it so a
+  // stray "2" tomorrow is not swallowed as a menu answer.
+  if (parent?.bot_intake?.kind === 'mailing_preferences') {
     const updated = database.update('parents', parent.id, { bot_intake: null });
-    await persistFlowParent(updated, persistParent);
-    return { handled: true, cancelled: true, reply: 'לא שיניתי דבר. אפשר לכתוב „העדפות דיוור” בכל זמן.' };
+    if (updated) {
+      const durable = await persistParent(updated);
+      if (durable?.ok === false) throw new Error('שמירת בחירת הדיוור במסד נכשלה');
+    }
   }
 
-  if (wantsAllListsRemoved(raw)) {
-    const subscriptions = Object.fromEntries(defs.map((list) => [list.key, false]));
-    await updateMailingPreferences(database, parent, subscriptions, {
-      persistParent, now,
-      persistList,
-    });
-    return {
-      handled: true,
-      removed: defs.map((list) => list.key),
-      reply: [
-        'הסרתי אתכם מכל רשימות הדיוור.',
-        'הודעות שירות חיוניות הקשורות להרשמה או לפעילות קיימת עדיין עשויות להישלח.',
-        url ? `אפשר לשנות את ההעדפות בכל זמן: ${url}` : '',
-      ].filter(Boolean).join('\n'),
-    };
+  const link = url || buildMailingPreferencesUrl(parent, { origin, now: now.getTime() });
+  if (!link) {
+    return { handled: true, reply: 'לא הצלחתי להכין קישור אישי — כתבו לנו ונעדכן ידנית.' };
   }
-
-  if (!active) {
-    const updated = database.update('parents', parent.id, {
-      bot_intake: { kind: 'mailing_preferences', startedAt: now.toISOString() },
-    });
-    await persistFlowParent(updated, persistParent);
-    return { handled: true, pending: true, reply: selectionPrompt(defs, url) };
-  }
-
-  const keys = selectedListKeys(raw, defs);
-  if (!keys.length) {
-    return {
-      handled: true,
-      pending: true,
-      reply: selectionPrompt(defs, url, 'לא הצלחתי לזהות את הבחירה.'),
-    };
-  }
-
-  const subscriptions = Object.fromEntries(keys.map((key) => [key, false]));
-  await updateMailingPreferences(database, parent, subscriptions, {
-    persistParent, now,
-    persistList,
-  });
-  const removedLabels = defs.filter((list) => keys.includes(list.key)).map((list) => list.label);
   return {
     handled: true,
-    removed: keys,
+    link,
     reply: [
-      `הסרתי אתכם מהרשימות: ${removedLabels.join(', ')}.`,
-      url ? `לצפייה או שינוי נוסף: ${url}` : '',
-    ].filter(Boolean).join('\n'),
+      'כמובן! בקישור האישי הזה בוחרים בדיוק אילו עדכונים לקבל — או מסירים הכל:',
+      link,
+      'השינוי נשמר מיידית, ואפשר לחזור ולעדכן בכל זמן.',
+    ].join('\n'),
   };
 }
 
 export function appendMailingPreferencesFooter(message, parent, options = {}) {
   const body = String(message || '').trim();
-  const url = buildMailingPreferencesUrl(parent, options);
-  if (!body || !url || body.includes('/mailing-preferences/')) return body;
+  const url = options.url || buildMailingPreferencesUrl(parent, options);
+  if (!body || !url || body.includes('/mailing-preferences/') || body.includes('/mp/')) return body;
   return `${body}\n\nלעדכון העדפות הדיוור: ${url}`;
 }

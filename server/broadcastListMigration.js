@@ -155,3 +155,31 @@ export async function migrateToTwoBroadcastLists({ database, persist = null } = 
 
   return { defs: defsWritten, parents: parentsWritten, retired: legacyDefs.length };
 }
+
+/**
+ * חד-פעמי (בקשת הבעלים, 2026-08-15): עם המעבר לרשימות נושא — כולם מתחילים
+ * רשומים לכל הרשימות, כולל מי שהסיר את עצמו מ«שיווקי» הישנה. ההסרות הישנות
+ * נמחקות במודע; מהיום ההסכמה מנוהלת לפי נושא, בקישור האישי או מול הבוט.
+ */
+export async function freshStartBroadcastSubscriptions({ database, persist = null } = {}) {
+  const settings = database.getSettings?.() || {};
+  if (settings.broadcastListsFreshStart === '2026-08') return { reset: 0 };
+
+  let reset = 0;
+  for (const row of database.get('broadcast_lists') || []) {
+    if (row?.subscribed === false) {
+      const saved = database.update('broadcast_lists', row.id, { subscribed: true });
+      if (saved && persist) await persist('broadcast_lists', saved);
+      reset += 1;
+    }
+  }
+  for (const parent of database.get('parents') || []) {
+    if (parent?.marketing_opt_in === false) {
+      const saved = database.update('parents', parent.id, { marketing_opt_in: true });
+      if (saved && persist) await persist('parents', saved);
+      reset += 1;
+    }
+  }
+  database.saveSettings?.({ broadcastListsFreshStart: '2026-08' });
+  return { reset };
+}

@@ -379,7 +379,7 @@ import {
 import { lastVisit, lastVisitLabel } from './lastVisit.js';
 import { buildCounterQueues } from './pendingHandling.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
-import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
+import { OPERATIONAL_LIST, migrateToTwoBroadcastLists, freshStartBroadcastSubscriptions } from './broadcastListMigration.js';
 import {
   anchorInUseBy,
   computeAnchoredPrice,
@@ -710,7 +710,10 @@ import {
   mailingPreferencesSnapshot,
   readMailingPreferenceToken,
   updateMailingPreferences,
+  createMailingPreferenceToken,
 } from './mailingPreferences.js';
+import { resolveMailingShortCode } from './mailingShortLinks.js';
+import { appPublicBase } from './publicLinks.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -2253,6 +2256,17 @@ app.get('/api/public/broadcast-list-defs', publicFormRateLimit, (req, res) => {
 // A signed recipient link can only view or change mailing subscriptions. It is
 // deliberately separate from the customer file and never exposes a phone, ID
 // number, children or conversation history.
+// קישור מקוצר להעדפות דיוור: קוד אקראי קבוע לכל לקוח, שממיר בעת לחיצה
+// לטוקן חתום טרי ומפנה לעמוד. כך ההודעה בוואטסאפ נושאת קישור קצר ונקי.
+const redirectMailingShortCode = (req, res) => {
+  const parent = resolveMailingShortCode(req.params.code);
+  const token = parent ? createMailingPreferenceToken(parent) : '';
+  if (!token) return res.status(404).send('הקישור אינו תקף');
+  return res.redirect(302, `${appPublicBase()}/mailing-preferences/${encodeURIComponent(token)}`);
+};
+app.get('/api/mp/:code', publicFormRateLimit, redirectMailingShortCode);
+app.get('/mp/:code', publicFormRateLimit, redirectMailingShortCode);
+
 app.get('/api/public/mailing-preferences/:token', publicFormRateLimit, (req, res) => {
   const resolved = readMailingPreferenceToken(req.params.token, {
     parents: db.get('parents') || [],
@@ -2277,6 +2291,19 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
         persistList: (row) => persistCore('broadcast_lists', row),
       }
     );
+    // אישור בוואטסאפ שההעדפות נשמרו — מנוסח לפי מה שנשאר פעיל. Best-effort:
+    // אם חלון 24 השעות סגור, ההודעה פשוט לא תישלח והשמירה עצמה תקינה.
+    try {
+      const active = (snapshot.lists || []).filter((l) => l.subscribed).map((l) => l.label);
+      const confirmation = active.length
+        ? `העדפות הדיוור נשמרו ✔\nתקבלו עדכונים על: ${active.join(', ')}.`
+        : 'העדפות הדיוור נשמרו ✔\nהוסרתם מכל רשימות הדיוור. הודעות שירות חיוניות עדיין עשויות להישלח.';
+      whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
+        parentId: resolved.parent.id,
+        source: 'mailing_preferences',
+        clip: false,
+      }).catch(() => {});
+    } catch { /* אישור הוא תוספת — לא מכשיל שמירה */ }
     res.set('Cache-Control', 'no-store');
     return res.json({ success: true, ...snapshot });
   } catch (err) {
@@ -20849,6 +20876,12 @@ initDb({ requireDurable: requiresDurableStore() }).then(async () => {
     .then((result) => {
       if (result?.defs) {
         console.log(`📬 Broadcast lists: ${result.parents} parent(s) moved onto תפעולי / שיווקי`);
+      }
+    })
+    .then(() => freshStartBroadcastSubscriptions({ database: db, persist: persistCore }))
+    .then((fresh) => {
+      if (fresh?.reset) {
+        console.log(`📬 Broadcast lists fresh start: ${fresh.reset} unsubscribe record(s) cleared — everyone starts on every list`);
       }
     })
     .catch((err) => console.warn('broadcast list migration skipped:', err.message));

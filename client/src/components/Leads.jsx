@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
 import { STATUSES, STATUS_PROGRESS_ORDER, LEAD_SOURCES, LEAD_SEGMENTS, DAYS_FULL } from '../mockData.js';
 import { icountClientUrl } from '../utils/icountLinks.js';
+import { ListIcon } from './broadcastListIcons.jsx';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -4052,20 +4053,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: editingBroadcastLists ? 'auto' : 'none', opacity: editingBroadcastLists ? 1 : 0.85 }}>
                       {broadcastListDefs.map((list) => {
-                        const label = list.description ? `${list.label} (${list.description})` : list.label;
                         const checked = broadcastLists[list.key] !== false;
                         return (
-                          <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
+                          <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, minWidth: 0, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
                             <input
                               type="checkbox"
                               checked={checked}
                               disabled={!editingBroadcastLists}
                               onChange={() => handleListToggle(list.key)}
-                              style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
+                              style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15, flexShrink: 0 }}
                             />
-                            <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
-                              {label}
+                            <ListIcon icon={list.icon} size={15} color={checked ? list.color : 'var(--text-3)'} />
+                            <span style={{ flexShrink: 0, color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
+                              {list.label}
                             </span>
+                            {list.description && (
+                              <span style={{ minWidth: 0, overflow: 'hidden', color: 'var(--text-3)', fontSize: 10, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                {list.description}
+                              </span>
+                            )}
                           </label>
                         );
                       })}

@@ -1,11 +1,13 @@
+/* אותה שפה עיצובית כמו יצרן הטפסים הציבורי: תכלת (#38bdf8 / #7dd3fc)
+   על כחול-לילה, במקום הירוק-תכלת הישן. */
 .mailing-preferences-page {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: clamp(18px, 5vw, 56px);
   background:
-    radial-gradient(circle at 12% 10%, rgba(96, 165, 250, 0.18), transparent 32rem),
-    radial-gradient(circle at 88% 90%, rgba(52, 211, 153, 0.14), transparent 30rem),
+    radial-gradient(circle at 12% 10%, rgba(56, 189, 248, 0.16), transparent 32rem),
+    radial-gradient(circle at 88% 90%, rgba(2, 132, 199, 0.18), transparent 30rem),
     #08111f;
   color: #edf5ff;
   font-family: Arial, sans-serif;
@@ -43,7 +45,7 @@
   place-items: center;
   border-radius: 18px;
   color: #07111f;
-  background: linear-gradient(135deg, #7dd3fc, #6ee7b7);
+  background: linear-gradient(135deg, #7dd3fc, #38bdf8);
 }
 
 .mailing-preferences-icon svg { width: 27px; height: 27px; }
@@ -58,19 +60,20 @@
   background: #101f33;
 }
 
-.mailing-preferences-summary strong { color: #a7f3d0; font-size: 17px; }
+.mailing-preferences-summary strong { color: #7dd3fc; font-size: 17px; }
 .mailing-preferences-summary span { color: #9fb0c4; font-size: 13px; line-height: 1.5; }
 
 .mailing-preferences-list { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; }
 
+/* בעברית העמודה הראשונה יושבת מימין: אייקון · שם ותיאור · וי בקצה השמאלי. */
 .mailing-preferences-option {
   position: relative;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 46px 1fr 28px;
   align-items: center;
   gap: 14px;
-  min-height: 76px;
-  padding: 14px 16px;
+  min-height: 72px;
+  padding: 13px 16px;
   border: 1px solid #2a3b52;
   border-radius: 17px;
   background: #0c1828;
@@ -79,9 +82,17 @@
 }
 
 .mailing-preferences-option:hover { transform: translateY(-1px); border-color: #5b789d; }
-.mailing-preferences-option.is-checked { border-color: #4f8cb6; background: #10253a; }
+.mailing-preferences-option.is-checked { border-color: #38bdf8; background: #0e2238; }
 .mailing-preferences-option input { position: absolute; opacity: 0; pointer-events: none; }
 .mailing-preferences-option:has(input:focus-visible) { outline: 3px solid #7dd3fc; outline-offset: 3px; }
+
+.mailing-preferences-list-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+}
 
 .mailing-preferences-check {
   width: 26px;
@@ -94,11 +105,18 @@
   background: transparent;
 }
 
-.is-checked .mailing-preferences-check { border-color: #6ee7b7; background: #6ee7b7; }
+.is-checked .mailing-preferences-check { border-color: #38bdf8; background: #38bdf8; }
 .mailing-preferences-check svg { width: 18px; height: 18px; stroke-width: 3; }
-.mailing-preferences-option-copy { display: grid; gap: 5px; }
-.mailing-preferences-option-copy strong { font-size: 17px; }
-.mailing-preferences-option-copy span { color: #9fb0c4; font-size: 14px; line-height: 1.45; }
+.mailing-preferences-option-copy { display: grid; gap: 4px; min-width: 0; }
+.mailing-preferences-option-copy strong { font-size: 16px; }
+.mailing-preferences-option-copy span {
+  overflow: hidden;
+  color: #9fb0c4;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .mailing-preferences-actions { display: grid; gap: 10px; margin-top: 24px; }
 .mailing-preferences-actions button {
@@ -115,7 +133,7 @@
 .mailing-preferences-actions button:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
 .mailing-preferences-actions button:disabled { cursor: not-allowed; opacity: 0.55; }
 .mailing-preferences-actions svg { width: 20px; height: 20px; }
-.mailing-preferences-save { border: 0; color: #06111e; background: linear-gradient(135deg, #7dd3fc, #6ee7b7); }
+.mailing-preferences-save { border: 0; color: #06111e; background: linear-gradient(135deg, #7dd3fc, #38bdf8); }
 .mailing-preferences-unsubscribe { border: 1px solid #7f3f4a; color: #fecdd3; background: #24151d; }
 
 .mailing-preferences-notice {

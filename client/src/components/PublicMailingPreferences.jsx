@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BellRing, Check, Loader2, MailX, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
-import { ListIcon } from './broadcastListIcons.jsx';
+import { ListIcon, listColorHex } from './broadcastListIcons.jsx';
 import './PublicMailingPreferences.css';
 
 const LOCAL_PREVIEW_LISTS = [
@@ -156,15 +156,23 @@ export default function PublicMailingPreferences() {
                     setMessage('');
                   }}
                 />
-                <span className="mailing-preferences-check" aria-hidden="true">
-                  {checked ? <Check /> : null}
+                {/* בעברית העמודה הראשונה היא הימנית: אייקון גדול מימין, שם
+                    ותיאור באמצע, וסימן הבחירה בקצה השמאלי. */}
+                <span
+                  className="mailing-preferences-list-icon"
+                  aria-hidden="true"
+                  style={{
+                    background: `color-mix(in srgb, ${listColorHex(list.color)} 14%, transparent)`,
+                  }}
+                >
+                  <ListIcon icon={list.icon} size={24} color={list.color || '#38bdf8'} />
                 </span>
                 <span className="mailing-preferences-option-copy">
-                  <strong style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <ListIcon icon={list.icon} size={15} color={list.color} />
-                    {list.label}
-                  </strong>
+                  <strong>{list.label}</strong>
                   <span>{list.description || 'עדכונים מרשימה זו'}</span>
+                </span>
+                <span className="mailing-preferences-check" aria-hidden="true">
+                  {checked ? <Check /> : null}
                 </span>
               </label>
             );
