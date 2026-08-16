@@ -6377,10 +6377,14 @@ app.post('/api/activities', async (req, res) => {
   if (payload.allow_single_day && !(Number(payload.single_day_price) > 0)) {
     return res.status(400).json({ error: 'הרשמה ליום בודד מחייבת עלות ליום בודד' });
   }
-  if (payload.registration_enabled && !payload.participant_registration_slug) {
-    payload.participant_registration_slug = makeRegistrationSlug();
-    payload.registration_slug = payload.participant_registration_slug;
-  }
+  // כתובת ההרשמה נקבעת בשרת ולעולם לא מגיעה מהטופס: היא מזהה ציבורי ייחודי,
+  // ואירוע חדש שנשלח עם כתובת של אירוע קיים מתנגש באינדקס הייחודי של המסד.
+  // כך נראה אירוע שנשמר בהצלחה ומיד אחר כך הודיע „duplicate key value” —
+  // הטופס החזיק את הכתובת שהשמירה הראשונה יצרה ושלח אותה שוב כאירוע חדש.
+  payload.participant_registration_slug = payload.registration_enabled
+    ? makeRegistrationSlug()
+    : null;
+  payload.registration_slug = payload.participant_registration_slug;
   if (payload.registration_mode === 'host_pays' && !payload.host_payment_token) {
     payload.host_payment_token = makePrivatePaymentToken();
   }
@@ -6388,7 +6392,7 @@ app.post('/api/activities', async (req, res) => {
   const durable = await persistCore('activities', record);
   if (durable?.ok === false) {
     console.error('activity create persist failed:', durable.error);
-    return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
+    return res.status(503).json({ error: 'שמירת האירוע למסד נכשלה' });
   }
   res.status(201).json(activityForRequest(req, record));
   // Don't block the UI on Google — sync in the background
@@ -6421,19 +6425,12 @@ app.put('/api/activities/:id', async (req, res) => {
   if (payload.allow_single_day && !(Number(payload.single_day_price) > 0)) {
     return res.status(400).json({ error: 'הרשמה ליום בודד מחייבת עלות ליום בודד' });
   }
-  if (payload.registration_enabled && !payload.registration_slug) {
-    payload.registration_slug = existing.registration_slug || makeRegistrationSlug();
-  } else if (!payload.registration_slug && existing.registration_slug) {
-    payload.registration_slug = existing.registration_slug;
-  }
-  payload.participant_registration_slug =
-    payload.participant_registration_slug ||
-    payload.registration_slug ||
-    existing.participant_registration_slug ||
-    null;
-  if (payload.participant_registration_slug && !payload.registration_slug) {
-    payload.registration_slug = payload.participant_registration_slug;
-  }
+  // הכתובת של האירוע היא שלו בלבד ואינה נלקחת מהטופס — אחרת אירוע אחד היה
+  // יכול לקבל את כתובת ההרשמה של אירוע אחר. מתחלפת רק דרך „צור קישור מחדש”.
+  const currentSlug = existing.participant_registration_slug || existing.registration_slug || null;
+  payload.participant_registration_slug = currentSlug
+    || (payload.registration_enabled ? makeRegistrationSlug() : null);
+  payload.registration_slug = payload.participant_registration_slug;
   if (payload.registration_mode === 'host_pays' && !payload.host_payment_token) {
     payload.host_payment_token = existing.host_payment_token || makePrivatePaymentToken();
   }
@@ -6446,7 +6443,7 @@ app.put('/api/activities/:id', async (req, res) => {
   const durable = await persistCore('activities', updated);
   if (durable?.ok === false) {
     console.error('activity update persist failed:', durable.error);
-    return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
+    return res.status(503).json({ error: 'שמירת האירוע למסד נכשלה' });
   }
   res.json(activityForRequest(req, updated));
   syncActivityToGoogle(updated).catch((err) =>

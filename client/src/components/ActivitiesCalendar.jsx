@@ -5506,6 +5506,12 @@ export default function ActivitiesCalendar({
         _pending_staff_details: pendingStaffDetails = {},
         ...body
       } = payload;
+      // אירוע חדש נשלח בלי כתובת הרשמה. אם טופס שכבר נשמר פעם החזיק את הכתובת
+      // שנוצרה לו, שמירה נוספת שנשלחה כיצירה ביקשה מהמסד כתובת שכבר תפוסה.
+      if (!isEdit) {
+        delete body.registration_slug;
+        delete body.participant_registration_slug;
+      }
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
