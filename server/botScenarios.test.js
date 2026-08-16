@@ -42,6 +42,9 @@ const SCENARIO_COLLECTIONS = [
   INTEREST_COLLECTION,
   FOLLOWUP_COLLECTION,
   'bot_actions',
+  // Every journalled action opens a review task; without this a scenario run
+  // would leave them behind in the real local store.
+  'crm_tasks',
   'student_equipment',
   'equipment_checkouts',
   'centre_registration_checks',

@@ -6,6 +6,7 @@ import {
   createMailingPreferenceToken,
   handleMailingPreferenceConversation,
   isMailingPreferenceRequest,
+  mailingConfirmationMessage,
   readMailingPreferenceToken,
   updateMailingPreferences,
 } from './mailingPreferences.js';
@@ -141,5 +142,37 @@ test('leaving one topic keeps global marketing consent; leaving all topics ends 
   // ירד גם משאר הנושאים — עכשיו זה opt-out מלא.
   await updateMailingPreferences(database, parent, { clubs: false, field_trips: false });
   assert.equal(parent.marketing_opt_in, false);
+});
+
+test('the confirmation lists the topics the way the menu did, with their icons', () => {
+  // «תקבלו עדכונים על: תפעולי, חוגי טיפוס.» was a sentence. The customer had
+  // just been reading a list, and the icons are the field the screens draw.
+  const message = mailingConfirmationMessage({
+    lists: [
+      { key: 'operational', label: 'תפעולי', icon: 'bell', subscribed: true },
+      { key: 'clubs', label: 'חוגי טיפוס', icon: 'mountain', subscribed: true },
+      { key: 'field_trips', label: 'טיולים וימי שטח', icon: 'compass', subscribed: false },
+      { key: 'marketing', label: 'מבצעים ואירועים', icon: 'party', subscribed: true },
+    ],
+  });
+  assert.equal(message, [
+    'העדפות הדיוור נשמרו ✔',
+    'תקבלו עדכונים על:',
+    '🔔 תפעולי',
+    '🧗 חוגי טיפוס',
+    '🎉 מבצעים ואירועים',
+  ].join('\n'));
+
+  // An unknown icon still gets a character rather than an empty line.
+  assert.match(mailingConfirmationMessage({
+    lists: [{ label: 'משהו חדש', icon: 'nothing-like-this', subscribed: true }],
+  }), /📣 משהו חדש/);
+
+  // Leaving everything is its own sentence — there is no list to draw.
+  const none = mailingConfirmationMessage({
+    lists: [{ label: 'תפעולי', icon: 'bell', subscribed: false }],
+  });
+  assert.match(none, /הוסרתם מכל רשימות הדיוור/);
+  assert.doesNotMatch(none, /תקבלו עדכונים/);
 });
 

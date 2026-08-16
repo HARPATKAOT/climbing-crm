@@ -707,6 +707,7 @@ import {
 import { getMetaQuota } from './channels/metaQuota.js';
 import { mediaCredentialsStatus } from './channels/media.js';
 import {
+  mailingConfirmationMessage,
   mailingPreferencesSnapshot,
   readMailingPreferenceToken,
   updateMailingPreferences,
@@ -2294,10 +2295,7 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
     // אישור בוואטסאפ שההעדפות נשמרו — מנוסח לפי מה שנשאר פעיל. Best-effort:
     // אם חלון 24 השעות סגור, ההודעה פשוט לא תישלח והשמירה עצמה תקינה.
     try {
-      const active = (snapshot.lists || []).filter((l) => l.subscribed).map((l) => l.label);
-      const confirmation = active.length
-        ? `העדפות הדיוור נשמרו ✔\nתקבלו עדכונים על: ${active.join(', ')}.`
-        : 'העדפות הדיוור נשמרו ✔\nהוסרתם מכל רשימות הדיוור. הודעות שירות חיוניות עדיין עשויות להישלח.';
+      const confirmation = mailingConfirmationMessage(snapshot);
       whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
         parentId: resolved.parent.id,
         source: 'mailing_preferences',
