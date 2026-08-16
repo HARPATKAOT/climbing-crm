@@ -91,11 +91,11 @@ export async function sendSignupInvites({ windowRow, employees = [], link } = {}
 export async function sendAssignmentSummaries({ windowRow, byEmployee = new Map(), employees = [] } = {}) {
   const employeeById = new Map((employees || []).map((e) => [String(e.id), e]));
   const results = [];
-  for (const [employeeId, slots] of byEmployee) {
+  for (const [employeeId, seats] of byEmployee) {
     const employee = employeeById.get(String(employeeId));
     if (!employee) continue;
-    const first = slots[0] || {};
-    const result = await sendWithTemplateFallback(employee, assignmentMessageText(windowRow, slots), {
+    const first = seats[0]?.slot || {};
+    const result = await sendWithTemplateFallback(employee, assignmentMessageText(windowRow, seats), {
       // התבנית מדברת על אירוע אחד, ולכן היא נושאת את הראשון בלבד. זו נפילה
       // מכוונת: עדיף שהעובד יידע על משמרת אחת ויתקשר, מאשר שלא יידע כלום.
       templateKind: 'shift_assigned',
@@ -110,7 +110,7 @@ export async function sendAssignmentSummaries({ windowRow, byEmployee = new Map(
     results.push({
       employee_id: employeeId,
       name: employee.name || 'עובד/ת',
-      shifts: slots.length,
+      shifts: seats.length,
       ok: result.ok,
       ...(result.ok ? {} : { reason: reasonLabel(result.reason) }),
     });

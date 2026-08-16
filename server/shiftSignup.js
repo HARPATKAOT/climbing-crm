@@ -97,6 +97,42 @@ export function slotId(date, startTime, ownerId = '') {
   return ownerId ? `${date}@${startTime}#${ownerId}` : `${date}@${startTime}`;
 }
 
+/**
+ * מה משמרת צריכה: „מפעיל קיר אחד ושני עוזרי מדריך”.
+ *
+ * זה מה שהחליף את `capacity` — מספר יחיד שאמר כמה אנשים צריך בלי לומר לְמה.
+ * משמרת פתיחה צריכה מפעיל קיר *וגם* עוזר מדריך, ושני עוזרי מדריך אינם תחליף
+ * למפעיל הקיר החסר. בלי הפירוט הזה „שובצו 2 מתוך 2” היה יכול להיות שני אנשים
+ * באותו תפקיד ומשמרת שאי אפשר לפתוח איתה את הקיר.
+ *
+ * התפקיד נשמר כתווית ולא כמפתח, כי זה מה שכל שאר המערכת שומרת: ההסמכות של
+ * העובד, שורת העבודה, ושורת התעריף בהסכם השכר. שינוי שם תפקיד מטופל במקום
+ * אחד — `propagateRoleRename` — ולא בהמרה בכל קריאה.
+ */
+export function normalizeNeeds(raw, fallbackCount = 1) {
+  const list = Array.isArray(raw) ? raw : [];
+  const byRole = new Map();
+  for (const entry of list) {
+    const role = cleanText(entry?.role, 60);
+    if (!role) continue;
+    const count = Math.max(1, Math.min(20, Math.round(Number(entry?.count) || 1)));
+    // אותו תפקיד פעמיים הוא ספירה אחת, לא שתי שורות: „עוזר מדריך 1” ועוד
+    // „עוזר מדריך 2” הם שלושה עוזרים.
+    byRole.set(role, (byRole.get(role) || 0) + count);
+  }
+  const needs = [...byRole].map(([role, count]) => ({ role, count: Math.min(20, count) }));
+  if (needs.length) return needs;
+  // משמרת בלי פירוט תפקידים עדיין צריכה אנשים. תפקיד ריק פירושו „מי שמתאים”,
+  // וזו גם הצורה שאליה נופלת משמרת שנוצרה לפני שהתפקידים נכנסו.
+  return [{ role: '', count: Math.max(1, Math.min(20, Math.round(Number(fallbackCount) || 1))) }];
+}
+
+/** כמה אנשים המשמרת צריכה בסך הכול — סכום כל התפקידים. */
+export function slotCapacity(slot) {
+  return (slot?.needs || []).reduce((sum, need) => sum + (Number(need.count) || 0), 0)
+    || Number(slot?.capacity) || 1;
+}
+
 export function normalizeSlot(raw = {}) {
   const date = cleanDate(raw.date);
   const start = cleanTime(raw.start_time);
@@ -104,7 +140,7 @@ export function normalizeSlot(raw = {}) {
   if (!date) return { error: 'לכל משמרת צריך תאריך תקין' };
   if (!start || !end) return { error: `למשמרת של ${date} צריך שעת התחלה וסיום` };
   if (end <= start) return { error: `במשמרת של ${date} שעת הסיום מוקדמת מההתחלה` };
-  const capacity = Math.max(1, Math.min(20, Math.round(Number(raw.capacity) || 1)));
+  const needs = normalizeNeeds(raw.needs, raw.capacity);
   const activityId = cleanText(raw.activity_id, 60) || null;
   const groupId = cleanText(raw.group_id, 60) || null;
   return {
@@ -113,7 +149,7 @@ export function normalizeSlot(raw = {}) {
       date,
       start_time: start,
       end_time: end,
-      capacity,
+      needs,
       label: cleanText(raw.label, 60),
       // מה שהמשמרת הזאת מאיישת ביומן, כשהיא נבחרה משם. השיבוץ שייווצר ממנה
       // ייקשר לאותה שורה — וזה מה שמחבר אותו לנוכחות ולתמחור, במקום להישאר
@@ -138,6 +174,7 @@ export function expandWeeklySlots({
   weekdays = [],
   start_time: startTime,
   end_time: endTime,
+  needs = null,
   capacity = 1,
   label = '',
 } = {}) {
@@ -161,7 +198,9 @@ export function expandWeeklySlots({
     const day = cursor.toISOString().slice(0, 10);
     if (day > last) break;
     if (days.includes(cursor.getUTCDay())) {
-      const { slot } = normalizeSlot({ date: day, start_time: start, end_time: end, capacity, label });
+      const { slot } = normalizeSlot({
+        date: day, start_time: start, end_time: end, needs, capacity, label,
+      });
       if (slot) slots.push(slot);
     }
     cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
@@ -188,14 +227,22 @@ function isCancelledActivity(activity) {
 export const CLASS_SOURCE_TYPE = 'class';
 
 /**
- * Roles a calendar type accepts. An empty (or missing) list means the type was
- * never restricted, so it stays open to everyone rather than silently offering
- * nothing.
+ * מה משמרת ביומן צריכה, לפי סדר יורד של מי יודע טוב יותר.
+ *
+ * הרשומה עצמה קודמת: מנהל שכתב על אירוע „מפעיל קיר אחד ושני עוזרים” אמר בדיוק
+ * מה הוא צריך. אחריה סוג הפעילות — „שעות פתיחה מאוישות בהפעלת קיר” — שהוא ניחוש
+ * סביר בהיעדר מידע. ובסוף תפקיד ריק, שפירושו „מי שמתאים”: עדיף להציע משמרת בלי
+ * לדעת מה היא צריכה מאשר לא להציע אותה בכלל.
  */
-function typeAcceptsRole(rolesByType, type, role) {
-  const allowed = rolesByType?.[type];
-  if (!Array.isArray(allowed) || allowed.length === 0) return true;
-  return allowed.includes(role);
+function needsForActivity(activity, rolesByType, type) {
+  const explicit = normalizeNeeds(activity?.staff_needs, 0);
+  if (explicit[0]?.role) return explicit;
+  if (activity?.staff_role) return [{ role: cleanText(activity.staff_role, 60), count: 1 }];
+  const byType = rolesByType?.[type];
+  if (Array.isArray(byType) && byType.length) {
+    return byType.map((role) => ({ role: cleanText(role, 60), count: 1 })).filter((n) => n.role);
+  }
+  return [{ role: '', count: 1 }];
 }
 
 /** How many people already hold this exact calendar slot in the given role. */
@@ -226,22 +273,20 @@ function addOneDay(dateStr) {
  * than retypes — and the resulting placement points back at the entry it
  * staffs, which is what ties it to attendance and to the right rate.
  *
- * Anything already fully staffed for this role is still returned, marked with
- * how many it has, so "why is Tuesday missing from the list?" never has to be
- * asked.
+ * Anything already fully staffed is still returned, marked with how many it has,
+ * so "why is Tuesday missing from the list?" never has to be asked.
  *
- * ## Why the counts come back alongside the candidates
+ * ## Why nothing is filtered by role any more
  *
- * The two filters here — the role and the chosen types — both work by removing
- * things, and a list that is empty because everything was removed looks exactly
- * like a calendar with nothing in it. That is a real trap: the owner picked
- * "עוזר מדריך", got a list with no opening hours in it, and concluded the
- * screen was reading some other calendar. It was not — opening hours are staffed
- * by "הפעלת קיר", so every one of them had been filtered out silently.
+ * A window used to be addressed to one role, and the candidate list was filtered
+ * to what that role staffs. It read as a broken screen: the owner asked for
+ * "עוזר מדריך", every opening-hours shift vanished — they are staffed by
+ * "הפעלת קיר" — and the list came back empty over a calendar that was full.
  *
- * So each type reports what happened to it: how many shifts it has in the range,
- * how many the role blocked, and how many have no hours to offer. The screen can
- * then say *why* a type is empty instead of just showing nothing.
+ * A shift now carries the roles *it* needs, and the form goes to the whole team.
+ * Nothing is removed on the way in, so an empty list here means an empty range,
+ * which is the only thing an empty list should ever mean. The per-type counts
+ * stay, because "40 of these are classes" is still worth knowing before asking.
  *
  * @param {string[]|null} types `source_type` ids to offer (`class` for the weekly
  *   grid). Null or empty means every type — the behaviour before the picker.
@@ -252,10 +297,8 @@ export function calendarSlotCandidates({
   assignments = [],
   rolesByType = {},
   classRoles = [],
-  role = '',
   from,
   to,
-  capacity = 1,
   types = null,
 } = {}) {
   const first = cleanDate(from);
@@ -263,8 +306,6 @@ export function calendarSlotCandidates({
   if (!first || !last) return { error: 'צריך טווח תאריכים תקין' };
   if (last < first) return { error: 'תאריך הסיום מוקדם מתאריך ההתחלה' };
 
-  const wantedRole = cleanText(role, 60);
-  const defaultCapacity = Math.max(1, Math.min(20, Math.round(Number(capacity) || 1)));
   const wanted = Array.isArray(types) && types.length
     ? new Set(types.map((t) => cleanText(t, 60)).filter(Boolean))
     : null;
@@ -276,7 +317,7 @@ export function calendarSlotCandidates({
   const stats = new Map();
   const count = (type, key, by = 1) => {
     if (!stats.has(type)) {
-      stats.set(type, { id: type, total: 0, blocked_by_role: 0, without_hours: 0 });
+      stats.set(type, { id: type, total: 0, without_hours: 0 });
     }
     stats.get(type)[key] += by;
   };
@@ -289,14 +330,9 @@ export function calendarSlotCandidates({
     const days = activityDateRange(activity).filter((day) => day >= first && day <= last);
     if (!days.length) continue;
 
-    // Counted before either filter runs: this is what the range actually holds,
-    // and it is the number the picker shows next to the type.
+    // Counted before the type filter runs: this is what the range actually
+    // holds, and it is the number the picker shows next to the type.
     count(type, 'total', days.length);
-
-    if (!typeAcceptsRole(rolesByType, type, wantedRole)) {
-      count(type, 'blocked_by_role', days.length);
-      continue;
-    }
 
     const start = cleanTime(activity.start_time);
     const end = cleanTime(activity.end_time);
@@ -312,6 +348,7 @@ export function calendarSlotCandidates({
     }
     if (!offered) continue;
 
+    const needs = needsForActivity(activity, rolesByType, type);
     for (const date of days) {
       candidates.push({
         // The same id the slot will carry once the window is created, so a tick
@@ -320,7 +357,7 @@ export function calendarSlotCandidates({
         date,
         start_time: start,
         end_time: end,
-        capacity: defaultCapacity,
+        needs,
         label: cleanText(activity.name, 60),
         activity_id: activity.id || null,
         group_id: null,
@@ -328,7 +365,7 @@ export function calendarSlotCandidates({
         source: 'activity',
         source_type: type,
         staffed: staffedCount(assignments, {
-          date, startTime: start, activityId: activity.id, role: wantedRole,
+          date, startTime: start, activityId: activity.id,
         }),
       });
     }
@@ -338,7 +375,6 @@ export function calendarSlotCandidates({
   // on its own screen — so it is one more entry in the type picker rather than
   // something mixed in by default. Seventeen classes over a fortnight are forty
   // shifts, and they buried the five the manager had actually come for.
-  const classesAllowed = classRoles.length === 0 || classRoles.includes(wantedRole);
   {
     for (const group of groups) {
       const weekdays = getGroupDays(group);
@@ -355,10 +391,6 @@ export function calendarSlotCandidates({
       if (!dates.length) continue;
       count(CLASS_SOURCE_TYPE, 'total', dates.length);
 
-      if (!classesAllowed) {
-        count(CLASS_SOURCE_TYPE, 'blocked_by_role', dates.length);
-        continue;
-      }
       const offeredClass = !wanted || wanted.has(CLASS_SOURCE_TYPE);
       if (!start) {
         count(CLASS_SOURCE_TYPE, 'without_hours', dates.length);
@@ -378,13 +410,19 @@ export function calendarSlotCandidates({
 
       if (!offeredClass) continue;
 
+      // חוג צריך מי שמדריך אותו. `classRoles` הם התפקידים שיכולים לקחת חוג,
+      // והראשון שבהם הוא ההדרכה עצמה — עוזר מדריך הוא תוספת, לא תחליף.
+      const classNeeds = classRoles.length
+        ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
+        : [{ role: '', count: 1 }];
+
       for (const date of dates) {
         candidates.push({
           id: slotId(date, start, group.id || ''),
           date,
           start_time: start,
           end_time: end,
-          capacity: defaultCapacity,
+          needs: classNeeds,
           label: cleanText(group.name, 60),
           activity_id: null,
           group_id: group.id || null,
@@ -392,7 +430,7 @@ export function calendarSlotCandidates({
           source: 'group',
           source_type: CLASS_SOURCE_TYPE,
           staffed: staffedCount(assignments, {
-            date, startTime: start, groupId: group.id, role: wantedRole,
+            date, startTime: start, groupId: group.id,
           }),
         });
       }
@@ -421,9 +459,9 @@ export function newSignupToken() {
 }
 
 /**
- * מי מקבל את הקישור. רשימה ריקה פירושה „כל מי שמסומן בתפקיד” — כך טופס נשאר
- * פתוח למי שיקבל את התפקיד מחר, בלי לחזור ולערוך אותו. רשימה מפורשת גוברת על
- * התפקיד: המנהל שבחר שלושה שמות התכוון לשלושה, גם אם חמישה מוסמכים.
+ * מי מקבל את הקישור. רשימה ריקה פירושה „כל הצוות” — הטופס מציע לכל אחד את
+ * התפקידים שהוא מחזיק, ולכן אין סיבה לצמצם אותו מראש. רשימה מפורשת גוברת:
+ * המנהל שבחר שלושה שמות התכוון לשלושה.
  */
 function cleanRecipients(raw) {
   if (!Array.isArray(raw)) return [];
@@ -433,9 +471,6 @@ function cleanRecipients(raw) {
 export function normalizeWindow(body = {}, { existing = null } = {}) {
   const title = cleanText(body.title ?? existing?.title, 80);
   if (!title) return { error: 'צריך שם לטופס (למשל „משמרות פתיחה — שבוע הבא”)' };
-
-  const role = cleanText(body.role !== undefined ? body.role : existing?.role, 60);
-  if (!role) return { error: 'צריך לבחור לאיזה תפקיד הטופס פונה' };
 
   const recipients = body.recipients !== undefined
     ? cleanRecipients(body.recipients)
@@ -468,7 +503,6 @@ export function normalizeWindow(body = {}, { existing = null } = {}) {
   return {
     window: {
       title,
-      role,
       recipients,
       work_type: workType,
       status,
@@ -498,34 +532,59 @@ export function responsesForWindow(responses = [], windowId) {
   return (responses || []).filter((r) => r.window_id === windowId);
 }
 
-/** slotId → how many employees ticked it. */
-export function slotTickCounts(windowRow, responses = []) {
+/** התפקידים שהעובד מסומן בהם. אותה רשימה שהרוסטר מסנן לפיה. */
+export function rolesOfEmployee(employee) {
+  const raw = Array.isArray(employee?.certifications) ? employee.certifications : [];
+  return raw.map((r) => cleanText(r, 60)).filter(Boolean);
+}
+
+/** האם העובד יכול לקחת את התפקיד הזה. תפקיד ריק פירושו „מי שמתאים”. */
+export function canFillRole(employee, role) {
+  if (!role) return true;
+  return rolesOfEmployee(employee).includes(cleanText(role, 60));
+}
+
+/** מפתח אחיד לזוג משמרת-תפקיד, בשרת ובמסך. */
+export function seatKey(slotId, role) {
+  return `${slotId}|${role || ''}`;
+}
+
+/** „משמרת + תפקיד” → כמה עובדים סימנו אותו. */
+export function seatTickCounts(windowRow, responses = []) {
   const counts = new Map();
-  for (const slot of windowRow?.slots || []) counts.set(slot.id, 0);
   for (const response of responses) {
-    for (const id of response.slot_ids || []) {
-      if (counts.has(id)) counts.set(id, counts.get(id) + 1);
+    for (const pick of response.picks || []) {
+      const key = seatKey(pick.slot_id, pick.role);
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
   }
   return counts;
 }
 
 /**
- * What the public form shows. Capacity is displayed but never enforced on the
- * employee: telling someone "the shift is full, don't offer" throws away the
- * reserve the manager wants when a first choice falls through.
+ * What the public form shows.
+ *
+ * Every shift lists the roles it needs, and the employee claims one of them.
+ * How many have already claimed a seat is shown but never enforced: telling
+ * someone "this is full, don't offer" throws away the reserve the manager wants
+ * when a first choice falls through.
  */
 export function publicWindowView(windowRow, responses = [], today = israelDateStr()) {
-  const counts = slotTickCounts(windowRow, responses);
+  const counts = seatTickCounts(windowRow, responses);
   return {
     title: windowRow.title,
-    role: windowRow.role,
     note: windowRow.note || '',
     deadline: windowRow.deadline || null,
     open: isWindowOpen(windowRow, today),
     slots: (windowRow.slots || [])
       .filter((slot) => slot.date >= today)
-      .map((slot) => ({ ...slot, taken: counts.get(slot.id) || 0 })),
+      .map((slot) => ({
+        ...slot,
+        needs: (slot.needs || []).map((need) => ({
+          ...need,
+          taken: counts.get(seatKey(slot.id, need.role)) || 0,
+        })),
+      })),
   };
 }
 
@@ -533,17 +592,43 @@ export function publicWindowView(windowRow, responses = [], today = israelDateSt
  * A submission replaces whatever that employee said before, rather than adding
  * a second answer. Re-opening the link is how someone changes their mind, and
  * two rows for one person would read as two people on the board.
+ *
+ * A pick is a shift *and a role*: someone who holds four roles — and eight of
+ * the twenty-three do — cannot be placed from a tick alone. They are telling us
+ * which hat they are coming in, and that is what decides the rate they are paid.
+ *
+ * The role is checked twice over: it must be a role the shift actually needs,
+ * and one the employee is marked for. A form that let anyone claim any seat
+ * would put an unqualified person on the wall.
  */
-export function applyResponse(windowRow, responses = [], payload = {}, { today = israelDateStr() } = {}) {
+export function applyResponse(windowRow, responses = [], payload = {}, {
+  today = israelDateStr(),
+  employee = null,
+} = {}) {
   if (!windowRow) return { error: 'הטופס לא נמצא' };
   if (!isWindowOpen(windowRow, today)) return { error: 'ההרשמה לטופס הזה נסגרה' };
 
   const employeeId = cleanText(payload.employee_id, 60);
   if (!employeeId) return { error: 'צריך לבחור מי ממלא את הטופס' };
 
-  const valid = new Set((windowRow.slots || []).filter((s) => s.date >= today).map((s) => s.id));
-  const picked = [...new Set((Array.isArray(payload.slot_ids) ? payload.slot_ids : []).map((id) => cleanText(id, 40)))]
-    .filter((id) => valid.has(id));
+  const slotsById = new Map((windowRow.slots || [])
+    .filter((s) => s.date >= today)
+    .map((s) => [s.id, s]));
+
+  const picks = [];
+  const seenSlots = new Set();
+  for (const raw of Array.isArray(payload.picks) ? payload.picks : []) {
+    const slot = slotsById.get(cleanText(raw?.slot_id, 60));
+    if (!slot) continue;
+    // אותה משמרת פעמיים היא עדיין משמרת אחת: אי אפשר לעבוד בשני תפקידים
+    // באותה שעה, והבחירה השנייה היא תיקון של הראשונה.
+    if (seenSlots.has(slot.id)) continue;
+    const role = cleanText(raw?.role, 60);
+    if (!(slot.needs || []).some((need) => (need.role || '') === role)) continue;
+    if (employee && !canFillRole(employee, role)) continue;
+    seenSlots.add(slot.id);
+    picks.push({ slot_id: slot.id, role });
+  }
 
   const existing = responses.find(
     (r) => r.window_id === windowRow.id && r.employee_id === employeeId
@@ -555,41 +640,57 @@ export function applyResponse(windowRow, responses = [], payload = {}, { today =
       window_id: windowRow.id,
       employee_id: employeeId,
       employee_name: cleanText(payload.employee_name, 80) || existing?.employee_name || '',
-      slot_ids: picked,
-      wanted_count: cleanWantedCount(payload.wanted_count, picked.length),
+      picks,
+      wanted_count: cleanWantedCount(payload.wanted_count, picks.length),
       note: cleanText(payload.note, 300),
       submitted_at: new Date().toISOString(),
     },
     existing,
     // Zero picks is a real answer ("none of these suit me") and is stored as
     // such — it is the difference between a "no" and someone who never replied.
-    cleared: picked.length === 0,
+    cleared: picks.length === 0,
   };
 }
 
 /**
- * Who the window is addressed to. The role lives on the employee's
- * `certifications` list — the same marks the roster already filters by — so a
- * window for "עוזר מדריך" reaches exactly the people the schedule screen would
- * have offered for that slot, and nobody has to keep a second list in step.
+ * Who the window is addressed to.
  *
- * A named recipient list overrides the role. The manager who ticked three people
- * meant those three, and filtering their names through the role afterwards would
- * quietly drop whoever is missing a certification mark — the same person the
- * manager just picked on purpose.
+ * The whole team, unless the manager named names. It used to be "whoever holds
+ * this one role", which is what made the form useless: a shift needs a wall
+ * operator *and* an assistant, and eight of the twenty-three staff hold four
+ * roles each — there is no single role that addresses them. Each person now
+ * sees the shifts and claims a seat in a role they are marked for, so the
+ * narrowing happens where the knowledge is.
+ *
+ * Their roles ride along, because the public form has to show each person only
+ * the seats they can actually take.
  */
-export function eligibleEmployees(employees = [], role, recipients = []) {
-  const wanted = cleanText(role, 60);
+export function eligibleEmployees(employees = [], recipients = []) {
   const named = new Set(cleanRecipients(recipients).map(String));
   return (employees || [])
     .filter((employee) => employee?.is_active !== false && employee?.active !== false)
-    .filter((employee) => (named.size
-      ? named.has(String(employee.id))
-      : !wanted || (Array.isArray(employee.certifications) ? employee.certifications : [])
-        .map((r) => cleanText(r, 60))
-        .includes(wanted)))
-    .map((employee) => ({ id: employee.id, name: employee.name || 'עובד/ת' }))
+    .filter((employee) => !named.size || named.has(String(employee.id)))
+    .map((employee) => ({
+      id: employee.id,
+      name: employee.name || 'עובד/ת',
+      roles: rolesOfEmployee(employee),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, 'he'));
+}
+
+/**
+ * מי כבר משובץ למשמרת הזאת, בכל תפקיד.
+ * שורות רוסטר מזוהות לפי מה שהן מאיישות, לא לפי השעה: שני חוגים יכולים להתחיל
+ * באותה שעה, ואת שעות האירוע אפשר לערוך אחרי ששיבצו אליו.
+ */
+function assignmentsForSlot(assignments = [], slot) {
+  return (assignments || []).filter((row) => {
+    if (String(row.date || '').slice(0, 10) !== slot.date) return false;
+    if (slot.activity_id) return row.activity_id === slot.activity_id;
+    if (slot.group_id) return row.group_id === slot.group_id;
+    if (row.activity_id || row.group_id) return false;
+    return String(row.start_time || '').slice(0, 5) === slot.start_time;
+  });
 }
 
 /**
@@ -613,42 +714,61 @@ export function isSlotAssigned(assignments = [], employeeId, slot) {
 }
 
 /**
- * The manager's view: one row per shift, with who offered and who is already
- * placed. `eligible` is the staff the window was addressed to, so a name that
- * lost the role since answering still shows up rather than silently vanishing.
+ * מסך האישור: שורה לכל משמרת, ובתוכה שורה לכל תפקיד שהיא צריכה.
+ *
+ * זו הצורה שהמנהל שואל בה. „שובצו 2 מתוך 3” אינו מספיק כשהשלושה הם מפעיל קיר
+ * ושני עוזרים — שני עוזרים ואף מפעיל אינם משמרת שאפשר לפתוח איתה את הקיר. לכן
+ * כל מושב נספר בנפרד: כמה צריך, מי ביקש אותו, ומי כבר מחזיק בו.
+ *
+ * מי שכבר משובץ ברוסטר נספר גם אם לא ענה לטופס — שיבוץ ידני מהיומן הוא עדיין
+ * שיבוץ, ומשמרת שנראית ריקה בגללו היא מלכודת.
  */
 export function signupBoard(windowRow, responses = [], employees = [], assignments = []) {
   const rows = responsesForWindow(responses, windowRow.id);
-  const nameOf = (employeeId) => {
-    const employee = (employees || []).find((e) => e.id === employeeId);
-    return employee?.name || rows.find((r) => r.employee_id === employeeId)?.employee_name || 'עובד/ת';
-  };
+  const byId = new Map((employees || []).map((e) => [String(e.id), e]));
+  const nameOf = (employeeId) => byId.get(String(employeeId))?.name
+    || rows.find((r) => r.employee_id === employeeId)?.employee_name
+    || 'עובד/ת';
+
   return (windowRow.slots || []).map((slot) => {
-    const signed = rows
-      .filter((r) => (r.slot_ids || []).includes(slot.id))
-      .map((r) => {
-        const assignment = findSlotAssignment(assignments, r.employee_id, slot);
-        return {
-          employee_id: r.employee_id,
-          name: nameOf(r.employee_id),
-          note: r.note || '',
-          submitted_at: r.submitted_at || null,
-          // כמה סימן בסך הכל וכמה מהן הוא באמת רוצה — שתי המספרים נדרשים בכל
-          // שורה, כי מסך האישור עובד משמרת-משמרת ולא עובד-עובד.
-          picked_count: (r.slot_ids || []).length,
-          wanted_count: Number(r.wanted_count) || 0,
-          assigned: Boolean(assignment),
-          // Carried so the board can undo a placement it just made, without a
-          // second round trip to find the row again.
-          assignment_id: assignment?.id || null,
-        };
-      })
-      .sort((a, b) => String(a.submitted_at).localeCompare(String(b.submitted_at)));
+    const placed = assignmentsForSlot(assignments, slot);
+    const seats = (slot.needs || []).map((need) => {
+      const role = need.role || '';
+      const held = placed.filter((row) => (row.role || '') === role);
+      const claimants = rows
+        .filter((r) => (r.picks || []).some((p) => p.slot_id === slot.id && (p.role || '') === role))
+        .map((r) => {
+          const assignment = held.find((row) => String(row.employee_id) === String(r.employee_id));
+          return {
+            employee_id: r.employee_id,
+            name: nameOf(r.employee_id),
+            note: r.note || '',
+            submitted_at: r.submitted_at || null,
+            // כמה משמרות סימן בסך הכול וכמה הוא באמת רוצה — שניהם נדרשים בכל
+            // שורה, כי המסך עובד משמרת-משמרת ולא עובד-עובד.
+            picked_count: (r.picks || []).length,
+            wanted_count: Number(r.wanted_count) || 0,
+            assigned: Boolean(assignment),
+            // נשמר כדי שאפשר יהיה לבטל שיבוץ מיד, בלי סיבוב נוסף לשרת.
+            assignment_id: assignment?.id || null,
+          };
+        })
+        .sort((a, b) => String(a.submitted_at).localeCompare(String(b.submitted_at)));
+      return {
+        role,
+        needed: need.count,
+        // מי שמשובץ בתפקיד הזה אך לא ענה לטופס — שיבוץ ידני מהיומן.
+        assigned: held.length,
+        claimants,
+        missing: Math.max(0, need.count - held.length),
+      };
+    });
     return {
       ...slot,
-      signed,
-      assigned_count: signed.filter((s) => s.assigned).length,
-      missing: Math.max(0, slot.capacity - signed.filter((s) => s.assigned).length),
+      seats,
+      capacity: slotCapacity(slot),
+      assigned_count: seats.reduce((sum, seat) => sum + seat.assigned, 0),
+      missing: seats.reduce((sum, seat) => sum + seat.missing, 0),
     };
   });
 }
@@ -657,7 +777,7 @@ export function signupBoard(windowRow, responses = [], employees = [], assignmen
 export function respondentSummary(windowRow, responses = [], employees = [], assignments = []) {
   const slotsById = new Map((windowRow.slots || []).map((s) => [s.id, s]));
   return responsesForWindow(responses, windowRow.id).map((response) => {
-    const picked = (response.slot_ids || []).map((id) => slotsById.get(id)).filter(Boolean);
+    const picked = (response.picks || []).map((p) => slotsById.get(p.slot_id)).filter(Boolean);
     const employee = (employees || []).find((e) => e.id === response.employee_id);
     return {
       employee_id: response.employee_id,
@@ -666,6 +786,8 @@ export function respondentSummary(windowRow, responses = [], employees = [], ass
       submitted_at: response.submitted_at || null,
       picked: picked.length,
       wanted: Number(response.wanted_count) || 0,
+      // באילו תפקידים הוא ביקש לבוא — מה שהופך „סימן 3” למידע שאפשר לפעול לפיו.
+      roles: [...new Set((response.picks || []).map((p) => p.role).filter(Boolean))],
       assigned: picked.filter((slot) => isSlotAssigned(assignments, response.employee_id, slot)).length,
     };
   });
@@ -684,10 +806,13 @@ export function respondentSummary(windowRow, responses = [], employees = [], ass
  * מה שנבנה כאן הוא בדיוק שורות `work_assignments`, כי זו הטבלה שממנה מחושבים
  * גם היומן, גם התזכורות וגם השכר. אין כאן מסלול תשלום נפרד.
  *
+ * התפקיד בא מהמושב שאושר, לא מהטופס: הוא מה שקובע את התעריף בהסכם השכר, ולכן
+ * אותו עובד באותו ערב שווה סכום אחר כמפעיל קיר ואחר כעוזר מדריך.
+ *
  * @param {object} windowRow הטופס
- * @param {Array<{slot_id: string, employee_id: string}>} picks טיוטת השיבוץ
+ * @param {Array<{slot_id: string, employee_id: string, role: string}>} picks טיוטת השיבוץ
  * @param {object} options `assignments` — מה שכבר קיים ברוסטר, `today`
- * @returns {{ rows: Array<{assignment: object, slot: object}>, skipped: object[], error?: string }}
+ * @returns {{ rows: Array<{assignment: object, slot: object, role: string}>, skipped: object[], error?: string }}
  *   `rows` — מה שצריך להיווצר, כל אחד עם המשמרת שממנה נגזר (ההודעה לעובד
  *   צריכה את השם והשעות, ושורת רוסטר לא נושאת אותם); `skipped` — מי שכבר
  *   משובץ לאותה משמרת או שהמשמרת שלו כבר עברה.
@@ -703,7 +828,8 @@ export function planAssignments(windowRow, picks = [], { assignments = [], today
     const slot = slotsById.get(cleanText(pick?.slot_id, 60));
     const employeeId = cleanText(pick?.employee_id, 60);
     if (!slot || !employeeId) continue;
-    // אותו זוג פעמיים בטיוטה — לחיצה כפולה, לא שתי משמרות.
+    // אותו עובד באותה משמרת פעמיים — לחיצה כפולה, לא שתי משמרות. גם אם התפקיד
+    // שונה: אי אפשר לעבוד בשני תפקידים באותה שעה.
     const key = `${slot.id}|${employeeId}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -716,8 +842,15 @@ export function planAssignments(windowRow, picks = [], { assignments = [], today
       skipped.push({ slot_id: slot.id, employee_id: employeeId, reason: 'already' });
       continue;
     }
+    // תפקיד שהמשמרת לא צריכה אינו מושב. נופלים לתפקיד הראשון שהיא כן צריכה,
+    // כדי ששיבוץ לא ייווצר בלי תעריף.
+    const wanted = cleanText(pick?.role, 60);
+    const role = (slot.needs || []).some((need) => (need.role || '') === wanted)
+      ? wanted
+      : (slot.needs || [])[0]?.role || '';
     rows.push({
       slot,
+      role,
       assignment: {
         employee_id: employeeId,
         date: slot.date,
@@ -726,7 +859,7 @@ export function planAssignments(windowRow, picks = [], { assignments = [], today
         activity_id: slot.activity_id || null,
         group_id: slot.group_id || null,
         work_type: slot.work_type || windowRow.work_type || 'counter_shift',
-        role: windowRow.role || null,
+        role: role || null,
         source: 'shift_signup',
       },
     });
@@ -746,38 +879,37 @@ export function planWarnings(windowRow, picks = [], { responses = [], assignment
   const nameOf = (employeeId) => (employees || []).find((e) => e.id === employeeId)?.name
     || (responses || []).find((r) => r.employee_id === employeeId)?.employee_name
     || 'עובד/ת';
-  const perSlot = new Map();
+  const perSeat = new Map();
   const perEmployee = new Map();
 
   for (const pick of Array.isArray(picks) ? picks : []) {
     const slot = slotsById.get(String(pick?.slot_id || ''));
     const employeeId = String(pick?.employee_id || '');
     if (!slot || !employeeId) continue;
-    if (!perSlot.has(slot.id)) perSlot.set(slot.id, new Set());
-    perSlot.get(slot.id).add(employeeId);
+    const key = seatKey(slot.id, pick?.role);
+    if (!perSeat.has(key)) perSeat.set(key, { slot, role: pick?.role || '', ids: new Set() });
+    perSeat.get(key).ids.add(employeeId);
     perEmployee.set(employeeId, (perEmployee.get(employeeId) || 0) + 1);
   }
 
   const warnings = [];
-  for (const [slotId, employeeIds] of perSlot) {
-    const slot = slotsById.get(slotId);
-    // מי שכבר משובץ ברוסטר ואינו בטיוטה נספר גם הוא — אחרת משמרת שכבר מלאה
-    // תיראה פנויה, ושני אנשים יגיעו למקום של אחד.
-    const outside = (assignments || []).filter((row) => (
-      !employeeIds.has(String(row.employee_id))
-      && String(row.date || '').slice(0, 10) === slot.date
-      && (slot.activity_id
-        ? row.activity_id === slot.activity_id
-        : slot.group_id
-          ? row.group_id === slot.group_id
-          : !row.activity_id && !row.group_id && String(row.start_time || '').slice(0, 5) === slot.start_time)
-    )).length;
-    const total = employeeIds.size + outside;
-    if (total > slot.capacity) {
+  // האזהרה היא על המושב ולא על המשמרת: שלושה אנשים למשמרת שצריכה שלושה הם
+  // תקינים, אבל שלושתם כעוזרי מדריך ובלי מפעיל קיר אינם משמרת שאפשר לפתוח.
+  for (const { slot, role, ids } of perSeat.values()) {
+    const need = (slot.needs || []).find((n) => (n.role || '') === role);
+    if (!need) continue;
+    // מי שכבר משובץ ברוסטר בתפקיד הזה ואינו בטיוטה נספר גם הוא — אחרת מושב
+    // שכבר תפוס ייראה פנוי, ושני אנשים יגיעו למקום של אחד.
+    const outside = assignmentsForSlot(assignments, slot)
+      .filter((row) => !ids.has(String(row.employee_id)) && (row.role || '') === role)
+      .length;
+    const total = ids.size + outside;
+    if (total > need.count) {
       warnings.push({
         type: 'over_capacity',
-        slot_id: slotId,
-        text: `${whenText(slot)} — ${total} אנשים למשמרת שצריכה ${slot.capacity}`,
+        slot_id: slot.id,
+        role,
+        text: `${whenText(slot)}${role ? ` · ${role}` : ''} — ${total} אנשים למקום של ${need.count}`,
       });
     }
   }
@@ -811,13 +943,16 @@ export function whenText(slot = {}) {
  * אחת ולא אחת-לכל-משמרת: מי שקיבל ארבע משמרות ומקבל עליהן ארבע הודעות נפרדות
  * לא יודע מה סך הכול קיבל, וזו בדיוק השאלה שהוא שואל.
  */
-export function assignmentMessageText(windowRow, slots = []) {
-  const lines = (slots || [])
+export function assignmentMessageText(windowRow, seats = []) {
+  const lines = (seats || [])
     .slice()
-    .sort((a, b) => (a.date === b.date
-      ? String(a.start_time).localeCompare(String(b.start_time))
-      : String(a.date).localeCompare(String(b.date))))
-    .map((slot) => `• ${whenText(slot)}${slot.label ? ` · ${slot.label}` : ''}`);
+    .map((entry) => (entry?.slot ? entry : { slot: entry, role: '' }))
+    .sort((a, b) => (a.slot.date === b.slot.date
+      ? String(a.slot.start_time).localeCompare(String(b.slot.start_time))
+      : String(a.slot.date).localeCompare(String(b.slot.date))))
+    // התפקיד בשורה, כי הוא מה שהעובד צריך לדעת לפני שהוא מגיע: אותה שעה
+    // כמפעיל קיר וכעוזר מדריך היא לא אותה משמרת.
+    .map(({ slot, role }) => `• ${whenText(slot)}${slot.label ? ` · ${slot.label}` : ''}${role ? ` · ${role}` : ''}`);
   // שורה ריקה בין החלקים היא מה שהופך את זה להודעה ולא לגוש. `filter(Boolean)`
   // על מערך שורות היה בולע אותה, ולכן החלקים מורכבים בנפרד ורק אז מחוברים.
   const head = ['📋 השיבוץ שלך', windowRow?.title].filter(Boolean).join('\n');

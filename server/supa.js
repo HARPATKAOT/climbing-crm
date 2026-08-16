@@ -150,6 +150,10 @@ export const OPERATIONAL_TABLES = [
   // כי המבנה שלהם הוא מסמך אחד לכל טופס, בלי שאילתות חוצות-טפסים.
   'shift_signup_windows',
   'shift_signup_responses',
+  // כמה אנשים ובאילו תפקידים כל אירוע צריך. כאן ולא כעמודה על `activities`:
+  // זו טבלת SQL עם עמודות מפורשות, ושדה חדש שם דורש מיגרציה שאי אפשר להריץ
+  // מהסביבה הזאת — ורישום עמודה שאינה קיימת מפיל כל שמירה של אירוע.
+  'activity_staff_needs',
   'safety_inspections',
   'safety_incidents',
   'safety_check_types',

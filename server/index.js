@@ -37,6 +37,7 @@ import {
   eligibleEmployees,
   expandWeeklySlots,
   isWindowOpen,
+  normalizeNeeds,
   normalizeWindow,
   planAssignments,
   publicWindowView,
@@ -12807,6 +12808,16 @@ function allCatalogLabels(catalog) {
  * כפילויות נמחקות: אם השם החדש כבר קיים אצל אותו עובד (איחוד שני תפקידים
  * לאחד), הוא לא יופיע פעמיים.
  */
+/**
+ * מה כל אירוע צריך מבחינת כוח אדם: „מפעיל קיר אחד ושני עוזרי מדריך”.
+ *
+ * טבלה נפרדת ולא עמודה על `activities`, כי `activities` היא טבלת SQL עם עמודות
+ * מפורשות ואי אפשר להריץ מכאן מיגרציה — רישום עמודה שאינה קיימת היה מפיל כל
+ * שמירה של אירוע. השורה היא מסמך אחד לכל אירוע, וזה בדיוק מה שהאחסון התפעולי
+ * נועד לו. מזהה השורה הוא מזהה האירוע, כך שאין חיפוש ואין שתי שורות לאירוע אחד.
+ */
+const STAFF_NEEDS_TABLE = 'activity_staff_needs';
+
 function propagateRoleRename(from, to) {
   let touched = 0;
   for (const emp of db.get('employees') || []) {
@@ -12841,6 +12852,37 @@ function propagateRoleRename(from, to) {
   for (const row of db.get('work_assignments') || []) {
     if (row.role !== from) continue;
     db.update('work_assignments', row.id, { role: to });
+    touched += 1;
+  }
+  // צרכי האיוש של אירועים ושל טפסי המשמרות. בלי אלה שינוי שם תפקיד היה משאיר
+  // טופס שנשלח לצוות מבקש תפקיד שכבר לא קיים — מושב שאיש אינו מסומן בו, ולכן
+  // איש לא יכול לקחת אותו.
+  for (const row of db.get(STAFF_NEEDS_TABLE) || []) {
+    const needs = Array.isArray(row.needs) ? row.needs : [];
+    if (!needs.some((need) => need.role === from)) continue;
+    db.update(STAFF_NEEDS_TABLE, row.id, {
+      needs: needs.map((need) => (need.role === from ? { ...need, role: to } : need)),
+    });
+    touched += 1;
+  }
+  for (const win of db.get('shift_signup_windows') || []) {
+    const slots = Array.isArray(win.slots) ? win.slots : [];
+    if (!slots.some((slot) => (slot.needs || []).some((need) => need.role === from))) continue;
+    db.update('shift_signup_windows', win.id, {
+      slots: slots.map((slot) => ({
+        ...slot,
+        needs: (slot.needs || []).map((need) => (need.role === from ? { ...need, role: to } : need)),
+      })),
+    });
+    touched += 1;
+  }
+  // ומה שכבר נבחר בתשובות, אחרת סימון של עובד מצביע על מושב שאין לו שם.
+  for (const answer of db.get('shift_signup_responses') || []) {
+    const picks = Array.isArray(answer.picks) ? answer.picks : [];
+    if (!picks.some((pick) => pick.role === from)) continue;
+    db.update('shift_signup_responses', answer.id, {
+      picks: picks.map((pick) => (pick.role === from ? { ...pick, role: to } : pick)),
+    });
     touched += 1;
   }
   return touched;
@@ -14648,6 +14690,31 @@ app.delete('/api/work-assignments/:id', (req, res) => {
 
 const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
 
+function staffNeedsFor(activityId) {
+  const row = db.getOne(STAFF_NEEDS_TABLE, String(activityId || ''));
+  return Array.isArray(row?.needs) ? row.needs : [];
+}
+
+app.get('/api/activities/:id/staff-needs', (req, res) => {
+  res.json({ needs: staffNeedsFor(req.params.id) });
+});
+
+app.put('/api/activities/:id/staff-needs', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+  // רשימה ריקה היא „לפי סוג הפעילות” — מחיקה של ההגדרה, לא אפס אנשים.
+  const needs = normalizeNeeds(req.body?.needs, 0).filter((need) => need.role);
+  const existing = db.getOne(STAFF_NEEDS_TABLE, String(activity.id));
+  if (!needs.length) {
+    if (existing) db.delete(STAFF_NEEDS_TABLE, existing.id);
+    return res.json({ needs: [] });
+  }
+  const saved = existing
+    ? db.update(STAFF_NEEDS_TABLE, existing.id, { needs })
+    : db.insert(STAFF_NEEDS_TABLE, { id: String(activity.id), needs });
+  res.json({ needs: saved.needs });
+});
+
 /**
  * איזה תפקיד מתאים לאיזו רשומה ביומן — כפי שבורר המשמרות צריך לראות את זה.
  *
@@ -14677,8 +14744,10 @@ function signupWindowSummary(windowRow, responses, today, assignments = null) {
   return {
     id: windowRow.id,
     title: windowRow.title,
-    role: windowRow.role,
     work_type: windowRow.work_type,
+    // אילו תפקידים הטופס כולו מבקש — כותרת הרשימה, במקום התפקיד היחיד שהיה
+    // נעול על הטופס. נגזר מהמשמרות, כי שם הוא באמת נקבע.
+    roles: [...new Set(slots.flatMap((slot) => (slot.needs || []).map((n) => n.role)).filter(Boolean))],
     status: windowRow.status,
     deadline: windowRow.deadline || null,
     note: windowRow.note || '',
@@ -14719,16 +14788,24 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
   try {
     const [activities, groups, assignments] = await readTables('activities', 'groups', 'work_assignments');
     const catalog = await signupRoleCatalog();
+    // מה שהמנהל כתב על האירוע עצמו („מפעיל קיר אחד ושני עוזרים”) גובר על מה
+    // שסוג הפעילות מרמז. השורות נקראות פעם אחת ומחוברות לאירועים כאן, כדי
+    // שהמודול יישאר טהור ולא יידע על טבלאות.
+    const needsById = new Map(
+      (db.get(STAFF_NEEDS_TABLE) || []).map((row) => [String(row.id), row.needs])
+    );
+    const withNeeds = activities.map((activity) => (needsById.has(String(activity.id))
+      ? { ...activity, staff_needs: needsById.get(String(activity.id)) }
+      : activity));
+
     const { candidates, withoutHours, byType, error } = calendarSlotCandidates({
-      activities,
+      activities: withNeeds,
       groups,
       assignments,
       rolesByType: catalog.rolesByType,
       classRoles: catalog.classRoles,
-      role: req.query.role || '',
       from: req.query.from,
       to: req.query.to,
-      capacity: req.query.capacity,
       // רשימת סוגים מופרדת בפסיקים, כפי שהמסך מסמן אותם. ריק פירושו „הכל”,
       // כדי שקריאה ישנה בלי הפרמטר תמשיך להתנהג כמו קודם.
       types: String(req.query.types || '').split(',').map((t) => t.trim()).filter(Boolean),
@@ -14762,7 +14839,7 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
       respondents_detail: respondentSummary(windowRow, responses, employees, assignments),
       // מי שהטופס פונה אליו ועדיין לא ענה — השאלה הראשונה של כל מנהל שפתח
       // את הלוח ורואה ארבע תשובות במקום שבע.
-      pending: eligibleEmployees(employees, windowRow.role, windowRow.recipients)
+      pending: eligibleEmployees(employees, windowRow.recipients)
         .filter((person) => !answers.some((answer) => answer.employee_id === person.id)),
     });
   } catch (error) {
@@ -14799,7 +14876,7 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   const windowRow = db.getOne('shift_signup_windows', req.params.id);
   if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
   const employees = db.get('employees') || [];
-  const audience = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
+  const audience = eligibleEmployees(employees, windowRow.recipients);
   const only = Array.isArray(req.body?.employee_ids) && req.body.employee_ids.length
     ? new Set(req.body.employee_ids.map(String))
     : null;
@@ -14853,7 +14930,7 @@ app.post('/api/shift-signup/windows/:id/assign', async (req, res) => {
 
   const bySlots = new Map();
   const created = [];
-  for (const { assignment, slot } of rows) {
+  for (const { assignment, slot, role } of rows) {
     // מזהה מפורש: ברירת המחדל של `db.insert` היא חותמת זמן במילישניות, ולולאה
     // שכותבת חמש שורות ברצף מסיימת בתוך אותה מילישנייה — חמש שורות עם אותו id,
     // שדורסות זו את זו באחסון העמיד ונמחקות יחד.
@@ -14864,7 +14941,7 @@ app.post('/api/shift-signup/windows/:id/assign', async (req, res) => {
     created.push(record);
     const key = String(assignment.employee_id);
     if (!bySlots.has(key)) bySlots.set(key, []);
-    bySlots.get(key).push(slot);
+    bySlots.get(key).push({ slot, role });
   }
 
   // ההודעה יוצאת אחרי שהשורות כבר נשמרו: עובד שקיבל הודעה על משמרת שלא נרשמה
@@ -14897,12 +14974,14 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     const answers = responsesForWindow(responses, windowRow.id);
     res.json({
       ...publicWindowView(windowRow, answers),
-      eligible: eligibleEmployees(employees, windowRow.role, windowRow.recipients),
+      // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
+      // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
+      eligible: eligibleEmployees(employees, windowRow.recipients),
       // מה שכל אחד כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
       // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
       mine: answers.map((answer) => ({
         employee_id: answer.employee_id,
-        slot_ids: answer.slot_ids || [],
+        picks: answer.picks || [],
         wanted_count: answer.wanted_count || 0,
         note: answer.note || '',
       })),
@@ -14921,17 +15000,21 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // רק מי שהטופס פונה אליו יכול לענות: הקישור עובר בוואטסאפ ואפשר להעביר
     // אותו הלאה, ותשובה בשם מישהו אחר היא בדיוק מה שאסור שיקרה כאן.
     const employees = db.get('employees') || [];
-    const allowed = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
-    if (!allowed.some((person) => String(person.id) === String(req.body?.employee_id || ''))) {
+    const allowed = eligibleEmployees(employees, windowRow.recipients);
+    const employeeId = String(req.body?.employee_id || '');
+    if (!allowed.some((person) => String(person.id) === employeeId)) {
       return res.status(403).json({ error: 'השם הזה לא מופיע ברשימת הטופס' });
     }
 
-    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {});
+    // העובד עצמו נמסר לבדיקת הכשירות: מושב בתפקיד שהוא לא מסומן בו נדחה כאן,
+    // ולא רק מוסתר במסך — הקישור עובר בוואטסאפ ואפשר לשלוח בקשה בלי המסך.
+    const employee = employees.find((e) => String(e.id) === employeeId) || null;
+    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {}, { employee });
     if (error) return res.status(400).json({ error });
     const saved = existing
       ? db.update('shift_signup_responses', existing.id, record)
       : db.insert('shift_signup_responses', record);
-    res.status(existing ? 200 : 201).json({ success: true, picked: (saved.slot_ids || []).length });
+    res.status(existing ? 200 : 201).json({ success: true, picked: (saved.picks || []).length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -87,9 +87,8 @@ function TypeChips({ chips, selected, onChange, stats }) {
     const rows = (stats || []).filter((s) => chip.match.includes(s.id));
     return rows.reduce((acc, s) => ({
       total: acc.total + s.total,
-      blocked: acc.blocked + s.blocked_by_role,
       withoutHours: acc.withoutHours + s.without_hours,
-    }), { total: 0, blocked: 0, withoutHours: 0 });
+    }), { total: 0, withoutHours: 0 });
   };
   const isOn = (id) => (selected === null ? id !== CLASS_CHIP.id : selected.includes(id));
   const allIds = chips.map((c) => c.id);
@@ -118,18 +117,15 @@ function TypeChips({ chips, selected, onChange, stats }) {
         {chips.map((chip) => {
           const on = isOn(chip.id);
           const stat = statOf(chip);
-          const blocked = stat.total > 0 && stat.blocked === stat.total;
           const Icon = chip.id === CLASS_CHIP.id ? GraduationCap : activityTypeIcon(chip.id);
           return (
             <button
               type="button"
               key={chip.id}
               onClick={() => toggle(chip.id)}
-              title={blocked
-                ? `${stat.total} משמרות מהסוג הזה בטווח, אבל „${chip.label}” לא מאויש על ידי התפקיד שנבחר`
-                : chip.id === CLASS_CHIP.id
-                  ? 'כל החוגים בטווח, בלי אפשרות לבחור קבוצות מסוימות'
-                  : on ? `להסתיר ${chip.label}` : `להציג ${chip.label}`}
+              title={chip.id === CLASS_CHIP.id
+                ? 'כל החוגים בטווח, בלי אפשרות לבחור קבוצות מסוימות'
+                : on ? `להסתיר ${chip.label}` : `להציג ${chip.label}`}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
@@ -143,9 +139,7 @@ function TypeChips({ chips, selected, onChange, stats }) {
               <Icon size={13} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
               {chip.label}
               {stat.total > 0 && (
-                <span style={{ fontWeight: 500, opacity: blocked ? 0.7 : 0.85 }}>
-                  {blocked ? '· חסום לתפקיד' : `· ${stat.total}`}
-                </span>
+                <span style={{ fontWeight: 500, opacity: 0.85 }}>· {stat.total}</span>
               )}
             </button>
           );
@@ -158,23 +152,20 @@ function TypeChips({ chips, selected, onChange, stats }) {
 /**
  * מי מקבל את הקישור.
  *
- * ברירת המחדל היא כל מי שמסומן בתפקיד, כי זו התשובה הנכונה ברוב הפעמים ואסור
- * שהיא תדרוש סימון. אבל „כל מי שמסומן” הוא לא תמיד מי שרוצים: אחד בחופשה, אחד
- * חדש שעוד לא מוכן למשמרת לבד, ואחד שכבר סוכם איתו בעל פה. לכן אפשר לצמצם
- * לשמות — וברגע שנבחר שם אחד לפחות, הרשימה הזאת היא הטופס, לא התפקיד.
+ * ברירת המחדל היא כל הצוות, כי הטופס מציג לכל אחד רק את התפקידים שהוא מחזיק —
+ * אין סיבה לסנן מראש. אבל „כולם” הוא לא תמיד מי שרוצים: אחד בחופשה, אחד חדש
+ * שעוד לא מוכן למשמרת לבד. לכן אפשר לצמצם לשמות, והרשימה נפתחת מקופלת כדי שלא
+ * תשתלט על הטופס.
  */
-function RecipientPicker({ employees, role, value, onChange }) {
-  const byRole = useMemo(() => employees.filter((employee) => (
-    Array.isArray(employee.certifications) && employee.certifications.includes(role)
-  )), [employees, role]);
+function RecipientPicker({ employees, value, onChange }) {
+  const [open, setOpen] = useState(false);
   const explicit = value.length > 0;
-  const shown = explicit ? employees : byRole;
 
   const toggle = (id) => {
-    // המעבר מ„כולם” לרשימה מפורשת מתחיל ממי שבתפקיד פחות מי שהוסר — אחרת
-    // לחיצה אחת על שם אחד הייתה מבטלת בשקט את כל השאר.
+    // המעבר מ„כולם” לרשימה מפורשת מתחיל מכולם פחות מי שהוסר — אחרת לחיצה אחת
+    // על שם אחד הייתה מבטלת בשקט את כל השאר.
     if (!explicit) {
-      onChange(byRole.map((e) => e.id).filter((x) => x !== id));
+      onChange(employees.map((e) => e.id).filter((x) => x !== id));
       return;
     }
     onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
@@ -182,37 +173,38 @@ function RecipientPicker({ employees, role, value, onChange }) {
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span>למי לשלוח</span>
-        {explicit ? (
+        <span className="badge badge-blue">
+          {explicit ? `${value.length} נבחרו` : `כל הצוות (${employees.length})`}
+        </span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
+          {open ? 'סגירה' : 'בחירת שמות'}
+        </button>
+        {explicit && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange([])}>
-            <X size={12} /> חזרה לכל מי שבתפקיד
+            <X size={12} /> חזרה לכולם
           </button>
-        ) : (
-          <span className="badge badge-blue">כל מי שמסומן ב„{role}” ({byRole.length})</span>
         )}
       </div>
-      <div className="choice-row" style={{ maxHeight: 132, overflowY: 'auto' }}>
-        {shown.map((employee) => {
-          const on = explicit ? value.includes(employee.id) : true;
-          return (
-            <button
-              type="button"
-              key={employee.id}
-              className={`choice-pill ${on ? 'active' : ''}`}
-              style={{ '--choice-accent': '#A78BFA' }}
-              onClick={() => toggle(employee.id)}
-            >
-              {on ? <Check size={13} /> : <Square size={13} />} {employee.name}
-            </button>
-          );
-        })}
-        {shown.length === 0 && (
-          <span style={{ fontSize: 12, color: 'var(--amber)' }}>
-            אף עובד לא מסומן ב„{role}” — צריך לסמן את התפקיד בכרטיס העובד.
-          </span>
-        )}
-      </div>
+      {open && (
+        <div className="choice-row" style={{ maxHeight: 132, overflowY: 'auto', marginTop: 8 }}>
+          {employees.map((employee) => {
+            const on = explicit ? value.includes(employee.id) : true;
+            return (
+              <button
+                type="button"
+                key={employee.id}
+                className={`choice-pill ${on ? 'active' : ''}`}
+                style={{ '--choice-accent': '#A78BFA' }}
+                onClick={() => toggle(employee.id)}
+              >
+                {on ? <Check size={13} /> : <Square size={13} />} {employee.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -220,8 +212,10 @@ function RecipientPicker({ employees, role, value, onChange }) {
 // ─── יצירת טופס חדש ─────────────────────────────────────────────────────────
 function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   const [title, setTitle] = useState('');
-  const [role, setRole] = useState(roleOptions[0] || '');
   const [workType, setWorkType] = useState('counter_shift');
+  // התפקיד שדפוס שבועי מבקש. משמרות מהיומן נושאות את התפקידים שלהן מהאירוע,
+  // ורק משמרת שמוקלדת כאן צריכה שיגידו לה מה היא צריכה.
+  const [patternRole, setPatternRole] = useState(roleOptions[0] || '');
   const [from, setFrom] = useState(todayStr());
   const [to, setTo] = useState(addDays(todayStr(), 13));
   const [weekdays, setWeekdays] = useState([0]);
@@ -259,8 +253,8 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   }, [selectedTypes, typeChips]);
 
   useEffect(() => {
-    if (!role && roleOptions.length) setRole(roleOptions[0]);
-  }, [role, roleOptions]);
+    if (!patternRole && roleOptions.length) setPatternRole(roleOptions[0]);
+  }, [patternRole, roleOptions]);
 
   /** כל שינוי שמזיז את מה שייכנס לטופס מבטל תצוגה מוקדמת ישנה. */
   const resetPreview = () => {
@@ -287,7 +281,8 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from, to, weekdays, start_time: startTime, end_time: endTime, capacity,
+          from, to, weekdays, start_time: startTime, end_time: endTime,
+          needs: [{ role: patternRole, count: capacity }],
         }),
       });
       setSlots(body.slots || []);
@@ -299,21 +294,21 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     }
   };
 
-  /** מה שכבר קיים ביומן ומתאים לתפקיד שנבחר — לסימון, לא להקלדה. */
+  /** מה שכבר קיים ביומן, עם התפקידים שכל אירוע צריך — לסימון, לא להקלדה. */
   const loadFromCalendar = async () => {
     setError('');
     setBusy(true);
     try {
-      const query = new URLSearchParams({
-        role, from, to, capacity: String(capacity), types: wantedTypes.join(','),
-      });
+      const query = new URLSearchParams({ from, to, types: wantedTypes.join(',') });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
       setCandidates(body.candidates || []);
       setWithoutHours(body.withoutHours || 0);
       setByType(body.byType || []);
       // ברירת המחדל היא רק מה שעוד לא מאויש — כדי שלא יישלח לצוות טופס שרובו
       // משמרות שכבר סגורות.
-      setPickedIds((body.candidates || []).filter((c) => c.staffed < c.capacity).map((c) => c.id));
+      setPickedIds((body.candidates || [])
+        .filter((c) => c.staffed < (c.needs || []).reduce((sum, n) => sum + n.count, 0))
+        .map((c) => c.id));
     } catch (e) {
       setError(e.message);
       setCandidates(null);
@@ -335,21 +330,21 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   /**
    * למה הרשימה ריקה.
    *
-   * „אין משמרות” הוא כמעט תמיד שקר: יש משמרות, והתפקיד שנבחר פשוט לא מאייש
-   * אותן. זו בדיוק הטעות שגרמה למנהל לחשוב שהמסך קורא יומן אחר — הוא ביקש
-   * „עוזר מדריך”, ואחת-עשרה שעות פתיחה נעלמו בשקט כי הן מאוישות בהפעלת קיר.
+   * אין כאן עוד סינון לפי תפקיד, ולכן רשימה ריקה פירושה טווח ריק — וזה הדבר
+   * היחיד שרשימה ריקה צריכה לומר. מה שכן שווה לומר הוא איזה סוג כן יש בטווח
+   * וכבוי כרגע, כי זו הלחיצה שתחזיר תוצאות.
    */
   const emptyReason = useMemo(() => {
-    const blocked = (byType || []).filter((s) => s.blocked_by_role > 0);
-    if (blocked.length) {
-      const names = blocked
-        .map((s) => typeChips.find((c) => c.match.includes(s.id))?.label || s.id)
-        .filter((v, i, all) => all.indexOf(v) === i);
-      const shifts = blocked.reduce((sum, s) => sum + s.blocked_by_role, 0);
-      return `יש בטווח ${shifts} משמרות (${names.join(', ')}), אבל התפקיד „${role}” לא מאייש אותן. אפשר לשנות תפקיד, או לקבוע מי מאייש כל סוג במסך „תפקידים וסוגי פעילות”.`;
+    const offstage = (byType || [])
+      .filter((s) => s.total > 0)
+      .map((s) => typeChips.find((c) => c.match.includes(s.id)))
+      .filter((chip) => chip && !(selectedTypes === null ? chip.id !== CLASS_CHIP.id : selectedTypes.includes(chip.id)));
+    if (offstage.length) {
+      const names = [...new Set(offstage.map((c) => c.label))];
+      return `אין משמרות מהסוגים שסומנו. יש בטווח ${names.join(', ')} — אפשר להדליק אותם למעלה.`;
     }
-    return `אין ביומן משמרות בטווח הזה שמתאימות ל„${role}”.`;
-  }, [byType, typeChips, role]);
+    return 'אין ביומן משמרות בטווח התאריכים הזה.';
+  }, [byType, typeChips, selectedTypes]);
 
   const create = async () => {
     setError('');
@@ -359,7 +354,7 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, role, work_type: workType, note, deadline: deadline || null,
+          title, work_type: workType, note, deadline: deadline || null,
           recipients, slots: chosenSlots,
         }),
       });
@@ -387,21 +382,14 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
             placeholder="למשל: משמרות פתיחה — שבועיים הקרובים"
           />
         </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
-          למי הטופס פונה
-          <AppSelect
-            value={role}
-            onChange={(e) => {
-              setRole(e.target.value);
-              // רשימת השמות נגזרה מהתפקיד הקודם; להשאיר אותה אחרי החלפה פירושו
-              // לשלוח טופס „הפעלת קיר” בדיוק למי שנבחר בשביל „הדרכת חוג”.
-              setRecipients([]);
-              resetPreview();
-            }}
-          >
-            {roleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-          </AppSelect>
-        </label>
+        {source === 'pattern' && (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
+            איזה תפקיד המשמרת צריכה
+            <AppSelect value={patternRole} onChange={(e) => { setPatternRole(e.target.value); resetPreview(); }}>
+              {roleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+            </AppSelect>
+          </label>
+        )}
         {source === 'pattern' && (
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
             סוג המשמרת ביומן העבודה
@@ -420,7 +408,6 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
 
       <RecipientPicker
         employees={employees}
-        role={role}
         value={recipients}
         onChange={setRecipients}
       />
@@ -524,13 +511,14 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
             {candidates.length === 0
               ? emptyReason
-              : `${candidates.length} משמרות ביומן מתאימות ל„${role}”. סמנו מה להציע:`}
+              : `${candidates.length} משמרות ביומן. סמנו מה להציע לצוות:`}
             {withoutHours > 0 && ` (${withoutHours} רשומות ביומן בלי שעות — אי אפשר להציע אותן להרשמה)`}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
             {candidates.map((slot) => {
               const on = pickedIds.includes(slot.id);
-              const full = slot.staffed >= slot.capacity;
+              const wants = (slot.needs || []).reduce((sum, n) => sum + n.count, 0);
+              const full = slot.staffed >= wants;
               return (
                 <button
                   type="button"
@@ -550,6 +538,13 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
                   <span style={{ fontSize: 12, color: 'var(--text-3)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {slot.label}
                   </span>
+                  {/* מה המשמרת צריכה — זה מה שהצוות יראה, ולכן זה מה שכדאי
+                      לראות לפני שמחליטים להציע אותה. */}
+                  {(slot.needs || []).filter((n) => n.role).map((need) => (
+                    <span key={need.role} className="badge badge-gray">
+                      {need.role}{need.count > 1 ? ` ×${need.count}` : ''}
+                    </span>
+                  ))}
                   {slot.staffed > 0 && (
                     <span className={`badge ${full ? 'badge-green' : 'badge-amber'}`}>
                       {full ? 'מאויש' : `כבר ${slot.staffed}`}
@@ -644,12 +639,12 @@ function SignupBoard({ windowId, onChanged }) {
   const keyOf = (slotId, employeeId) => `${slotId}|${employeeId}`;
   const picked = useMemo(() => new Set(picks.map((p) => keyOf(p.slot_id, p.employee_id))), [picks]);
 
-  const togglePick = (slot, person) => {
+  const togglePick = (slot, seat, person) => {
     setResult(null);
     const key = keyOf(slot.id, person.employee_id);
     setPicks((current) => (picked.has(key)
       ? current.filter((p) => keyOf(p.slot_id, p.employee_id) !== key)
-      : [...current, { slot_id: slot.id, employee_id: person.employee_id }]));
+      : [...current, { slot_id: slot.id, employee_id: person.employee_id, role: seat.role }]));
   };
 
   /** ביטול שיבוץ קיים פועל מיד: הוא נוגע ביומן העבודה, לא בטיוטה. */
@@ -671,23 +666,27 @@ function SignupBoard({ windowId, onChanged }) {
   /**
    * אזהרות שנראות לפני האישור ולא אחריו. שתיהן חוקיות — חפיפה מכוונת, או
    * משמרת שסוכמה בטלפון — ולכן הן נאמרות ולא חוסמות.
+   *
+   * הספירה היא לפי מושב: שני עוזרים על מקום של אחד הם חריגה גם כשסך האנשים
+   * במשמרת תקין, וזה בדיוק המקרה שספירה לפי משמרת פספסה.
    */
   const warnings = useMemo(() => {
     if (!data) return [];
     const out = [];
     const perEmployee = new Map();
     for (const slot of data.board || []) {
-      const draft = (slot.signed || []).filter((p) => picked.has(keyOf(slot.id, p.employee_id))).length;
-      const already = (slot.signed || []).filter((p) => p.assigned).length;
-      if (draft + already > slot.capacity) {
-        out.push(`${dayLabel(slot.date)} ${slot.start_time} — ${draft + already} אנשים למשמרת שצריכה ${slot.capacity}`);
-      }
-      for (const person of slot.signed || []) {
-        if (!picked.has(keyOf(slot.id, person.employee_id)) && !person.assigned) continue;
-        const entry = perEmployee.get(person.employee_id)
-          || { name: person.name, wanted: person.wanted_count, count: 0 };
-        entry.count += 1;
-        perEmployee.set(person.employee_id, entry);
+      for (const seat of slot.seats || []) {
+        const draft = (seat.claimants || []).filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length;
+        if (seat.assigned + draft > seat.needed) {
+          out.push(`${dayLabel(slot.date)} ${slot.start_time}${seat.role ? ` · ${seat.role}` : ''} — ${seat.assigned + draft} אנשים למקום של ${seat.needed}`);
+        }
+        for (const person of seat.claimants || []) {
+          if (!picked.has(keyOf(slot.id, person.employee_id)) && !person.assigned) continue;
+          const entry = perEmployee.get(person.employee_id)
+            || { name: person.name, wanted: person.wanted_count, count: 0 };
+          entry.count += 1;
+          perEmployee.set(person.employee_id, entry);
+        }
       }
     }
     for (const entry of perEmployee.values()) {
@@ -735,9 +734,9 @@ function SignupBoard({ windowId, onChanged }) {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {(data.board || []).map((slot) => {
-          const draft = (slot.signed || []).filter((p) => picked.has(keyOf(slot.id, p.employee_id))).length;
-          const done = (slot.signed || []).filter((p) => p.assigned).length;
-          const full = done + draft >= slot.capacity;
+          const draft = (slot.seats || []).reduce((sum, seat) => sum + (seat.claimants || [])
+            .filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length, 0);
+          const full = slot.missing - draft <= 0;
           return (
             <div
               key={slot.id}
@@ -754,41 +753,64 @@ function SignupBoard({ windowId, onChanged }) {
                   )}
                 </div>
                 <span className={`badge ${full ? 'badge-green' : 'badge-amber'}`}>
-                  {done + draft} מתוך {slot.capacity}
-                  {draft > 0 ? ` (${draft} ממתינים לאישור)` : ''}
+                  {full ? 'מאויש' : `חסרים ${slot.missing - draft}`}
+                  {draft > 0 ? ` · ${draft} ממתינים לאישור` : ''}
                 </span>
               </div>
 
-              {slot.signed.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>אף אחד לא סימן את המשמרת הזו.</div>
-              ) : (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                  {slot.signed.map((person) => {
-                    const key = keyOf(slot.id, person.employee_id);
-                    const on = picked.has(key);
-                    return (
-                      <button
-                        type="button"
-                        key={person.employee_id}
-                        className={`btn btn-sm ${person.assigned ? 'btn-primary' : on ? 'btn-secondary' : 'btn-ghost'}`}
-                        disabled={busySlot === key || busy}
-                        title={person.assigned
-                          ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
-                          : `סימן ${person.picked_count} משמרות${person.wanted_count ? `, רוצה ${person.wanted_count}` : ''}`}
-                        onClick={() => (person.assigned ? unassign(slot, person) : togglePick(slot, person))}
+              {/* שורה לכל תפקיד. „שובצו 2 מתוך 3” לא אומר כלום כשהשלושה הם
+                  מפעיל קיר ושני עוזרים — שני עוזרים בלי מפעיל אינם משמרת. */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                {(slot.seats || []).map((seat) => {
+                  const seatDraft = (seat.claimants || [])
+                    .filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length;
+                  const seatFull = seat.assigned + seatDraft >= seat.needed;
+                  return (
+                    <div key={seat.role || 'any'} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <span
+                        className={`badge ${seatFull ? 'badge-green' : 'badge-amber'}`}
+                        style={{ minWidth: 118, justifyContent: 'center' }}
                       >
-                        {busySlot === key
-                          ? <Loader2 size={13} className="spin" />
-                          : person.assigned ? <Check size={13} /> : on ? <UserPlus size={13} /> : <Square size={13} />}
-                        {person.name}
-                        {person.wanted_count > 0 && !person.assigned && (
-                          <span style={{ fontSize: 10.5, opacity: 0.7 }}> ({person.wanted_count})</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+                        {seat.role || 'משמרת'} · {seat.assigned + seatDraft}/{seat.needed}
+                      </span>
+                      {(seat.claimants || []).length === 0 ? (
+                        <span style={{ fontSize: 12, color: 'var(--text-3)', alignSelf: 'center' }}>
+                          אף אחד לא ביקש את התפקיד הזה
+                        </span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+                          {seat.claimants.map((person) => {
+                            const key = keyOf(slot.id, person.employee_id);
+                            const on = picked.has(key);
+                            return (
+                              <button
+                                type="button"
+                                key={person.employee_id}
+                                className={`btn btn-sm ${person.assigned ? 'btn-primary' : on ? 'btn-secondary' : 'btn-ghost'}`}
+                                disabled={busySlot === key || busy}
+                                title={person.assigned
+                                  ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
+                                  : `ביקש ${person.picked_count} משמרות${person.wanted_count ? `, רוצה ${person.wanted_count}` : ''}`}
+                                onClick={() => (person.assigned
+                                  ? unassign(slot, person)
+                                  : togglePick(slot, seat, person))}
+                              >
+                                {busySlot === key
+                                  ? <Loader2 size={13} className="spin" />
+                                  : person.assigned ? <Check size={13} /> : on ? <UserPlus size={13} /> : <Square size={13} />}
+                                {person.name}
+                                {person.wanted_count > 0 && !person.assigned && (
+                                  <span style={{ fontSize: 10.5, opacity: 0.7 }}> ({person.wanted_count})</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           );
         })}
@@ -1016,7 +1038,8 @@ export default function ShiftSignupPanel() {
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                    {row.role} · {rangeLabel(row.first_date, row.last_date)} · {row.slot_count} משמרות
+                    {rangeLabel(row.first_date, row.last_date)} · {row.slot_count} משמרות
+                    {(row.roles || []).length > 0 && ` · ${row.roles.join(', ')}`}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

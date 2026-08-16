@@ -14,21 +14,35 @@ import {
   publicWindowView,
   signupBoard,
   slotId,
-  slotTickCounts,
+  seatTickCounts,
+  slotCapacity,
   respondentSummary,
   assignmentMessageText,
 } from './shiftSignup.js';
 
 const TODAY = '2026-08-10';
 
+const WALL = 'הפעלת קיר';
+const ASSISTANT = 'עוזר מדריך';
+
 function windowFixture(overrides = {}) {
   const { window: row, error } = normalizeWindow({
     title: 'משמרות פתיחה',
-    role: 'עוזר מדריך',
     work_type: 'counter_shift',
     slots: [
-      { date: '2026-08-11', start_time: '15:30', end_time: '18:00', capacity: 2 },
-      { date: '2026-08-12', start_time: '15:30', end_time: '18:00', capacity: 1 },
+      // משמרת פתיחה אמיתית: מפעיל קיר אחד ועוזר אחד, לא „שניים”.
+      {
+        date: '2026-08-11',
+        start_time: '15:30',
+        end_time: '18:00',
+        needs: [{ role: WALL, count: 1 }, { role: ASSISTANT, count: 1 }],
+      },
+      {
+        date: '2026-08-12',
+        start_time: '15:30',
+        end_time: '18:00',
+        needs: [{ role: WALL, count: 1 }],
+      },
     ],
     ...overrides,
   });
@@ -36,10 +50,39 @@ function windowFixture(overrides = {}) {
   return { ...row, id: 'w1' };
 }
 
-test('a window needs a name, a role and at least one shift', () => {
-  assert.match(normalizeWindow({ role: 'עוזר מדריך', slots: [] }).error, /שם/);
-  assert.match(normalizeWindow({ title: 'א', slots: [] }).error, /תפקיד/);
-  assert.match(normalizeWindow({ title: 'א', role: 'עוזר מדריך', slots: [] }).error, /משמרת אחת/);
+test('a window needs a name and at least one shift — but no longer a role', () => {
+  assert.match(normalizeWindow({ slots: [] }).error, /שם/);
+  assert.match(normalizeWindow({ title: 'א', slots: [] }).error, /משמרת אחת/);
+  // התפקיד ירד מהטופס: הוא יושב על המשמרת, ולכן טופס בלי תפקיד הוא תקין.
+  const { window: row, error } = normalizeWindow({
+    title: 'א',
+    slots: [{ date: '2026-08-11', start_time: '15:30', end_time: '18:00' }],
+  });
+  assert.equal(error, undefined);
+  assert.equal(row.role, undefined);
+});
+
+test('a shift with no roles named still asks for someone', () => {
+  const { window: row } = normalizeWindow({
+    title: 'א',
+    slots: [{ date: '2026-08-11', start_time: '15:30', end_time: '18:00', capacity: 3 }],
+  });
+  // תפקיד ריק פירושו „מי שמתאים”, והספירה הישנה נשמרת כמספר האנשים.
+  assert.deepEqual(row.slots[0].needs, [{ role: '', count: 3 }]);
+  assert.equal(slotCapacity(row.slots[0]), 3);
+});
+
+test('the same role twice in one shift is one count, not two seats', () => {
+  const { window: row } = normalizeWindow({
+    title: 'א',
+    slots: [{
+      date: '2026-08-11',
+      start_time: '15:30',
+      end_time: '18:00',
+      needs: [{ role: ASSISTANT, count: 1 }, { role: ASSISTANT, count: 2 }],
+    }],
+  });
+  assert.deepEqual(row.slots[0].needs, [{ role: ASSISTANT, count: 3 }]);
 });
 
 test('a shift with the end before the start is rejected', () => {
@@ -91,11 +134,13 @@ test('a weekly pattern expands into the concrete dates in range', () => {
     weekdays: [0, 2],
     start_time: '15:30',
     end_time: '18:00',
-    capacity: 2,
+    needs: [{ role: WALL, count: 1 }, { role: ASSISTANT, count: 1 }],
   });
   assert.equal(error, undefined);
   assert.deepEqual(slots.map((s) => s.date), ['2026-08-11', '2026-08-16', '2026-08-18', '2026-08-23']);
-  assert.equal(slots[0].capacity, 2);
+  // הדפוס נושא את אותם תפקידים לכל תאריך: „כל ראשון ושלישי, מפעיל ועוזר”.
+  assert.deepEqual(slots[0].needs, [{ role: WALL, count: 1 }, { role: ASSISTANT, count: 1 }]);
+  assert.equal(slotCapacity(slots[0]), 2);
   assert.equal(slots[0].id, slotId('2026-08-11', '15:30'));
 });
 
@@ -122,78 +167,134 @@ test('the public form hides shifts that already happened', () => {
   assert.deepEqual(view.slots.map((s) => s.date), ['2026-08-12']);
 });
 
-test('the public form shows how many already ticked each shift', () => {
+test('the public form counts claims per seat, not per shift', () => {
   const row = windowFixture();
   const responses = [
-    { window_id: 'w1', employee_id: 'e1', slot_ids: [row.slots[0].id] },
-    { window_id: 'w1', employee_id: 'e2', slot_ids: [row.slots[0].id, row.slots[1].id] },
-    { window_id: 'other', employee_id: 'e3', slot_ids: [row.slots[0].id] },
+    { window_id: 'w1', employee_id: 'e1', picks: [{ slot_id: row.slots[0].id, role: WALL }] },
+    { window_id: 'w1', employee_id: 'e2', picks: [{ slot_id: row.slots[0].id, role: ASSISTANT }] },
+    { window_id: 'w1', employee_id: 'e3', picks: [{ slot_id: row.slots[0].id, role: ASSISTANT }] },
   ];
-  const counts = slotTickCounts(row, responses.filter((r) => r.window_id === 'w1'));
-  assert.equal(counts.get(row.slots[0].id), 2);
-  assert.equal(counts.get(row.slots[1].id), 1);
-  assert.equal(publicWindowView(row, responses.filter((r) => r.window_id === 'w1'), TODAY).slots[0].taken, 2);
+  const counts = seatTickCounts(row, responses);
+  // שלושה ביקשו את אותה משמרת, אבל אחד למקום של המפעיל ושניים למקום העוזר.
+  assert.equal(counts.get(`${row.slots[0].id}|${WALL}`), 1);
+  assert.equal(counts.get(`${row.slots[0].id}|${ASSISTANT}`), 2);
+  const view = publicWindowView(row, responses, TODAY);
+  assert.deepEqual(view.slots[0].needs.map((n) => [n.role, n.taken]), [[WALL, 1], [ASSISTANT, 2]]);
 });
 
-test('a full shift can still be ticked — the extra name is the reserve', () => {
+test('a full seat can still be claimed — the extra name is the reserve', () => {
   const row = windowFixture();
   const responses = [
-    { window_id: 'w1', employee_id: 'e1', slot_ids: [row.slots[1].id] },
+    { window_id: 'w1', employee_id: 'e1', picks: [{ slot_id: row.slots[1].id, role: WALL }] },
   ];
   const { record, error } = applyResponse(
     row,
     responses,
-    { employee_id: 'e2', slot_ids: [row.slots[1].id] },
+    { employee_id: 'e2', picks: [{ slot_id: row.slots[1].id, role: WALL }] },
     { today: TODAY }
   );
   assert.equal(error, undefined);
-  assert.deepEqual(record.slot_ids, [row.slots[1].id]);
+  assert.deepEqual(record.picks, [{ slot_id: row.slots[1].id, role: WALL }]);
 });
 
 test('a second submission replaces the first instead of adding a row', () => {
   const row = windowFixture();
   const responses = [
-    { id: 'r1', window_id: 'w1', employee_id: 'e1', slot_ids: [row.slots[0].id], note: 'ישן' },
+    { id: 'r1', window_id: 'w1', employee_id: 'e1', picks: [{ slot_id: row.slots[0].id, role: WALL }], note: 'ישן' },
   ];
   const { record, existing } = applyResponse(
     row,
     responses,
-    { employee_id: 'e1', slot_ids: [row.slots[1].id], note: 'חדש' },
+    { employee_id: 'e1', picks: [{ slot_id: row.slots[1].id, role: WALL }], note: 'חדש' },
     { today: TODAY }
   );
   assert.equal(existing.id, 'r1');
   assert.equal(record.id, 'r1');
-  assert.deepEqual(record.slot_ids, [row.slots[1].id]);
+  assert.deepEqual(record.picks, [{ slot_id: row.slots[1].id, role: WALL }]);
   assert.equal(record.note, 'חדש');
 });
 
-test('ticking nothing is stored as an answer, not as silence', () => {
+test('claiming nothing is stored as an answer, not as silence', () => {
   const row = windowFixture();
   const { record, cleared, error } = applyResponse(
     row,
     [],
-    { employee_id: 'e1', slot_ids: [] },
+    { employee_id: 'e1', picks: [] },
     { today: TODAY }
   );
   assert.equal(error, undefined);
   assert.equal(cleared, true);
-  assert.deepEqual(record.slot_ids, []);
+  assert.deepEqual(record.picks, []);
 });
 
-test('shifts that are not in the window, or already past, are dropped from a submission', () => {
+test('a claim on a shift not in the window, or already past, is dropped', () => {
   const row = windowFixture();
   const { record } = applyResponse(
     row,
     [],
-    { employee_id: 'e1', slot_ids: [row.slots[0].id, row.slots[1].id, 'made-up@10:00'] },
+    {
+      employee_id: 'e1',
+      picks: [
+        { slot_id: row.slots[0].id, role: WALL },
+        { slot_id: row.slots[1].id, role: WALL },
+        { slot_id: 'made-up@10:00', role: WALL },
+      ],
+    },
     { today: '2026-08-12' }
   );
-  assert.deepEqual(record.slot_ids, [row.slots[1].id]);
+  assert.deepEqual(record.picks, [{ slot_id: row.slots[1].id, role: WALL }]);
+});
+
+test('a role the shift does not need is not a seat', () => {
+  const row = windowFixture();
+  const { record } = applyResponse(
+    row,
+    [],
+    // המשמרת השנייה צריכה מפעיל קיר בלבד; „עוזר מדריך” אינו מושב שלה.
+    { employee_id: 'e1', picks: [{ slot_id: row.slots[1].id, role: ASSISTANT }] },
+    { today: TODAY }
+  );
+  assert.deepEqual(record.picks, []);
+});
+
+test('a role the employee is not marked for is refused, not just hidden', () => {
+  const row = windowFixture();
+  const { record } = applyResponse(
+    row,
+    [],
+    {
+      employee_id: 'e1',
+      picks: [
+        { slot_id: row.slots[0].id, role: WALL },
+        { slot_id: row.slots[1].id, role: WALL },
+      ],
+    },
+    { today: TODAY, employee: { id: 'e1', certifications: [ASSISTANT] } }
+  );
+  // הקישור עובר בוואטסאפ; בקשה שנשלחה בלי המסך חייבת להיחסם בשרת.
+  assert.deepEqual(record.picks, []);
+});
+
+test('one person cannot hold two roles in the same hour', () => {
+  const row = windowFixture();
+  const { record } = applyResponse(
+    row,
+    [],
+    {
+      employee_id: 'e1',
+      picks: [
+        { slot_id: row.slots[0].id, role: WALL },
+        { slot_id: row.slots[0].id, role: ASSISTANT },
+      ],
+    },
+    { today: TODAY }
+  );
+  assert.deepEqual(record.picks, [{ slot_id: row.slots[0].id, role: WALL }]);
 });
 
 test('a closed window refuses submissions', () => {
   const row = windowFixture({ status: 'closed' });
-  const { error } = applyResponse({ ...row, id: 'w1' }, [], { employee_id: 'e1', slot_ids: [] }, { today: TODAY });
+  const { error } = applyResponse({ ...row, id: 'w1' }, [], { employee_id: 'e1', picks: [] }, { today: TODAY });
   assert.match(error, /נסגרה/);
 });
 
@@ -216,22 +317,51 @@ const CALENDAR = [
   { id: 'a6', name: 'אירוע בלי שעות', type: 'event', date: '2026-08-12', all_day: true },
 ];
 
-test('calendar candidates only offer types the role is allowed to staff', () => {
+test('nothing is removed for a role any more — the whole range comes back', () => {
   const { candidates } = calendarSlotCandidates({
     activities: CALENDAR,
     rolesByType: ROLES_BY_TYPE,
     classRoles: CLASS_ROLES,
-    role: 'הפעלת קיר',
     from: '2026-08-10',
     to: '2026-08-14',
   });
-  assert.deepEqual(candidates.map((c) => c.label), ['פתיחת קיר']);
-  assert.equal(candidates[0].activity_id, 'a2');
-  assert.equal(candidates[0].work_type, 'counter_shift');
-  // The candidate already carries the id the stored slot will have, so a tick
-  // in the picker survives into the form unchanged.
-  const { window: row } = normalizeWindow({ title: 'א', role: 'הפעלת קיר', slots: candidates });
+  // זה מה שהיה שבור: „הפעלת קיר” החזיר משמרת אחת מתוך שלוש, ורשימה ריקה נראתה
+  // כמו יומן ריק. עכשיו כולן חוזרות, וכל אחת אומרת מה היא צריכה.
+  assert.deepEqual(candidates.map((c) => c.label), ['יום הולדת לנועם', 'סבב מסלולים', 'פתיחת קיר']);
+  const opening = candidates.find((c) => c.activity_id === 'a2');
+  assert.deepEqual(opening.needs, [{ role: 'הפעלת קיר', count: 1 }]);
+  // המועמד כבר נושא את המזהה שתהיה לו המשמרת השמורה, כך שסימון שורד את היצירה.
+  const { window: row } = normalizeWindow({ title: 'א', slots: candidates });
   assert.deepEqual(row.slots.map((s) => s.id), candidates.map((c) => c.id));
+});
+
+test('what the manager wrote on the event beats what its type implies', () => {
+  const { candidates } = calendarSlotCandidates({
+    activities: [{
+      ...CALENDAR[1],
+      staff_needs: [{ role: 'הפעלת קיר', count: 1 }, { role: 'עוזר מדריך', count: 2 }],
+    }],
+    rolesByType: ROLES_BY_TYPE,
+    from: '2026-08-10',
+    to: '2026-08-14',
+  });
+  assert.deepEqual(candidates[0].needs, [
+    { role: 'הפעלת קיר', count: 1 },
+    { role: 'עוזר מדריך', count: 2 },
+  ]);
+  assert.equal(slotCapacity(candidates[0]), 3);
+});
+
+test('an event with no needs and an unmapped type is offered to whoever fits', () => {
+  const { candidates } = calendarSlotCandidates({
+    activities: [{ id: 'x1', name: 'משהו', type: 'other', date: '2026-08-11', start_time: '10:00', end_time: '12:00' }],
+    rolesByType: ROLES_BY_TYPE,
+    from: '2026-08-10',
+    to: '2026-08-14',
+  });
+  // תפקיד ריק ולא רשימה ריקה: עדיף להציע משמרת בלי לדעת מה היא צריכה מאשר
+  // לא להציע אותה בכלל.
+  assert.deepEqual(candidates[0].needs, [{ role: '', count: 1 }]);
 });
 
 // ─── סינון לפי סוג פעילות ────────────────────────────────────────────────────
@@ -284,18 +414,16 @@ test('classes come only when their own chip is on', () => {
   assert.deepEqual(on.candidates.map((c) => c.label), ['כיתות ג-ד', 'בוגרים']);
 });
 
-test('a type the role cannot staff reports why it is empty', () => {
+test('asking for opening hours now returns the opening hours', () => {
   const { candidates, byType } = calendarSlotCandidates({
     activities: CALENDAR, groups: [],
     rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
-    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    from: '2026-08-10', to: '2026-08-14',
     types: ['opening_hours'],
   });
-  assert.equal(candidates.length, 0);
-  const opening = byType.find((s) => s.id === 'opening_hours');
-  // The shift is there and the range does hold it — the role is what removed it.
-  assert.equal(opening.total, 1);
-  assert.equal(opening.blocked_by_role, 1);
+  // הרגרסיה של התלונה: קודם זה החזיר אפס.
+  assert.deepEqual(candidates.map((c) => c.label), ['פתיחת קיר']);
+  assert.equal(byType.find((s) => s.id === 'opening_hours').total, 1);
 });
 
 test('the counts describe the range, not the filtered result', () => {
@@ -357,11 +485,12 @@ test('a route-building entry becomes a route-building shift, not a counter one',
     activities: CALENDAR,
     rolesByType: ROLES_BY_TYPE,
     classRoles: CLASS_ROLES,
-    role: 'בונה מסלולים',
     from: '2026-08-10',
     to: '2026-08-14',
+    types: ['route_building'],
   });
   assert.deepEqual(candidates.map((c) => c.work_type), ['route_building_shift']);
+  assert.deepEqual(candidates[0].needs, [{ role: 'בונה מסלולים', count: 1 }]);
 });
 
 test('cancelled entries, vacations and entries without hours are not offered', () => {
@@ -369,9 +498,9 @@ test('cancelled entries, vacations and entries without hours are not offered', (
     activities: CALENDAR,
     rolesByType: ROLES_BY_TYPE,
     classRoles: CLASS_ROLES,
-    role: 'עוזר מדריך',
     from: '2026-08-10',
     to: '2026-08-14',
+    types: ['event'],
   });
   assert.deepEqual(candidates.map((c) => c.label), ['יום הולדת לנועם']);
   // The all-day entry is reported rather than silently dropped.
@@ -421,33 +550,33 @@ test('a class is not offered on a training vacation', () => {
   assert.deepEqual(candidates.map((c) => c.date), ['2026-08-18']);
 });
 
-test('classes are not offered to a role that does not teach', () => {
+test('a class asks for the role that teaches it', () => {
   const { candidates } = calendarSlotCandidates({
     groups: [{ id: 'g1', name: 'חוג', day: 2, time: '16:00', duration: 50 }],
     rolesByType: ROLES_BY_TYPE,
     classRoles: CLASS_ROLES,
-    role: 'בונה מסלולים',
     from: '2026-08-10',
     to: '2026-08-20',
   });
-  assert.equal(candidates.length, 0);
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(candidates[0].needs, [{ role: 'הדרכת חוג', count: 1 }]);
 });
 
-test('a candidate reports how many are already placed on it in that role', () => {
+test('a candidate reports how many are already placed on it', () => {
   const { candidates } = calendarSlotCandidates({
     activities: CALENDAR,
     rolesByType: ROLES_BY_TYPE,
     classRoles: CLASS_ROLES,
-    role: 'עוזר מדריך',
     from: '2026-08-10',
     to: '2026-08-14',
+    types: ['event'],
     assignments: [
       { employee_id: 'e1', activity_id: 'a1', date: '2026-08-11', role: 'עוזר מדריך' },
-      // Same day, different role — belongs to someone else's count.
       { employee_id: 'e2', activity_id: 'a1', date: '2026-08-11', role: 'הדרכת חוג' },
     ],
   });
-  assert.equal(candidates[0].staffed, 1);
+  // שניהם נספרים: המשמרת צריכה את שני התפקידים, ומי שממלא אחד מהם תופס מקום.
+  assert.equal(candidates[0].staffed, 2);
 });
 
 test('two classes at the same hour stay two separate shifts', () => {
@@ -474,17 +603,19 @@ test('a placement is matched by what it staffs, not by the clock', () => {
   assert.equal(findSlotAssignment(assignments, 'e1', slot).id, 'w1');
 });
 
-test('only active staff marked for the role are offered the form', () => {
+test('the form goes to the whole team, each carrying their own roles', () => {
   const employees = [
     { id: 'e1', name: 'דנה', certifications: ['עוזר מדריך'] },
     { id: 'e2', name: 'יואב', certifications: ['הדרכת חוג'] },
     { id: 'e3', name: 'אורי', certifications: ['עוזר מדריך'], is_active: false },
     { id: 'e4', name: 'בר', certifications: ['עוזר מדריך', 'הדרכת חוג'] },
   ];
-  assert.deepEqual(
-    eligibleEmployees(employees, 'עוזר מדריך').map((e) => e.name),
-    ['בר', 'דנה']
-  );
+  const offered = eligibleEmployees(employees);
+  // הארכיון בחוץ, כל השאר בפנים — גם מי שאין לו את התפקיד שהמשמרת הראשונה
+  // צריכה, כי אולי יש לו את התפקיד של המשמרת השלישית.
+  assert.deepEqual(offered.map((e) => e.name), ['בר', 'דנה', 'יואב']);
+  // התפקידים נוסעים איתם, כי המסך מציג לכל אחד רק את המושבים שהוא יכול לקחת.
+  assert.deepEqual(offered.find((e) => e.name === 'בר').roles, ['עוזר מדריך', 'הדרכת חוג']);
 });
 
 test('a placement on the roster marks the tick as assigned', () => {
@@ -498,65 +629,80 @@ test('a placement on the roster marks the tick as assigned', () => {
   assert.equal(isSlotAssigned(assignments, 'e2', slot), false);
 });
 
-test('the board shows who offered, who is placed and how many are still missing', () => {
+test('the board is one row per seat, not one per shift', () => {
   const row = windowFixture();
   const responses = [
-    { window_id: 'w1', employee_id: 'e1', slot_ids: [row.slots[0].id], submitted_at: '2026-08-10T08:00:00.000Z' },
-    { window_id: 'w1', employee_id: 'e2', slot_ids: [row.slots[0].id], submitted_at: '2026-08-10T09:00:00.000Z' },
+    { window_id: 'w1', employee_id: 'e1', picks: [{ slot_id: row.slots[0].id, role: WALL }], submitted_at: '2026-08-10T08:00:00.000Z' },
+    { window_id: 'w1', employee_id: 'e2', picks: [{ slot_id: row.slots[0].id, role: ASSISTANT }], submitted_at: '2026-08-10T09:00:00.000Z' },
+    { window_id: 'w1', employee_id: 'e3', picks: [{ slot_id: row.slots[0].id, role: ASSISTANT }], submitted_at: '2026-08-10T10:00:00.000Z' },
   ];
-  const employees = [{ id: 'e1', name: 'דנה' }, { id: 'e2', name: 'יואב' }];
-  const assignments = [{ employee_id: 'e1', date: '2026-08-11', start_time: '15:30' }];
+  const employees = [{ id: 'e1', name: 'דנה' }, { id: 'e2', name: 'יואב' }, { id: 'e3', name: 'נועה' }];
+  const assignments = [{ employee_id: 'e1', date: '2026-08-11', start_time: '15:30', role: WALL }];
   const board = signupBoard(row, responses, employees, assignments);
 
-  assert.deepEqual(board[0].signed.map((s) => s.name), ['דנה', 'יואב']);
-  assert.equal(board[0].signed[0].assigned, true);
-  assert.equal(board[0].signed[1].assigned, false);
-  // Two people are needed and one is placed, so one is still missing.
+  const [wallSeat, assistantSeat] = board[0].seats;
+  assert.equal(wallSeat.role, WALL);
+  assert.deepEqual(wallSeat.claimants.map((c) => c.name), ['דנה']);
+  assert.equal(wallSeat.claimants[0].assigned, true);
+  assert.equal(wallSeat.missing, 0);
+  // שניים ביקשו את מקום העוזר וצריך אחד — בדיוק ההחלטה שהמנהל בא לקבל.
+  assert.deepEqual(assistantSeat.claimants.map((c) => c.name), ['יואב', 'נועה']);
+  assert.equal(assistantSeat.needed, 1);
+  assert.equal(assistantSeat.missing, 1);
   assert.equal(board[0].missing, 1);
-  assert.equal(board[1].signed.length, 0);
-  assert.equal(board[1].missing, 1);
+});
+
+test('someone placed from the calendar counts even though they never answered', () => {
+  const row = windowFixture();
+  const board = signupBoard(row, [], [], [
+    { employee_id: 'e9', date: '2026-08-12', start_time: '15:30', role: WALL },
+  ]);
+  // משמרת שנראית ריקה כי השיבוץ נעשה ביומן היא מלכודת.
+  assert.equal(board[1].seats[0].assigned, 1);
+  assert.equal(board[1].missing, 0);
 });
 
 test('the board falls back to the name kept on the answer when the employee is gone', () => {
   const row = windowFixture();
   const responses = [
-    { window_id: 'w1', employee_id: 'gone', employee_name: 'עובד שהוסר', slot_ids: [row.slots[0].id] },
+    { window_id: 'w1', employee_id: 'gone', employee_name: 'עובד שהוסר', picks: [{ slot_id: row.slots[0].id, role: WALL }] },
   ];
-  assert.equal(signupBoard(row, responses, [], [])[0].signed[0].name, 'עובד שהוסר');
+  assert.equal(signupBoard(row, responses, [], [])[0].seats[0].claimants[0].name, 'עובד שהוסר');
 });
 
-test('the respondent list counts what each person is still waiting to hear about', () => {
+test('the respondent list says which roles each person offered to cover', () => {
   const row = windowFixture();
   const responses = [
-    { window_id: 'w1', employee_id: 'e1', slot_ids: [row.slots[0].id, row.slots[1].id] },
+    {
+      window_id: 'w1',
+      employee_id: 'e1',
+      picks: [{ slot_id: row.slots[0].id, role: WALL }, { slot_id: row.slots[1].id, role: WALL }],
+    },
   ];
   const summary = respondentSummary(row, responses, [{ id: 'e1', name: 'דנה' }], [
     { employee_id: 'e1', date: '2026-08-11', start_time: '15:30' },
   ]);
   assert.equal(summary[0].picked, 2);
   assert.equal(summary[0].assigned, 1);
+  assert.deepEqual(summary[0].roles, [WALL]);
 });
 
 // ─── נמענים מפורשים ─────────────────────────────────────────────────────────
 
-test('a named recipient list overrides the role', () => {
+test('a named recipient list narrows the audience', () => {
   const employees = [
-    { id: 'e1', name: 'דנה', certifications: ['עוזר מדריך'] },
-    { id: 'e2', name: 'יואב', certifications: ['עוזר מדריך'] },
-    // אין לו את התפקיד, ובכל זאת המנהל בחר בו במפורש.
+    { id: 'e1', name: 'דנה', certifications: [ASSISTANT] },
+    { id: 'e2', name: 'יואב', certifications: [ASSISTANT] },
     { id: 'e3', name: 'נועה', certifications: [] },
   ];
-  assert.deepEqual(
-    eligibleEmployees(employees, 'עוזר מדריך', ['e2', 'e3']).map((e) => e.id),
-    ['e2', 'e3']
-  );
-  // רשימה ריקה חוזרת להתנהגות לפי תפקיד.
-  assert.deepEqual(eligibleEmployees(employees, 'עוזר מדריך', []).map((e) => e.id), ['e1', 'e2']);
+  assert.deepEqual(eligibleEmployees(employees, ['e2', 'e3']).map((e) => e.id), ['e2', 'e3']);
+  // רשימה ריקה פירושה כל הצוות.
+  assert.deepEqual(eligibleEmployees(employees, []).map((e) => e.id), ['e1', 'e2', 'e3']);
 });
 
 test('an archived employee is never offered the form, even when named', () => {
-  const employees = [{ id: 'e1', name: 'דנה', is_active: false, certifications: ['עוזר מדריך'] }];
-  assert.deepEqual(eligibleEmployees(employees, 'עוזר מדריך', ['e1']), []);
+  const employees = [{ id: 'e1', name: 'דנה', is_active: false, certifications: [ASSISTANT] }];
+  assert.deepEqual(eligibleEmployees(employees, ['e1']), []);
 });
 
 test('recipients survive an edit that does not mention them', () => {
@@ -567,11 +713,11 @@ test('recipients survive an edit that does not mention them', () => {
 
 // ─── כמה משמרות אני רוצה ────────────────────────────────────────────────────
 
-test('the wanted count cannot exceed what was actually ticked', () => {
+test('the wanted count cannot exceed what was actually claimed', () => {
   const row = windowFixture();
   const { record } = applyResponse(row, [], {
     employee_id: 'e1',
-    slot_ids: [row.slots[0].id],
+    picks: [{ slot_id: row.slots[0].id, role: WALL }],
     wanted_count: 5,
   }, { today: TODAY });
   assert.equal(record.wanted_count, 1);
@@ -581,7 +727,10 @@ test('an unanswered wanted count is zero, not one', () => {
   const row = windowFixture();
   const { record } = applyResponse(row, [], {
     employee_id: 'e1',
-    slot_ids: [row.slots[0].id, row.slots[1].id],
+    picks: [
+      { slot_id: row.slots[0].id, role: WALL },
+      { slot_id: row.slots[1].id, role: WALL },
+    ],
     wanted_count: '',
   }, { today: TODAY });
   assert.equal(record.wanted_count, 0);
@@ -589,17 +738,17 @@ test('an unanswered wanted count is zero, not one', () => {
 
 // ─── אישור השיבוצים ─────────────────────────────────────────────────────────
 
-test('picks become roster rows carrying what the shift staffs', () => {
+test('an approved seat becomes a roster row carrying its role', () => {
   const row = windowFixture({
     slots: [{
-      date: '2026-08-11', start_time: '15:30', end_time: '18:00', capacity: 2,
+      date: '2026-08-11', start_time: '15:30', end_time: '18:00',
+      needs: [{ role: 'בונה מסלולים', count: 2 }],
       activity_id: 'a1', work_type: 'route_building_shift', label: 'בניית מסלולים',
     }],
   });
-  const { rows } = planAssignments(row, [{ slot_id: row.slots[0].id, employee_id: 'e1' }], {
-    assignments: [],
-    today: TODAY,
-  });
+  const { rows } = planAssignments(row, [
+    { slot_id: row.slots[0].id, employee_id: 'e1', role: 'בונה מסלולים' },
+  ], { assignments: [], today: TODAY });
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].assignment, {
     employee_id: 'e1',
@@ -609,9 +758,20 @@ test('picks become roster rows carrying what the shift staffs', () => {
     activity_id: 'a1',
     group_id: null,
     work_type: 'route_building_shift',
-    role: 'עוזר מדריך',
+    // התפקיד הוא מה שקובע את התעריף, ולכן הוא בא מהמושב שאושר.
+    role: 'בונה מסלולים',
     source: 'shift_signup',
   });
+});
+
+test('a role the shift does not need falls back to one it does', () => {
+  const row = windowFixture();
+  const { rows } = planAssignments(row, [
+    // המשמרת השנייה צריכה מפעיל קיר בלבד.
+    { slot_id: row.slots[1].id, employee_id: 'e1', role: 'המצאה' },
+  ], { assignments: [], today: TODAY });
+  // שיבוץ בלי תפקיד תקף הוא שיבוץ בלי תעריף, ולכן נופלים למושב הקיים.
+  assert.equal(rows[0].assignment.role, WALL);
 });
 
 test('approving twice does not place the same person twice', () => {
@@ -642,46 +802,62 @@ test('a shift that already passed is skipped rather than back-dated', () => {
   assert.equal(skipped[0].reason, 'past');
 });
 
-test('over-capacity and over-wanted are warned about, not blocked', () => {
+test('the warning is on the seat, not on the shift', () => {
   const row = windowFixture();
-  // המשמרת השנייה צריכה אחד; שניים נבחרו אליה.
+  // המשמרת הראשונה צריכה מפעיל אחד ועוזר אחד — שלושה אנשים בסך הכול, אבל
+  // שניים מהם על מקום העוזר. ספירה לפי משמרת הייתה מפספסת בדיוק את זה.
   const picks = [
-    { slot_id: row.slots[1].id, employee_id: 'e1' },
-    { slot_id: row.slots[1].id, employee_id: 'e2' },
-    { slot_id: row.slots[0].id, employee_id: 'e1' },
+    { slot_id: row.slots[0].id, employee_id: 'e1', role: WALL },
+    { slot_id: row.slots[0].id, employee_id: 'e2', role: ASSISTANT },
+    { slot_id: row.slots[0].id, employee_id: 'e3', role: ASSISTANT },
+    { slot_id: row.slots[1].id, employee_id: 'e1', role: WALL },
   ];
   const warnings = planWarnings(row, picks, {
     responses: [{ window_id: 'w1', employee_id: 'e1', wanted_count: 1 }],
     employees: [{ id: 'e1', name: 'דנה' }],
     assignments: [],
   });
-  assert.equal(warnings.filter((w) => w.type === 'over_capacity').length, 1);
+  const over = warnings.filter((w) => w.type === 'over_capacity');
+  assert.equal(over.length, 1);
+  assert.equal(over[0].role, ASSISTANT);
+  assert.match(over[0].text, /2 אנשים למקום של 1/);
   const wanted = warnings.find((w) => w.type === 'over_wanted');
   assert.match(wanted.text, /דנה — 2 משמרות, ביקש 1/);
   // התכנון עצמו עדיין מייצר את כל השורות: אזהרה אינה חסימה.
-  assert.equal(planAssignments(row, picks, { assignments: [], today: TODAY }).rows.length, 3);
+  assert.equal(planAssignments(row, picks, { assignments: [], today: TODAY }).rows.length, 4);
 });
 
-test('someone already on the roster counts toward the capacity warning', () => {
+test('someone already holding the seat counts toward its warning', () => {
   const row = windowFixture();
-  const warnings = planWarnings(row, [{ slot_id: row.slots[1].id, employee_id: 'e2' }], {
+  const warnings = planWarnings(row, [{ slot_id: row.slots[1].id, employee_id: 'e2', role: WALL }], {
     responses: [],
     employees: [],
-    assignments: [{ employee_id: 'e1', date: '2026-08-12', start_time: '15:30' }],
+    assignments: [{ employee_id: 'e1', date: '2026-08-12', start_time: '15:30', role: WALL }],
   });
   assert.equal(warnings.filter((w) => w.type === 'over_capacity').length, 1);
 });
 
-test('the message to an employee lists every shift they got, in order', () => {
+test('a different role on the same shift is not a clash', () => {
+  const row = windowFixture();
+  const warnings = planWarnings(row, [{ slot_id: row.slots[0].id, employee_id: 'e2', role: ASSISTANT }], {
+    responses: [],
+    employees: [],
+    // כבר יש מפעיל קיר על המשמרת — זה לא תופס את מקום העוזר.
+    assignments: [{ employee_id: 'e1', date: '2026-08-11', start_time: '15:30', role: WALL }],
+  });
+  assert.deepEqual(warnings, []);
+});
+
+test('the message to an employee names the role for each shift', () => {
   const row = windowFixture();
   const text = assignmentMessageText(row, [
-    { date: '2026-08-12', start_time: '15:30', end_time: '18:00', label: 'פתיחת קיר' },
-    { date: '2026-08-11', start_time: '15:30', end_time: '18:00' },
+    { slot: { date: '2026-08-12', start_time: '15:30', end_time: '18:00', label: 'פתיחת קיר' }, role: WALL },
+    { slot: { date: '2026-08-11', start_time: '15:30', end_time: '18:00' }, role: ASSISTANT },
   ]);
   const lines = text.split('\n').filter((line) => line.startsWith('•'));
   assert.deepEqual(lines, [
-    '• יום שלישי, 11.8 · 15:30–18:00',
-    '• יום רביעי, 12.8 · 15:30–18:00 · פתיחת קיר',
+    `• יום שלישי, 11.8 · 15:30–18:00 · ${ASSISTANT}`,
+    `• יום רביעי, 12.8 · 15:30–18:00 · פתיחת קיר · ${WALL}`,
   ]);
   assert.match(text, /משמרות פתיחה/);
 });

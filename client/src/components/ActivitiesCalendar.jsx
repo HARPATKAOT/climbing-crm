@@ -496,6 +496,100 @@ function hoursFromTimes(startHm, endHm) {
  * ולראות שעות ועלות משוערות לפי שעות האירוע והסכם השכר, והשורות עצמן נוצרות
  * ברגע שהאירוע נשמר. אחרי השמירה זו אותה רשימה, עם עריכה מלאה של כל שורה.
  */
+/**
+ * מה האירוע צריך, לפני שיודעים מי יבוא.
+ *
+ * „משמרת פתיחה צריכה מפעיל קיר ועוזר מדריך” הוא מידע שקיים הרבה לפני שיש שמות,
+ * והוא מה שהופך את טופס ההרשמה למשמרות לשימושי: הצוות רואה מקומות פנויים לפי
+ * תפקיד וכל אחד לוקח מה שהוא מוסמך אליו. בלי זה הטופס יכול היה לשאול רק על
+ * תפקיד אחד בכל פעם.
+ *
+ * נשמר בנפרד מהאירוע ובלחיצה, ולא כחלק משמירת הטופס, כי זו הגדרה תפעולית
+ * שמנהל משנה גם בלי לגעת בשאר פרטי האירוע.
+ */
+function StaffNeedsEditor({ activityId, roleOptions = [] }) {
+  const [needs, setNeeds] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/activities/${encodeURIComponent(activityId)}/staff-needs`)
+      .then((r) => (r.ok ? r.json() : { needs: [] }))
+      .then((body) => { if (!cancelled) setNeeds(body.needs || []); })
+      .catch(() => { if (!cancelled) setNeeds([]); });
+    return () => { cancelled = true; };
+  }, [activityId]);
+
+  const save = async (next) => {
+    setNeeds(next);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/activities/${encodeURIComponent(activityId)}/staff-needs`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs: next }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(body.error || 'השמירה נכשלה');
+      }
+    } catch {
+      setError('שגיאת רשת');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const countOf = (role) => (needs || []).find((n) => n.role === role)?.count || 0;
+
+  /** לחיצה על תפקיד מוסיפה מקום; לחיצה נוספת מוסיפה עוד, עד שמאפסים. */
+  const bump = (role, by) => {
+    const current = countOf(role);
+    const next = Math.max(0, Math.min(20, current + by));
+    const without = (needs || []).filter((n) => n.role !== role);
+    save(next === 0 ? without : [...without, { role, count: next }]);
+  };
+
+  if (needs === null) return null;
+  const total = needs.reduce((sum, n) => sum + n.count, 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>מה האירוע צריך</span>
+        {total > 0
+          ? <span className="badge badge-amber">דרושים {total}</span>
+          : <span style={{ opacity: 0.75 }}>לפי סוג הפעילות</span>}
+        {busy && <Loader2 size={12} className="spin" />}
+        {error && <span style={{ color: 'var(--red)' }}>{error}</span>}
+      </div>
+      <div className="choice-row">
+        {roleOptions.map(({ role }) => {
+          const count = countOf(role);
+          return (
+            <button
+              type="button"
+              key={role}
+              className={`choice-pill ${count > 0 ? 'active' : ''}`}
+              style={{ '--choice-accent': '#FBBF24' }}
+              title={count > 0 ? 'לחיצה מוסיפה עוד מקום; לחיצה ימנית מורידה' : 'לחיצה מוסיפה מקום'}
+              onClick={() => bump(role, 1)}
+              onContextMenu={(e) => { e.preventDefault(); bump(role, -1); }}
+            >
+              {role}{count > 0 ? ` ×${count}` : ''}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+        המקומות האלה מוצעים לצוות בטופס ההרשמה למשמרות, וכל אחד בוחר תפקיד שהוא מוסמך אליו.
+      </div>
+    </div>
+  );
+}
+
 function WorkAssignmentsBlock({
   activityId,
   activityType = '',
@@ -808,6 +902,8 @@ function WorkAssignmentsBlock({
         <Users aria-hidden="true" />
         עובדים במשמרת
       </div>
+
+      {activityId && <StaffNeedsEditor activityId={activityId} roleOptions={payableRoles} />}
 
       {/* הוספת עובד לאירוע: תפקיד, שכר, שעות, ואז מי — בסדר הזה, כי התפקיד
           הוא שקובע מי בכלל מופיע ברשימת העובדים שאפשר לשבץ.
