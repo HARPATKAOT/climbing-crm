@@ -118,6 +118,8 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   useEffect(() => {
     if (!draftMenuOpen) return undefined;
     const close = (event) => {
+      // רשימת האפשרויות של AppSelect נפתחת ב-portal על body ולא בתוך התפריט.
+      if (event.target?.closest?.('.app-select-menu')) return;
       if (!draftMenuRef.current?.contains(event.target)) setDraftMenuOpen(false);
     };
     const onKey = (event) => { if (event.key === 'Escape') setDraftMenuOpen(false); };
