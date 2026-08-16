@@ -320,6 +320,35 @@ test('a returning squad member is recognized as directly eligible for the reques
   );
 });
 
+test('a refusal still counts as a refusal however it is worded', () => {
+  const eligibility = { childName: 'גיל', program: 'young_squad', status: 'returning', groupName: '' };
+
+  // The wording that reached a mother whose son was already approved: one
+  // word between "אישור" and "הצוות" was enough to slip past the guard.
+  assert.equal(
+    contradictsDirectEligibility(
+      'בגלל שגיל בן 10 וחצי והקבוצה מוגדרת מגיל 11 ומעלה, המערכת חוסמת שיבוץ אוטומטי ומחייבת אישור ידני של הצוות.',
+      eligibility
+    ),
+    true
+  );
+  assert.equal(contradictsDirectEligibility('הבקשה ממתינה לאישור הצוות', eligibility), true);
+  assert.equal(contradictsDirectEligibility('לא ניתן לשבץ אותו לקבוצה הזאת', eligibility), true);
+
+  // A placement can be held up by things that are not the programme
+  // permission. Those answers are true and must survive untouched.
+  assert.equal(
+    contradictsDirectEligibility('לא ניתן לשבץ עד שימולא טופס ההשתתפות', eligibility),
+    false
+  );
+  assert.equal(
+    contradictsDirectEligibility('הקבוצה מלאה כרגע, אפשר להצטרף לרשימת המתנה', eligibility),
+    false
+  );
+  // No stored eligibility — this guard has nothing to say either way.
+  assert.equal(contradictsDirectEligibility('נדרש אישור הצוות', null), false);
+});
+
 test('generic squad rule gives stored returning or approved eligibility priority', () => {
   assert.match(CUSTOMER_TOOL_RULES, /בדוק קודם את הזכאות האישית ב-getFamilyCard/);
   assert.match(CUSTOMER_TOOL_RULES, /אין לומר שנדרש אישור צוות נוסף/);
@@ -426,6 +455,35 @@ test('a completed action claim is blocked unless a write tool succeeded this tur
   );
 });
 
+test('a courtesy phrase costs a rewrite, not the whole answer', async () => {
+  // A mother asked whether the equipment form could wait until she decided on
+  // the shoes. The answer was right; "רשמתי לפניי" in it was not, and the whole
+  // turn was replaced by "לא רואה שהפעולה נקלטה במערכת" — a message about an
+  // action she never asked for. The model gets one chance to say it cleanly.
+  const turn = await runCustomerToolTurn({
+    incomingText: 'אחרי שאחליט לגבי הנעליים אמלא. זה יכול לחכות?',
+    apiKey: 'test-key',
+    callModel: scriptedModel([
+      textReply('בטח, רשמתי לפניי שתשלימו אחרי ההחלטה'),
+      textReply('בטח, אפשר להשלים את זה אחרי שתחליטו. הקישור נשאר פתוח.'),
+    ]),
+  });
+  assert.equal(turn.reason, 'ok');
+  assert.equal(turn.handoff, false);
+  assert.match(turn.text, /הקישור נשאר פתוח/);
+  assert.doesNotMatch(turn.text, /רשמתי לפניי/);
+});
+
+test('a model that keeps claiming an action it never performed still ends with a person', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: 'תרשמו לפניכם שנרצה נבחרת אם תיפתח',
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('רשמנו לפנינו את הבקשה שלכם')]),
+  });
+  assert.equal(turn.reason, 'unverified_action');
+  assert.equal(turn.handoff, true);
+});
+
 test('the bot cannot call a pending trainee registered without registered CRM evidence', async () => {
   const turn = await runCustomerToolTurn({
     incomingText: 'מה המצב של ראם?',
@@ -506,6 +564,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getTrainingBreaks',
     'joinWaitlist',
     'listClasses',
+    'pauseOutreach',
     'removeActivityInterest',
     'reportCentreRegistration',
     'requestPlacementApproval',

@@ -7,11 +7,15 @@ import {
   Clock3,
   MessageSquare,
   RefreshCw,
+  UserRoundCheck,
   UserRoundPlus,
   UsersRound,
 } from 'lucide-react';
 import { STATUSES } from '../statusConfig.js';
-import { buildLeadEntries, isParentOnlyLead } from '../utils/leadUtils.js';
+import { buildLeadEntries, buildLeadEntryScopes, isParentOnlyLead } from '../utils/leadUtils.js';
+import { buildFamilyRows } from '../utils/leadHouseholds.js';
+import { isHandedToStaff, sortHandoffRows } from './communicationQueue.js';
+import FamilyTable from './FamilyTable.jsx';
 import { useAuth } from './AuthGate.jsx';
 import TaskCenter from './dailywork/TaskCenter.jsx';
 import MessagesSection from './dailywork/MessagesSection.jsx';
@@ -188,7 +192,10 @@ export default function DailyWork({
   const [notice, setNotice] = useState(null);
   const [drawer, setDrawer] = useState(null);
   const [studentFileId, setStudentFileId] = useState(null);
+  const [declarations, setDeclarations] = useState([]);
+  const [markingHandledId, setMarkingHandledId] = useState(null);
 
+  const waitingRef = useRef(null);
   const messagesRef = useRef(null);
   const followupsRef = useRef(null);
   const refreshCounter = useRef(0);
@@ -291,6 +298,19 @@ export default function DailyWork({
     // refreshAll יציב (useCallback) — טעינה ראשונה + מחזור קבוע.
   }, [refreshAll]);
 
+  // סימוני ההצהרות בטבלת הממתינים. נטען פעם אחת: הוא לא משתנה תוך כדי עבודה,
+  // ואין טעם למשוך אותו בכל רענון דקה.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/health-declarations?summary=1')
+      .then((response) => (response.ok ? response.json() : []))
+      .then((list) => {
+        if (!cancelled && Array.isArray(list)) setDeclarations(list);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const entries = useMemo(() => buildLeadEntries(students, parents), [parents, students]);
   const today = startOfToday();
   const tomorrow = new Date(today);
@@ -302,6 +322,17 @@ export default function DailyWork({
       .sort((a, b) => String(b.lastMessageAt || '').localeCompare(String(a.lastMessageAt || ''))),
     [conversations]
   );
+
+  /**
+   * „ממתינים לטיפול” — אותה רשימה בדיוק שבמסך הלקוחות, ובאותה טבלה: הבוט
+   * נתקע והעביר את הלקוח לצוות. הארכיון נכלל, כי לקוח ותיק שנתקע הוא עבודה.
+   */
+  const waitingRows = useMemo(() => {
+    const waitingStudents = buildLeadEntryScopes(students, parents).archiveInclusive
+      .filter(({ parent }) => isHandedToStaff(parent))
+      .map(({ student }) => student);
+    return sortHandoffRows(buildFamilyRows(waitingStudents, parents, students));
+  }, [parents, students]);
 
   const dueFollowups = useMemo(() => entries
     .filter((entry) => {
@@ -417,6 +448,38 @@ export default function DailyWork({
     }
   }, [conversations, setParents, showNotice]);
 
+  /** „לקוח טופל” מתוך טבלת הממתינים — אותו מסלול שרת כמו במסך הלקוחות. */
+  const markWaitingHandled = useCallback(async (parentId) => {
+    if (!parentId || markingHandledId) return;
+    setMarkingHandledId(parentId);
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(parentId)}/handled`, { method: 'POST' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || 'הסימון נכשל');
+      const updates = new Map((result.parents || []).map((parent) => [String(parent.id), parent]));
+      setParents?.((current) => current.map((parent) => {
+        const updated = updates.get(String(parent.id));
+        if (updated) return { ...parent, ...updated };
+        if (String(parent.id) === String(parentId) && result.handledAt) {
+          return { ...parent, communication_handled_at: result.handledAt };
+        }
+        return parent;
+      }));
+    } catch (err) {
+      showNotice({ type: 'error', text: `סימון הלקוח כטופל נכשל: ${err.message}` });
+    } finally {
+      setMarkingHandledId(null);
+    }
+  }, [markingHandledId, setParents, showNotice]);
+
+  /** שורה בטבלת הממתינים פותחת את תיק הלקוח כאן, ולא זורקת למסך אחר. */
+  const openStudentFile = useCallback((studentId) => {
+    const key = String(studentId || '');
+    if (!key) return;
+    if (entries.some((entry) => String(entry.key) === key)) setStudentFileId(key);
+    else onNavigate?.(`/leads?open=${encodeURIComponent(key)}`);
+  }, [entries, onNavigate]);
+
   const onTransferred = useCallback((conversation, employee, createdTask) => {
     if (createdTask) setTasks((current) => [...current, createdTask]);
     markConversationHandled(conversation);
@@ -498,6 +561,16 @@ export default function DailyWork({
             )}
           />
         )}
+        <KpiCard
+          label="ממתינים לטיפול"
+          value={waitingRows.length}
+          sub={waitingRows.length ? 'הבוט העביר לצוות — לחיצה לרשימה' : '✓ הבוט סוגר הכול לבד'}
+          subType={waitingRows.length ? 'warn' : 'up'}
+          icon={UserRoundCheck}
+          color={waitingRows.length ? '#F59E0B' : '#34D399'}
+          ariaLabel="ממתינים לטיפול — מעבר לטבלה"
+          onClick={() => scrollToSection(waitingRef)}
+        />
         <KpiCard
           label="הודעות ממתינות"
           value={conversationsLoaded ? pendingConversations.length : '—'}
@@ -607,6 +680,38 @@ export default function DailyWork({
           </span>
         </div>
       </section>
+
+      {waitingRows.length > 0 ? (
+        <section className="card daily-work-section" ref={waitingRef}>
+          <header className="daily-work-section-header">
+            <div className="daily-work-section-title">
+              <span className="daily-work-section-icon" style={{ color: '#F59E0B', background: '#F59E0B1f' }}>
+                <UserRoundCheck size={18} />
+              </span>
+              <div>
+                <h2>ממתינים לטיפול</h2>
+                <span>{waitingRows.length} לקוחות שהבוט העביר לצוות · הוותיק ביותר למעלה</span>
+              </div>
+            </div>
+          </header>
+          <FamilyTable
+            rows={waitingRows}
+            groups={groups}
+            declarations={declarations}
+            onOpenStudent={openStudentFile}
+            onMarkHandled={markWaitingHandled}
+            markingHandledId={markingHandledId}
+          />
+        </section>
+      ) : (
+        <section className="card" ref={waitingRef}>
+          <div className="dw-collapsed is-ok">
+            <Check size={14} />
+            <h2>ממתינים לטיפול:</h2>
+            אין אף לקוח שהבוט העביר לצוות
+          </div>
+        </section>
+      )}
 
       <div className="daily-work-grid">
         <TaskCenter

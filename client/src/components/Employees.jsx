@@ -3824,7 +3824,16 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               <option value="wall">עובדי קיר</option>
               <option value="general">עובדים כלליים</option>
             </AppSelect>
-            <AppSelect className="input input-sm" style={{ width: 180 }} value={empFilterRole} onChange={e => setEmpFilterRole(e.target.value)}>
+            <AppSelect
+              className="input input-sm"
+              style={{ width: 180 }}
+              value={empFilterRole}
+              onChange={e => setEmpFilterRole(e.target.value)}
+              /* אותו סימן שבמקרא ובעמודת ההסמכות — כדי שהבחירה תיקרא בעין ולא במילה. */
+              optionIcon={(val) => (val === 'all'
+                ? null
+                : { Icon: roleIcon(val), color: roleColor(val) })}
+            >
               <option value="all">כל ההסמכות</option>
               {certOptions.map((role) => (
                 <option key={role} value={role}>{role}</option>

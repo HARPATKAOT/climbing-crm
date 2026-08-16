@@ -569,8 +569,18 @@ function actionsResponseSchema(scenarios = []) {
   };
 }
 
-/** קריאת מודל בפלט מובנה. מוחזר טקסט גולמי — הפירוק והאימות נעשים בנפרד. */
-export async function callGeminiActions(prompt, { apiKey, fetchImpl = fetch, models, scenarios = [] } = {}) {
+/**
+ * קריאת ג'מיני עם פלט JSON כפוי לפי סכימה — ה-helper הגנרי לכל משימת סיווג
+ * חד-פעמית (תיוג הוצאות, ניתוח שיחות). מחזיר טקסט גולמי או null; הפירוק
+ * והאימות אצל הקורא.
+ */
+export async function callGeminiJson(prompt, {
+  apiKey,
+  fetchImpl = fetch,
+  models,
+  responseSchema,
+  temperature = 0.2,
+} = {}) {
   const key = clean(apiKey);
   if (!key || key === 'YOUR_GEMINI_API_KEY_HERE') return null;
 
@@ -593,9 +603,9 @@ export async function callGeminiActions(prompt, { apiKey, fetchImpl = fetch, mod
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 0.2,
+            temperature,
             responseMimeType: 'application/json',
-            responseSchema: actionsResponseSchema(scenarios),
+            responseSchema,
           },
         }),
       });
@@ -615,8 +625,18 @@ export async function callGeminiActions(prompt, { apiKey, fetchImpl = fetch, mod
       lastError = `${model}: ${err.message}`;
     }
   }
-  if (lastError) console.error('AI actions model call failed:', lastError);
+  if (lastError) console.error('AI structured model call failed:', lastError);
   return null;
+}
+
+/** קריאת מודל בפלט מובנה. מוחזר טקסט גולמי — הפירוק והאימות נעשים בנפרד. */
+export async function callGeminiActions(prompt, { apiKey, fetchImpl = fetch, models, scenarios = [] } = {}) {
+  return callGeminiJson(prompt, {
+    apiKey,
+    fetchImpl,
+    models,
+    responseSchema: actionsResponseSchema(scenarios),
+  });
 }
 
 /**

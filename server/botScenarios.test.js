@@ -19,6 +19,7 @@ import { buildCustomerTools, isRegisteredTrainee } from './botTools.js';
 import { advanceCustomerNameCapture, customerNameWords, getIntake } from './whatsappBot.js';
 import { runCustomerToolTurn } from './botToolTurn.js';
 import { capabilitySettingKey } from './botCapabilities.js';
+import { currentSeason } from './placementEligibility.js';
 import { FOLLOWUP_COLLECTION } from './botFollowUps.js';
 import { INTEREST_COLLECTION } from './activityInterest.js';
 import {
@@ -248,6 +249,59 @@ test('ממשיך מהעונה הקודמת נכנס לנבחרת בלי לפתו
     assert.equal(signup.error, undefined);
     assert.equal(student(returning.id).status, 'awaiting_parent_confirmation');
     assert.equal(student(returning.id).groupId, squad.id);
+  });
+});
+
+test('קבוצה שהמתאמן כבר מאושר אליה אינה נעלמת בגלל סינון הכיתה', async () => {
+  // גיל בן עשר וחצי, מאושר לנבחרת הצעירה שהוגדרה לחטיבה. הכלי סינן את
+  // הקבוצה לפי הכיתה שלו, החזיר שאין התאמה, והבוט אמר לאמא שהמערכת חוסמת
+  // את השיבוץ בגלל הגיל — בזמן שהאישור כבר היה בכרטיס.
+  const squad = {
+    id: 'g-young-squad',
+    name: 'נבחרת צעירה — ב׳+ה׳ 17:00',
+    ageCategory: 'חטיבה',
+    skillLevel: 'נבחרת',
+    day: 1,
+    time: '17:00',
+    maxSlots: 16,
+    priceTwice: 560,
+    signupLinkTwice: 'https://centre.example/young-squad',
+  };
+  const gil = childYotam({
+    id: 's-gil', name: 'גיל זלטוקרילוב', gender: 'male', status: 'past_registered', birthDate: '2015-10-01',
+  });
+  await withSeed({
+    groups: [GROUP_HV, squad],
+    students: [gil],
+    health_declarations: [declarationFor(gil.id)],
+    participation_waivers: [waiverFor(gil.id)],
+    program_eligibility: [{
+      id: 'pe-gil',
+      student_id: gil.id,
+      group_id: squad.id,
+      group_ids: [squad.id],
+      program: 'young_squad',
+      season: currentSeason(),
+      status: 'returning',
+    }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.getPlacementEligibility({ childName: 'גיל', grade: 'ה' });
+    const option = (result.אפשרויות || []).find((row) => row.מזהה_קבוצה === squad.id);
+    assert.ok(option, JSON.stringify(result));
+    assert.equal(option.זכאי_לשיבוץ_ישיר, true);
+    assert.equal(option.מועמד, false);
+    assert.match(result.הערה, /אין לבקש אישור צוות נוסף/);
+
+    // והשיבוץ עצמו עובר: הזכאות היא ההחלטה, לא טווח הגילים של הקבוצה.
+    const signup = await tools.startSignup({
+      childName: gil.name,
+      studentId: gil.id,
+      groupId: squad.id,
+      frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(signup.error, undefined, JSON.stringify(signup));
+    assert.equal(student(gil.id).groupId, squad.id);
   });
 });
 

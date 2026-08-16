@@ -406,6 +406,22 @@ export default function App() {
     .slice()
     .sort((a, b) => leadTs(b) - leadTs(a));
   const newLeadsCount = newLeads.length;
+
+  // מונה תיבת הנכנס הפיננסית על פריט הניווט של הדוחות (FINANCE_SPEC 5.4).
+  const [financeInboxCount, setFinanceInboxCount] = useState(0);
+  useEffect(() => {
+    const allowed = isOwner || user?.sensitive?.finance === true;
+    if (!allowed) return undefined;
+    let cancelled = false;
+    const pull = () => fetch('/api/finance/inbox?status=open')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => { if (!cancelled && body) setFinanceInboxCount(body.total || 0); })
+      .catch(() => {});
+    pull();
+    const timer = setInterval(pull, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [isOwner, user]);
+
   const agentRef = useRef(null);
 
   const openAgentChat = (event) => {
@@ -447,6 +463,9 @@ export default function App() {
                 <span>{n.label}</span>
                 {n.key === 'leads' && newLeadsCount > 0 && (
                   <span className="nav-badge">{newLeadsCount}</span>
+                )}
+                {n.key === 'reports' && financeInboxCount > 0 && (
+                  <span className="nav-badge">{financeInboxCount}</span>
                 )}
               </Link>
             );

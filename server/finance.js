@@ -383,17 +383,22 @@ function paymentRowAmounts(status, amount, explicitRefund = 0, { accountingCredi
   };
 }
 
+/**
+ * גבייה והחזרים הם תזרים — נספרים רק בתוך התקופה. חוב פתוח הוא מלאי —
+ * נספר תמיד (שורות חוב נכנסות לדוח גם מחוץ לטווח, עם in_period=false).
+ */
 function summarizePaymentRows(rows) {
+  const inPeriod = rows.filter((row) => row.in_period !== false);
   return {
     records: rows.length,
     customers: new Set(rows.map((row) => row.customer_id || row.customer_name).filter(Boolean)).size,
-    paid_count: rows.filter((row) => ['paid', 'partial_refund', 'refunded'].includes(row.status)).length,
+    paid_count: inPeriod.filter((row) => ['paid', 'partial_refund', 'refunded'].includes(row.status)).length,
     open_count: rows.filter((row) => ['pending', 'open', 'quoted'].includes(row.status)).length,
-    refunded_count: rows.filter((row) => Number(row.refund_amount) > 0).length,
-    gross_collected: roundFinance(rows.reduce((sum, row) => sum + Number(row.gross_collected || 0), 0)),
+    refunded_count: inPeriod.filter((row) => Number(row.refund_amount) > 0).length,
+    gross_collected: roundFinance(inPeriod.reduce((sum, row) => sum + Number(row.gross_collected || 0), 0)),
     open_amount: roundFinance(rows.reduce((sum, row) => sum + Number(row.open_amount || 0), 0)),
-    refunds: roundFinance(rows.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0)),
-    net_collected: roundFinance(rows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)),
+    refunds: roundFinance(inPeriod.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0)),
+    net_collected: roundFinance(inPeriod.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)),
   };
 }
 
@@ -765,7 +770,22 @@ export function buildPaymentsReport({
     }).sign > 0) || documentCandidates[0] || null;
 
     const date = israelDate(payment.paid_at || payment.completed_at || payment.created_at || payment.updated_at || document?.document_date);
-    if (!dateInRange(date, from, to)) continue;
+    // חוב פתוח הוא מלאי, לא תזרים: הוא מוצג תמיד, בלי קשר לטווח התאריכים —
+    // סינון של השבוע הנוכחי אסור לו להעלים חוב שנוצר לפני שבועיים.
+    const explicitRefund = Number(payment.refund_amount ?? sale?.refund_amount ?? 0);
+    const status = normalizePaymentStatus(payment.status || sale?.status, {
+      amount: payment.amount ?? sale?.total,
+      refundAmount: explicitRefund,
+    });
+    const debt = OPEN_PAYMENT_STATUSES.has(status)
+      ? openDebtClassification({
+        payment,
+        sale,
+        registrations: registrationsByPayment.get(String(payment.id)) || [],
+      })
+      : { is_debt: false, debt_reason: '' };
+    const isOpenDebt = debt.is_debt && OPEN_PAYMENT_STATUSES.has(status);
+    if (!isOpenDebt && !dateInRange(date, from, to)) continue;
     if (document) claimedDocuments.add(financeDocumentKey(document));
     const refundDocumentNumber = payment.refund_doc_number || sale?.refund_doc_number || '';
     if (refundDocumentNumber) {
@@ -796,24 +816,12 @@ export function buildPaymentsReport({
     const items = detailRows.length
       ? detailRows.map((item) => normalizedItem(item))
       : (payment.description ? [normalizedItem({ description: payment.description, amount: payment.amount })] : []);
-    const explicitRefund = Number(payment.refund_amount ?? sale?.refund_amount ?? 0);
-    const status = normalizePaymentStatus(payment.status || sale?.status, {
-      amount: payment.amount ?? sale?.total,
-      refundAmount: explicitRefund,
-    });
     const amounts = paymentRowAmounts(status, payment.amount ?? sale?.total ?? document?.total_gross, explicitRefund);
     const customerId = payment.parent_id || sale?.parent_id || document?.client_id || null;
     const paymentMethod = operationalPaymentMethod(payment, sale);
 
-    const debt = OPEN_PAYMENT_STATUSES.has(status)
-      ? openDebtClassification({
-        payment,
-        sale,
-        registrations: registrationsByPayment.get(String(payment.id)) || [],
-      })
-      : { is_debt: false, debt_reason: '' };
-
     rows.push({
+      in_period: dateInRange(date, from, to),
       id: `payment:${payment.id}`,
       payment_id: payment.id,
       sale_id: sale?.id || payment.pos_sale_id || null,
@@ -863,16 +871,20 @@ export function buildPaymentsReport({
   // The hosted-event debt exists when the event is booked, not when the host
   // happens to open the payment page. Build the missing receivable directly
   // from the activity so an untouched link cannot hide a real debt.
+  // הבדיקה מול כל התשלומים במערכת — לא רק אלה שעברו את סינון התאריך — אחרת
+  // תשלום פתוח שמחוץ לטווח היה גם נעלם וגם חוסם את השורה הסינתטית.
+  const paymentIdsInSystem = new Set(payments.map((payment) => String(payment.id)));
   for (const activity of activities) {
-    if (activity.host_payment_id && rows.some((row) => String(row.payment_id || '') === String(activity.host_payment_id))) continue;
+    if (activity.host_payment_id && paymentIdsInSystem.has(String(activity.host_payment_id))) continue;
+    // חוב פתוח מוצג תמיד; התאריך (יום האירוע) נשאר לתצוגה בלבד.
     const date = String(activity.date || activity.created_at || '').slice(0, 10);
-    if (!dateInRange(date, from, to)) continue;
     const activityRegistrations = registrationsByActivity.get(String(activity.id)) || [];
     const debt = unpaidHostActivityDebt(activity, activityRegistrations);
     if (!debt) continue;
     const parent = parentById.get(String(activity.host_parent_id || '')) || null;
     const amount = debt.amount;
     rows.push({
+      in_period: dateInRange(date, from, to),
       id: `activity-debt:${activity.id}`,
       payment_id: null,
       sale_id: null,
@@ -924,22 +936,27 @@ export function buildPaymentsReport({
       total: document.total_gross,
     });
     if (!classification.recognized || claimedDocuments.has(financeDocumentKey(document))) continue;
-    if (!dateInRange(document.document_date, from, to)) continue;
+    const total = Math.abs(Number(document.total_gross) || 0);
+    // חשבונית iCount שטרם נפרעה במלואה היא חוב פתוח — לא "שולם": היתרה
+    // נשארת פתוחה, ורק מה שבאמת נגבה נספר כגבייה. חוב מוצג תמיד.
+    const isCredit = classification.sign < 0;
+    const remaining = isCredit ? 0 : Math.max(0, Math.min(Number(document.remaining_sum) || 0, total));
+    if (!(remaining > 0) && !dateInRange(document.document_date, from, to)) continue;
     const documentLines = linesByDocument.get(String(document.id)) || [];
     const events = eventsByDocument.get(String(document.id)) || [];
     const items = documentLines.map((line) => normalizedItem(line));
-    const isCredit = classification.sign < 0;
-    const status = isCredit ? 'refunded' : 'paid';
-    const amounts = paymentRowAmounts(status, document.total_gross, isCredit ? document.total_gross : 0, {
-      accountingCredit: isCredit,
-    });
+    const status = isCredit ? 'refunded' : (remaining > 0 ? 'open' : 'paid');
+    const amounts = isCredit
+      ? paymentRowAmounts('refunded', total, total, { accountingCredit: true })
+      : paymentRowAmounts(status, total, 0, { collected: total - remaining });
     rows.push({
+      in_period: dateInRange(document.document_date, from, to),
       id: `document:${financeDocumentKey(document)}`,
       payment_id: null,
       sale_id: null,
       date: document.document_date,
       created_at: document.created_at || `${document.document_date}T00:00:00`,
-      paid_at: isCredit ? null : document.document_date,
+      paid_at: isCredit || remaining > 0 ? null : document.document_date,
       customer_id: document.client_id || null,
       customer_name: document.client_name || 'לקוח ללא שם',
       customer_phone: '',
@@ -959,8 +976,8 @@ export function buildPaymentsReport({
         : 'לא ידוע',
       status,
       original_status: status,
-      is_debt: false,
-      debt_reason: '',
+      is_debt: remaining > 0,
+      debt_reason: remaining > 0 ? 'חשבונית iCount שטרם נפרעה' : '',
       ...amounts,
       document_number: document.docnum || '',
       document_type: document.doctype || '',

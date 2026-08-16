@@ -33,6 +33,31 @@ services:
       - key: NODE_VERSION
         value: "20"
 
+  # משיכת בנק/אשראי לילית (FINANCE_SPEC שלב 1). ה-endpoint עצמו no-op כשדגל
+  # bank_ingestion כבוי, אז ה-cron בטוח גם לפני שהפיצ'ר הודלק.
+  - type: cron
+    name: climbing-crm-bank-sync
+    runtime: node
+    rootDir: server
+    schedule: "30 1 * * *" # 04:30 Asia/Jerusalem
+    buildCommand: npm install
+    startCommand: node -e "const s=process.env.CRON_SECRET;if(!s)throw new Error('CRON_SECRET missing');fetch((process.env.RENDER_EXTERNAL_URL||'https://climbing-crm-api.onrender.com')+'/api/finance/bank-sync-scheduled',{method:'POST',headers:{'x-cron-secret':s,'Content-Type':'application/json'}}).then(async r=>{const j=await r.json();console.log(j);if(!r.ok)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})"
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
+  # הג'וב הלילי של המרכז הפיננסי: יישוב מול iCount, בניית ledger, תחזית תזרים.
+  - type: cron
+    name: climbing-crm-finance-nightly
+    runtime: node
+    rootDir: server
+    schedule: "0 2 * * *" # 05:00 Asia/Jerusalem
+    buildCommand: npm install
+    startCommand: node -e "const s=process.env.CRON_SECRET;if(!s)throw new Error('CRON_SECRET missing');fetch((process.env.RENDER_EXTERNAL_URL||'https://climbing-crm-api.onrender.com')+'/api/finance/nightly-scheduled',{method:'POST',headers:{'x-cron-secret':s,'Content-Type':'application/json'}}).then(async r=>{const j=await r.json();console.log(j);if(!r.ok)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})"
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
   # Safety net for the contacts push: the API already syncs on every CRM edit,
   # this catches changes made while it was asleep or offline.
   - type: cron

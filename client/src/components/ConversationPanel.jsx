@@ -38,7 +38,7 @@ import {
   cachedSavedReplies,
   loadComposerResources,
 } from './composerResources.js';
-import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
+import { isAwaitingHandling, isHandedToStaff, threadIsBehindCard } from './communicationQueue.js';
 import AppSelect from './AppSelect.jsx';
 import MessageMedia from './MessageMedia.jsx';
 import {
@@ -1400,7 +1400,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     );
   }
 
-  const awaitingHandling = isAwaitingHandling(data?.parent || parent);
+  // „סיום הטיפול” הוא מה שסוגר העברה לצוות, ולכן הוא פעיל גם אחרי שכבר ענינו
+  // ללקוח — עד שהוא נלחץ, הכרטיס עדיין ברשימת הממתינים.
+  const handedCard = data?.parent || parent;
+  const awaitingHandling = isAwaitingHandling(handedCard) || isHandedToStaff(handedCard);
   const botBadge = describeBotBadge(data?.bot, clockTick);
   const missingNewMessage = !!data && threadIsBehindCard(data?.parent || parent, allMessages);
   const templateStudent = activeThread?.studentId

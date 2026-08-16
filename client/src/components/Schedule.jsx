@@ -8,6 +8,7 @@ import {
   fetchRoleCatalog, roleLabelOf,
 } from '../utils/staffRoles.js';
 import { canConductSafetyTest, employeesFor } from '../utils/operationalEmployees.js';
+import { roleIcon, roleColor } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
 
 /** התוויות העדכניות של „מדריך” ו„עוזר מדריך”, שניתנות לשינוי בקטלוג. */
@@ -1005,11 +1006,26 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
 }
 
 /**
+ * The role's own icon and colour beside a field label — the same sign the role
+ * carries in the employees screen, so the eye ties the two together.
+ */
+function RoleLabelIcon({ roleKey }) {
+  const Icon = roleIcon(null, roleKey);
+  return (
+    <Icon
+      size={13}
+      color={roleColor(null, roleKey)}
+      style={{ marginInlineEnd: 5, verticalAlign: '-2px' }}
+    />
+  );
+}
+
+/**
  * A people dropdown, single or multi choice. It replaces the native `<AppSelect>`
  * here because the browser draws that list in the OS palette — a white panel
  * inside a dark form — and an option list cannot be styled out of it.
  */
-function PeoplePicker({ options, selected, onToggle, placeholder, multiple = true, clearLabel }) {
+function PeoplePicker({ options, selected, onToggle, onClear, placeholder, multiple = true, clearLabel }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
@@ -1066,13 +1082,18 @@ function PeoplePicker({ options, selected, onToggle, placeholder, multiple = tru
             zIndex: 30,
           }}
         >
-          {!multiple && clearLabel && (
+          {clearLabel && (
             <button
               type="button"
               role="option"
               aria-selected={chosen.length === 0}
               className={`app-select-option${chosen.length === 0 ? ' is-active' : ''}`}
-              onClick={() => pick('')}
+              onClick={() => {
+                // In a multi list the empty row is the only way to say „nobody”
+                // without hunting down every name that is already ticked.
+                if (multiple) { onClear?.(); setOpen(false); }
+                else pick('');
+              }}
             >
               <Check size={13} className="app-select-check" />
               <span>{clearLabel}</span>
@@ -1289,7 +1310,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 
             <div className="form-grid-2">
               <div className="form-group">
-                <label className="form-label">מדריך</label>
+                <label className="form-label"><RoleLabelIcon roleKey={SYSTEM_ROLE_KEYS.TRAINER} />מדריך</label>
                 <PeoplePicker
                   multiple={false}
                   options={trainerOptions}
@@ -1320,7 +1341,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">עוזרי מדריך</label>
+              <label className="form-label"><RoleLabelIcon roleKey={SYSTEM_ROLE_KEYS.ASSISTANT} />עוזרי מדריך</label>
               {assistantOptions.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--amber)' }}>{noStaffForRoleMessage(roleLabels.assistant)}</div>
               ) : (
@@ -1328,6 +1349,8 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                   options={assistantOptions}
                   selected={assistants}
                   onToggle={toggleAssistant}
+                  onClear={() => setAssistants([])}
+                  clearLabel="ללא עוזר מדריך"
                   placeholder="בחר עוזרי מדריך..."
                 />
               )}

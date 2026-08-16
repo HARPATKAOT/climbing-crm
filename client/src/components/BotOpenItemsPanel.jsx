@@ -161,7 +161,7 @@ export default function BotOpenItemsPanel() {
         title="ממתינים לצוות"
         accent="#F87171"
         count={data.waiting?.length || 0}
-        hint="הבוט אמר „מעביר לצוות” ואיש עוד לא ענה. יורדים מהרשימה ברגע שאדם כותב ללקוח או מסמן „טופל”."
+        hint="הבוט אמר „מעביר לצוות” והטיפול עוד לא נסגר. יורדים מהרשימה בלחיצה על „סיום הטיפול” בכרטיס הלקוח."
       >
         {!data.waiting?.length ? (
           <Empty text="אף אחד לא ממתין." />
@@ -172,6 +172,9 @@ export default function BotOpenItemsPanel() {
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 12.5, color: 'var(--text-1)', fontWeight: 700 }}>
                     {row.name || 'לקוח ללא שם'}
+                    {row.answered && (
+                      <span style={{ fontWeight: 400, fontSize: 10.5, color: '#FBBF24' }}> · נענה, לא נסגר</span>
+                    )}
                     {row.opted_out && (
                       <span style={{ fontWeight: 400, fontSize: 10.5, color: 'var(--text-3)' }}> · ביקש להפסיק את הבוט</span>
                     )}

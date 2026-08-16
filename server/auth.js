@@ -68,6 +68,8 @@ const PUBLIC_API_ROUTES = [
   /^\/google-contacts\/sync-due$/,
   /^\/google-business-profile\/oauth\/callback$/,
   /^\/finance\/sync-scheduled$/,
+  /^\/finance\/bank-sync-scheduled$/,
+  /^\/finance\/nightly-scheduled$/,
 ];
 
 const READ = ['GET'];

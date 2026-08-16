@@ -203,6 +203,8 @@ export const OPERATIONAL_TABLES = [
   'activity_price_rules',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
+  // עד מתי לא פונים ללקוח מיוזמתנו („אני בחו״ל”, „נירשם רק באוקטובר”).
+  'bot_outreach_pauses',
   // Everything the bot did, in one journal.
   'bot_actions',
   // Bot-domain records live in kv_collections so rollout does not depend on a
@@ -241,6 +243,24 @@ export const OPERATIONAL_TABLES = [
   'company_payments',
   // יומן פעולות כספיות (זיכוי/ביטול/שליחת מסמך) — append-only, בלי עדכונים.
   'finance_audit_log',
+  // המרכז הפיננסי (FINANCE_SPEC.md שלב 0). הרשימה חייבת להתאים ל-
+  // FINANCE_CENTER_TABLES שב-financeCore.js — הוא לא מיובא לכאן כדי לא
+  // ליצור מעגל דרך db.js. התאום המנורמל: database/20260815_finance_center.sql.
+  'financial_accounts',
+  'finance_transactions',
+  'finance_matches',
+  'finance_categories',
+  'finance_cost_centers',
+  'finance_cost_allocations',
+  'finance_ledger_entries',
+  'finance_cash_flow_items',
+  'finance_cc_cycles',
+  'finance_rules',
+  'finance_inbox_items',
+  'finance_ingested_documents',
+  'finance_center_settings',
+  'icount_outbox',
+  'icount_links',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.
@@ -1024,9 +1044,13 @@ export const supa = {
       }
       return { ok: true, count: records.length };
     }
+    // אותו id פעמיים באצווה מפיל את כל הבקשה ("ON CONFLICT DO UPDATE command
+    // cannot affect row a second time") — זה מה ששבר את סנכרון iCount.
+    // האחרון מנצח, כמו בסמנטיקה של upsert-אחד-אחד.
+    const uniqueRecords = [...new Map(records.map((record) => [String(record.id ?? record.key), record])).values()];
     const chunkSize = 250;
-    for (let index = 0; index < records.length; index += chunkSize) {
-      const rows = records.slice(index, index + chunkSize).map((record) => ({
+    for (let index = 0; index < uniqueRecords.length; index += chunkSize) {
+      const rows = uniqueRecords.slice(index, index + chunkSize).map((record) => ({
         collection: table,
         id: String(record.id ?? record.key),
         data: record,

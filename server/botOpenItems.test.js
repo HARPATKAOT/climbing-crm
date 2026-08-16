@@ -36,7 +36,7 @@ test('לקוח שהועבר לצוות ואיש לא ענה לו נמצא ברש
   assert.equal(row.last_message, 'אפשר לשריין מקום לרני?');
 });
 
-test('תשובה של אדם מורידה מהרשימה — תשובה של הבוט או של אוטומציה לא', () => {
+test('תשובה של אדם לא סוגרת את ההמתנה — היא רק מסמנת „נענה”', () => {
   const build = (outbound) => testDb({
     parents: [{ id: 'p1', name: 'יעל', phone: '972528310928', bot_handoff_at: minutesAgo(60) }],
     messages: [
@@ -44,12 +44,17 @@ test('תשובה של אדם מורידה מהרשימה — תשובה של ה�
       { id: 'm2', phone: '972528310928', direction: 'outbound', created_at: minutesAgo(30), ...outbound },
     ],
   });
-  // דלק ענה מה-CRM — סגור.
-  assert.equal(waitingForStaff(build({ source: 'crm', message: 'היי, כבר בודקת' }), { now: NOW }).length, 0);
-  // אלה לא בני אדם: הלקוח עדיין ממתין.
-  assert.equal(waitingForStaff(build({ source: 'ai', is_ai: true }), { now: NOW }).length, 1);
-  assert.equal(waitingForStaff(build({ source: 'automation' }), { now: NOW }).length, 1);
-  assert.equal(waitingForStaff(build({ source: 'otp' }), { now: NOW }).length, 1);
+  // דלק ענה מה-CRM — עדיין ברשימה, כי „אני בודקת” הוא אמצע הטיפול. רק
+  // „סיום הטיפול” מוריד. הסימון מבדיל בין זה לבין שתיקה מוחלטת.
+  const answered = waitingForStaff(build({ source: 'crm', message: 'היי, כבר בודקת' }), { now: NOW });
+  assert.equal(answered.length, 1);
+  assert.equal(answered[0].answered, true);
+  // אלה לא בני אדם: איש לא נגע בלקוח.
+  for (const outbound of [{ source: 'ai', is_ai: true }, { source: 'automation' }, { source: 'otp' }]) {
+    const rows = waitingForStaff(build(outbound), { now: NOW });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].answered, false);
+  }
 });
 
 test('תשובה אנושית מ*לפני* ההעברה אינה סוגרת את ההמתנה', () => {

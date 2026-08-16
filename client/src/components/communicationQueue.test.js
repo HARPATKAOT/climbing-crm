@@ -2,17 +2,73 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   awaitingSince,
+  hasConversation,
   isAwaitingHandling,
+  isHandedToStaff,
   latestInboundInThread,
   nextCommunicationRow,
   pickCommunicationTarget,
   sortCommunicationRows,
+  sortConversationRows,
+  sortHandoffRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
+
+test('the waiting queue holds only customers the bot handed to the team', () => {
+  const now = Date.now();
+  // כתב לנו והבוט ענה לבד — זו שיחה, לא עבודה.
+  assert.equal(isHandedToStaff({ last_inbound_whatsapp: iso(now - HOUR) }), false);
+  assert.equal(isHandedToStaff({ bot_handoff_at: iso(now - HOUR) }), true);
+});
+
+test('a handoff closes when it is marked handled, and expires after two weeks', () => {
+  const now = Date.now();
+  assert.equal(
+    isHandedToStaff({ bot_handoff_at: iso(now - HOUR), communication_handled_at: iso(now) }),
+    false
+  );
+  // סימון ישן מההעברה לא סוגר אותה — הלקוח כתב שוב אחריו.
+  assert.equal(
+    isHandedToStaff({ bot_handoff_at: iso(now - HOUR), communication_handled_at: iso(now - 2 * HOUR) }),
+    true
+  );
+  assert.equal(isHandedToStaff({ bot_handoff_at: iso(now - 20 * DAY) }), false);
+});
+
+test('the waiting queue puts the longest wait on top', () => {
+  const now = Date.now();
+  const fresh = { key: 'fresh', parents: [{ bot_handoff_at: iso(now - HOUR) }], students: [] };
+  const old = { key: 'old', parents: [{ bot_handoff_at: iso(now - 3 * DAY) }], students: [] };
+  assert.deepEqual(sortHandoffRows([fresh, old]).map((row) => row.key), ['old', 'fresh']);
+});
+
+test('the conversations tab holds anyone who ever wrote, newest first', () => {
+  const now = Date.now();
+  assert.equal(hasConversation({ last_inbound_instagram: iso(now - 200 * DAY) }), true);
+  assert.equal(hasConversation({ bot_handoff_at: iso(now) }), false);
+
+  const older = { key: 'older', parents: [{ last_inbound_whatsapp: iso(now - 2 * DAY) }], students: [] };
+  const newer = { key: 'newer', parents: [{ last_inbound_whatsapp: iso(now - HOUR) }], students: [] };
+  assert.deepEqual(sortConversationRows([older, newer]).map((row) => row.key), ['newer', 'older']);
+});
+
+test('conversation order ignores a registration the family just filled in', () => {
+  const now = Date.now();
+  const justRegistered = {
+    key: 'registered',
+    parents: [{ last_inbound_whatsapp: iso(now - 2 * DAY) }],
+    students: [{ status: 'health_signed', healthSignedAt: iso(now) }],
+  };
+  const justWrote = { key: 'wrote', parents: [{ last_inbound_whatsapp: iso(now - HOUR) }], students: [] };
+  assert.deepEqual(
+    sortConversationRows([justRegistered, justWrote]).map((row) => row.key),
+    ['wrote', 'registered']
+  );
+});
 
 test('an inbound message newer than the handled mark is waiting', () => {
   const now = Date.now();

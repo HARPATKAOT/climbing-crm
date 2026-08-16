@@ -92,9 +92,9 @@ export const BOT_CAPABILITIES = [
   {
     key: 'follow_ups',
     label: 'הודעות מעקב',
-    hint: 'חוזר ללקוח יום אחרי, וגם אחרי שיבוץ שממתין להרשמה',
+    hint: 'חוזר ללקוח יום אחרי, וגם אחרי שיבוץ שממתין להרשמה. לקוח שאומר שאינו יכול עכשיו — הפניות נעצרות עד המועד שנקב',
     source: 'נקבע בשיחה עצמה; נשלח בתבנית bot_followup_v1',
-    tools: ['scheduleFollowUp'],
+    tools: ['scheduleFollowUp', 'pauseOutreach'],
   },
   {
     key: 'save_name',

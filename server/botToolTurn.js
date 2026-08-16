@@ -81,6 +81,8 @@ export const CUSTOMER_TOOL_RULES = [
   'רק אחרי שהלקוח אמר שכן — קרא ל-addActivityInterest עם המזהה של אותו אירוע, ואמור שזו התעניינות בלבד: אינה תופסת מקום, אינה הרשמה ואינה חיוב.',
   'הלקוח אמר שהוא לא מעוניין, לא יכול בתאריך, או ביקש להוריד אותו מהרשימה — קרא ל-removeActivityInterest עם המזהה של האירוע. אשר בקצרה ואל תשכנע אותו לחזור.',
   'לקוח שמבקש לחזור אליו («תבדוק איתי מחר», «נדבר בשבוע הבא») — קרא ל-scheduleFollowUp עם מספר הימים ועם מה שסוכם, ואמור לו שנחזור אליו. אל תבטיח שעה מדויקת.',
+  'לקוח שאומר שאינו יכול להתקדם עכשיו — «אני בחו״ל», «זה לא מאפשר לי לשלם מכאן», «נירשם רק באוקטובר», «תחזרו אליי אחרי החגים» — קרא ל-pauseOutreach כדי שלא יקבל תזכורות בינתיים. אם הוא נקב במועד, העבר אותו ב-days, ב-targetMonth או ב-untilDate. אם לא נקב — שאל אותו מתי נוח שנחזור, ורק אחרי שיענה קרא לכלי. אין להמשיך לשלוח לו קישורי טופס, ציוד או הרשמה באותה שיחה אחרי שאמר את זה.',
+  'לקוח שכבר אמר פעם אחת שאינו יכול עכשיו ואמר זאת שוב — זה סימן שהתזכורות שלנו ממשיכות להגיע אליו. התנצל במשפט אחד, ודא שנקראה pauseOutreach, ואל תחזור על אותה בקשה.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
   'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תבקש תאריך לידה בשיחה. תאריך לידה מתעדכן דרך טופס ההרשמה; אם הטופס כבר מולא והסתירה נשארה, העבר לצוות.',
   'הגיל של ילד מגיע מוכן מהמערכת בשדה «גיל». אל תחשב גיל מתאריך לידה בעצמך, ואל תסיק ממנו שכבה.',
@@ -391,10 +393,50 @@ export function directRestrictedEligibility(card, incomingText) {
   };
 }
 
+/**
+ * A demand for approval, however it is worded. "מחייבת אישור ידני של הצוות"
+ * slipped past a pattern that expected אישור and הצוות to be adjacent, and a
+ * mother whose son was already approved for the young squad was told the
+ * system blocks him.
+ */
+const APPROVAL_DEMAND = new RegExp(
+  '(?:מותנ(?:ה|ית)\\s+באישור'
+  + '|(?:נדרש|צריך|צריכה|דורש|דורשת|מחייב|מחייבת)(?:ים|ות)?\\s+(?:כאן\\s+)?אישור'
+  + '|בקשה\\s+לאישור'
+  + '|אישור(?:\\s+[\\p{L}\'"׳״-]+){0,2}\\s+(?:של\\s+)?(?:הצוות|צוות)'
+  + '|ממתין(?:ה|ים)?\\s+לאישור)',
+  'u'
+);
+
+/**
+ * A refusal need not mention an approval at all. "המערכת חוסמת שיבוץ אוטומטי"
+ * and "לא ניתן לשבץ בגלל הגיל" land on the parent exactly the same way, and
+ * both contradict a permission that is already on the participant.
+ */
+const PLACEMENT_REFUSAL = new RegExp(
+  '(?:חוסמ(?:ת|ים)\\s+(?:את\\s+ה)?שיבוץ'
+  + '|(?:לא\\s+ניתן|אי\\s+אפשר|לא\\s+נוכל|לא\\s+אוכל|לא\\s+מתאפשר)\\s+ל(?:שבץ|הירשם|רשום)'
+  + '|(?:לא\\s+עומד(?:ת)?\\s+ב(?:דרישות|תנאי|קריטריון)))',
+  'u'
+);
+
+/**
+ * A placement can be held up by things that have nothing to do with the
+ * programme permission — an unsigned health form, a payment, a full group. A
+ * refusal that names one of those is a true answer and must survive; only the
+ * approval demand is wrong in every case.
+ */
+const OTHER_BLOCKER = new RegExp(
+  '(?:טופס|הצהרת\\s+בריאות|הצהרה|תשלום|לשלם|לא\\s+שולם'
+  + '|מלאה|קיבולת|אין\\s+מקום|רשימת\\s+המתנה|ממתינים)',
+  'u'
+);
+
 export function contradictsDirectEligibility(replyText, eligibility) {
   if (!eligibility) return false;
-  return /(?:מותנ(?:ה|ית)\s+באישור|נדרש\s+אישור|צריך\s+אישור|בקשה\s+לאישור|אישור\s+(?:של\s+)?הצוות)/u
-    .test(String(replyText || ''));
+  const text = String(replyText || '');
+  if (APPROVAL_DEMAND.test(text)) return true;
+  return PLACEMENT_REFUSAL.test(text) && !OTHER_BLOCKER.test(text);
 }
 
 export function isExplicitCentreRegistrationReport(text) {
@@ -628,6 +670,7 @@ export async function runCustomerToolTurn({
   let eligibilityCorrectionSent = false;
   let registrationAckCorrectionSent = false;
   let introPolicyCorrectionSent = false;
+  let claimCorrectionSent = false;
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
       contents,
@@ -641,6 +684,9 @@ export async function runCustomerToolTurn({
           : '',
         introPolicyCorrectionSent
           ? 'התשובה הקודמת נפסלה כי הציעה אימון היכרות בלי שהלקוח ביקש. אל תזכיר אימון היכרות. המשך בהרשמה ישירה וקרא ל-startSignup אם כבר נבחרה קבוצה.'
+          : '',
+        claimCorrectionSent
+          ? 'התשובה הקודמת נפסלה כי טענה שביצעת פעולה שלא בוצעה במערכת. ענה שוב על מה שהלקוח שאל, בלי לכתוב שרשמת, שמרת, עדכנתי או תיעדתי משהו. אם צריך לשמור משהו — קרא לכלי המתאים עכשיו.'
           : '',
       ].filter(Boolean).join('\n\n'),
       declarations,
@@ -772,6 +818,15 @@ export async function runCustomerToolTurn({
       }
       if (unbacked.length) {
         console.error(`bot claimed an action without a successful tool: ${unbacked.join(', ')}`);
+        // The claim is usually a courtesy phrase — "רשמתי לפניי" beside an
+        // answer that was otherwise right. Replacing the whole turn with a
+        // handoff about an action that never happened reads as a non sequitur
+        // to a customer who only asked a question, so the model gets one
+        // chance to say the same thing without claiming anything.
+        if (!claimCorrectionSent) {
+          claimCorrectionSent = true;
+          continue;
+        }
         return {
           text: 'רגע — אני לא רואה שהפעולה נקלטה במערכת, ואני לא רוצה לאשר משהו שלא קרה 🙏\nמעביר לצוות ומישהו יחזור אליכם.',
           handoff: true,

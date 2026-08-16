@@ -17,6 +17,7 @@ import {
   currentSeason,
   eligibilityAppliesToGroup,
   eligibilityForStudent,
+  eligibilityGroupIds,
   evaluateProgramCandidate,
   isRestrictedGroup,
   latestLevelTest,
@@ -115,6 +116,7 @@ import {
   newFollowUpId,
   planFollowUp,
 } from './botFollowUps.js';
+import { resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
 import {
   loadEquipmentPrices,
   loadEquipmentInfo,
@@ -431,6 +433,42 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         note: {
           type: 'string',
           description: 'על מה לחזור, במילים של הלקוח — למשל «ההרשמה של לילי לחוג»',
+        },
+      },
+      required: ['note'],
+    },
+  },
+  {
+    name: 'pauseOutreach',
+    description:
+      'עוצר את כל הפניות היזומות ללקוח הזה עד תאריך — תזכורות מעקב, בקשות '
+      + 'להשלים טופס, ציוד או הרשמה. להשתמש כשהלקוח אומר שאינו יכול להתקדם '
+      + 'עכשיו («אני בחו״ל», «נירשם רק באוקטובר», «תחזרו אליי אחרי החגים»). '
+      + 'אם הלקוח לא נקב במועד — יש לשאול אותו מתי נוח שנחזור, ורק אז לקרוא '
+      + 'לכלי. הבוט ממשיך לענות כרגיל לכל הודעה שהלקוח יכתוב בינתיים.',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'integer',
+          description: 'בעוד כמה ימים מותר לפנות שוב. למשל 14 עבור «אני בחו״ל לשבועיים»',
+        },
+        targetMonth: {
+          type: 'string',
+          description: 'כשהלקוח נקב בחודש בלבד, למשל אוקטובר או 2026-10. הפנייה תתחדש שבוע לפני תחילת החודש',
+        },
+        untilDate: {
+          type: 'string',
+          description: 'תאריך מדויק שהלקוח נקב בו, בפורמט YYYY-MM-DD',
+        },
+        reason: {
+          type: 'string',
+          enum: ['customer_unavailable', 'customer_later', 'general'],
+          description: 'customer_unavailable = בחו״ל/לא זמין; customer_later = רוצה להירשם מאוחר יותר',
+        },
+        note: {
+          type: 'string',
+          description: 'מה הלקוח אמר, במילים שלו — למשל «בחו״ל עד סוף אוגוסט»',
         },
       },
       required: ['note'],
@@ -1055,6 +1093,23 @@ function selectGroups({
   }
   if (frequency) groups = groups.filter((g) => groupSupportsFrequency(g, frequency));
   return groups;
+}
+
+/**
+ * The groups a set of eligibility rows already grants. Newer rows name the
+ * group; older ones name only the programme, and `eligibilityAppliesToGroup`
+ * is what reads them, so both kinds are resolved here.
+ */
+function eligibilityRowsToGroups(rows = []) {
+  const granted = (Array.isArray(rows) ? rows : [])
+    .filter((row) => ['returning', 'approved'].includes(String(row.status || '')));
+  if (!granted.length) return [];
+  const wanted = new Set(granted.flatMap((row) => eligibilityGroupIds(row)));
+  return enrichGroupsWithBotMeta(db, db.get('groups') || [])
+    .filter(isRestrictedGroup)
+    .filter((group) => wanted.has(String(group.id))
+      || granted.some((row) => !eligibilityGroupIds(row).length
+        && eligibilityAppliesToGroup(row, group)));
 }
 
 function describeGroup(group) {
@@ -1904,6 +1959,43 @@ export function buildCustomerTools({
       };
     },
 
+    /**
+     * „אני בחו״ל וזה לא מאפשר לי לשלם” נאמר שלוש פעמים, ובכל בוקר יצאה עוד
+     * תזכורת על אותו טופס ואותו ציוד. הבוט ענה נכון בכל פעם — פשוט לא היה לו
+     * איפה לרשום שאסור לפנות עכשיו.
+     */
+    pauseOutreach: async ({ days, targetMonth, untilDate, reason, note } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const subject = String(note || '').trim();
+      if (!subject) return { error: 'חסר מה הלקוח אמר' };
+      const plan = resolvePauseUntil({ days, targetMonth, untilDate });
+      if (!plan) {
+        return {
+          error: 'צריך לדעת עד מתי',
+          הערה: 'יש לשאול את הלקוח מתי נוח שנחזור אליו, ורק אז לקרוא לכלי שוב.',
+        };
+      }
+      const saved = await setOutreachPause(db, persistCore, {
+        parentId: parent.id,
+        until: plan.until,
+        reason: reason || 'general',
+        note: subject,
+      });
+      if (!saved) return { error: 'שמירת ההשהיה נכשלה' };
+      journal(
+        'outreach_paused',
+        `הפניות היזומות מושהות עד ${plan.date}: ${subject}`,
+        { until: plan.until, reason: saved.reason, note: subject }
+      );
+      return {
+        מושהה_עד: plan.date,
+        סיבה: subject,
+        הערה: 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
+          + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
+          + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.',
+      };
+    },
+
     getSignupLink: async ({ grade, band, day, time, frequency } = {}) => {
       // A link belongs to one group. Without a class or band the model would be
       // choosing a group on the customer's behalf.
@@ -2132,8 +2224,18 @@ export function buildCustomerTools({
       const student = matches[0];
       const level = latestLevelTest(db, student.id);
       const existing = eligibilityForStudent(db, student.id, { season: currentSeason() });
-      const groups = selectGroups({ grade, band, includeSquads: true })
-        .filter(isRestrictedGroup)
+      // A staff approval names one concrete group, and the catalogue filter
+      // here is the child's grade. When the two disagree — a ten-year-old the
+      // staff approved for the young squad — the filter dropped the approved
+      // group, the tool answered as though no permission existed, and the bot
+      // refused the placement on age. A group the child is already eligible
+      // for is always among the options, whatever the band says.
+      const approvedGroups = eligibilityRowsToGroups(existing);
+      const byId = new Map([
+        ...selectGroups({ grade, band, includeSquads: true }).filter(isRestrictedGroup),
+        ...approvedGroups,
+      ].map((group) => [String(group.id), group]));
+      const groups = [...byId.values()]
         .map((group) => {
           const evaluation = evaluateProgramCandidate({
             student,
@@ -2231,9 +2333,18 @@ export function buildCustomerTools({
       const { student } = child;
       const { group } = picked;
 
+      // A staff approval names this exact group, and it outranks the age band:
+      // the band is the default the group was set up with, while the approval
+      // is a person who looked at this child and decided otherwise. גיל, ten
+      // and a half and approved for the young squad, was refused by the range
+      // anyway — and the bot told his mother the system blocks him.
+      const restricted = canPlaceInRestrictedGroup(db, student, group);
+      const approvedForGroup = restricted.allowed
+        && ['returning', 'approved'].includes(String(restricted.reason || ''));
+
       // The card and the customer must agree before anyone is placed.
       const age = checkAgeAgainstBand(student, group);
-      if (!age.ok) {
+      if (!age.ok && !approvedForGroup) {
         return {
           error: `לפי הכרטיס ${student.name || 'המתאמן'} בן ${age.age}, `
             + `והקבוצה הזו מיועדת לגילאי ${age.range[0]}–${age.range[1]}.`,
@@ -2272,7 +2383,6 @@ export function buildCustomerTools({
         };
       }
 
-      const restricted = canPlaceInRestrictedGroup(db, student, group);
       if (!restricted.allowed) {
         if (restricted.reason === 'staff_approval_required') {
           const requested = await requestProgramApproval(db, persistCore, {

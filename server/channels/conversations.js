@@ -178,6 +178,22 @@ export function isAwaitingHandling(parent) {
   return !Number.isFinite(handledAt) || Date.parse(inboundAt) > handledAt;
 }
 
+/** A handoff older than this is history, not a queue — same bound as botOpenItems. */
+const MAX_HANDOFF_WAIT_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * „ממתין לטיפול” — the bot handed this customer to the team and the treatment
+ * has not been closed. Only „סיום הטיפול” / „לקוח טופל” closes it: a reply on
+ * its own is usually the middle of the handling, not its end.
+ */
+export function isHandedToStaff(parent, now = Date.now()) {
+  const handedAt = Date.parse(parent?.bot_handoff_at || '');
+  if (!Number.isFinite(handedAt)) return false;
+  if (now - handedAt > MAX_HANDOFF_WAIT_MS) return false;
+  const handledAt = Date.parse(parent?.communication_handled_at || '');
+  return !(Number.isFinite(handledAt) && handledAt >= handedAt);
+}
+
 /** Open/refresh the 24h window on every parent row that shares this phone. */
 export function touchInboundForPhone(phone, channel = 'whatsapp', at = new Date().toISOString()) {
   const field = inboundFieldForChannel(channel);
@@ -228,11 +244,17 @@ export async function markCommunicationHandled(parentId, at = new Date().toISOSt
   return { success: true, handledAt: at, parents: updatedParents };
 }
 
-/** Clear the whole awaiting queue at once — every card that still shows "ממתין לטיפול". */
+/**
+ * Clear the whole waiting queue at once — every card the bot handed to the team.
+ *
+ * It used to clear every unanswered inbound message, which is now simply "all
+ * conversations": the button sits on the handoff queue and must not silently
+ * stamp a thousand conversations nobody looked at.
+ */
 export async function markAllCommunicationsHandled(at = new Date().toISOString()) {
   const updatedParents = [];
   for (const parent of db.get('parents') || []) {
-    if (!isAwaitingHandling(parent)) continue;
+    if (!isHandedToStaff(parent)) continue;
     const updated = db.update('parents', parent.id, { communication_handled_at: at });
     if (!updated) continue;
     updatedParents.push(updated);

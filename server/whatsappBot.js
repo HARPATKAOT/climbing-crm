@@ -605,13 +605,21 @@ export function describeBotState(parent, settings = {}, now = new Date()) {
   };
 }
 
+/**
+ * A staff reply pauses the bot. It does *not* close the handoff any more.
+ *
+ * Answering once is not the same as being done: half the handoffs are a
+ * question that takes a phone call, a refund, a decision. Clearing the mark on
+ * the first reply took the customer off "ממתינים לטיפול" while the thing they
+ * asked for had not happened yet. Only „סיום הטיפול” closes it now — a person
+ * saying so, not the system guessing.
+ */
 export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' } = {}) {
   const mins = Math.max(1, Number(minutes) || 1);
   const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
   const patch = {
     bot_paused_until: until,
     bot_pause_reason: reason,
-    ...(reason === 'human_reply' ? { bot_handoff_at: null } : {}),
   };
   if (reason === 'handoff') patch.bot_handoff_at = new Date().toISOString();
   const updated = await updateParentsForPhone(phone, patch);

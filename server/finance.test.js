@@ -300,3 +300,91 @@ test('payments report merges a generic webhook payment with its POS payment', ()
   assert.equal(report.rows[0].description, 'כניסה לקיר');
   assert.deepEqual(report.rows[0].product_names, ['כניסה לקיר']);
 });
+
+// ─── חוב פתוח = מלאי: מוצג תמיד, בלי קשר לטווח (תיקון "החוב שנעלם") ─────────
+
+test('an open payment debt outside the window is still shown, but not counted as collection', () => {
+  const report = buildPaymentsReport({
+    payments: [
+      { id: 'p-old', status: 'pending', amount: 200, created_at: '2026-07-13T10:00:00Z' },
+      { id: 'p-paid-old', status: 'paid', amount: 300, paid_at: '2026-07-01T10:00:00Z' },
+    ],
+    from: '2026-08-12',
+    to: '2026-08-16',
+  });
+  const debt = report.rows.find((row) => row.id === 'payment:p-old');
+  assert.ok(debt, 'חוב פתוח מחוץ לטווח חייב להופיע');
+  assert.equal(debt.in_period, false);
+  assert.equal(report.summary.open_amount, 200);
+  // תשלום ששולם מחוץ לטווח נשאר בחוץ, והגבייה בתקופה אפס
+  assert.ok(!report.rows.some((row) => row.id === 'payment:p-paid-old'));
+  assert.equal(report.summary.gross_collected, 0);
+});
+
+test('the vanished-debt scenario: host event in the future, filter on this week', () => {
+  const report = buildPaymentsReport({
+    activities: [{
+      id: 'act-9', name: 'יום הולדת דנה', registration_mode: 'host_pays', status: 'confirmed',
+      payment_status: 'unpaid', host_name: 'דנה צפוני', date: '2026-09-20',
+      host_charge_amount: 850, created_at: '2026-08-13T09:00:00Z',
+    }],
+    from: '2026-08-12',
+    to: '2026-08-16',
+  });
+  const debt = report.rows.find((row) => row.id === 'activity-debt:act-9');
+  assert.ok(debt, 'חוב אירוע עתידי חייב להופיע גם בסינון של השבוע');
+  assert.equal(debt.open_amount, 850);
+  assert.equal(debt.in_period, false);
+  assert.equal(report.summary.open_amount, 850);
+});
+
+test('a host activity whose payment exists outside the window yields one row, not two', () => {
+  const report = buildPaymentsReport({
+    payments: [{
+      id: 'p-host', status: 'pending', amount: 850, created_at: '2026-07-20T10:00:00Z',
+      activity_host_payment: true, activity_id: 'act-9',
+    }],
+    activities: [{
+      id: 'act-9', name: 'אירוע', registration_mode: 'host_pays', status: 'confirmed',
+      payment_status: 'unpaid', host_name: 'מזמין', date: '2026-09-20',
+      host_payment_id: 'p-host', host_charge_amount: 850,
+    }],
+    from: '2026-08-12',
+    to: '2026-08-16',
+  });
+  const debtRows = report.rows.filter((row) => row.open_amount > 0);
+  assert.equal(debtRows.length, 1, 'שורה אחת לחוב — לא תשלום + שורה סינתטית');
+  assert.equal(debtRows[0].id, 'payment:p-host');
+});
+
+test('an unpaid iCount invoice becomes an open debt with only the paid part collected', () => {
+  const doc = {
+    id: 'icount:invoice:501', doctype: 'invoice', docnum: '501', document_date: '2026-08-13',
+    total_gross: 500, total_net: 423.73, remaining_sum: 200, client_name: 'דנה צפוני',
+  };
+  const inRange = buildPaymentsReport({ documents: [doc], from: '2026-08-12', to: '2026-08-16' });
+  const row = inRange.rows.find((item) => item.document_number === '501');
+  assert.equal(row.status, 'open');
+  assert.equal(row.is_debt, true);
+  assert.equal(row.gross_collected, 300);
+  assert.equal(row.open_amount, 200);
+  // גם מחוץ לטווח — החוב נשאר, הגבייה לא נספרת
+  const outOfRange = buildPaymentsReport({ documents: [doc], from: '2026-01-01', to: '2026-01-31' });
+  const stillThere = outOfRange.rows.find((item) => item.document_number === '501');
+  assert.ok(stillThere);
+  assert.equal(outOfRange.summary.open_amount, 200);
+  assert.equal(outOfRange.summary.gross_collected, 0);
+});
+
+test('regression: fully paid rows outside the window stay hidden', () => {
+  const report = buildPaymentsReport({
+    documents: [{
+      id: 'icount:invrec:600', doctype: 'invrec', docnum: '600', document_date: '2026-07-01',
+      total_gross: 400, total_net: 338.98, remaining_sum: 0,
+    }],
+    payments: [{ id: 'p-done', status: 'paid', amount: 150, paid_at: '2026-07-02T10:00:00Z' }],
+    from: '2026-08-12',
+    to: '2026-08-16',
+  });
+  assert.equal(report.rows.length, 0);
+});

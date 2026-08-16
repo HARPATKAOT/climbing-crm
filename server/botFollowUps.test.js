@@ -157,6 +157,24 @@ test('the message says what was promised, not "just checking in"', () => {
   assert.match(followUpMessage({ reason: 'general' }, {}), /^היי,/);
 });
 
+test('an adult who signed herself up is asked about herself, not about a child', () => {
+  // "היי פנינה, הספקתם להשלים את ההרשמה של פנינה במתנ״ס?" was sent to a woman
+  // who is her own trainee. It reads as a message about somebody else.
+  const self = followUpMessage(
+    { reason: 'pending_signup', subject: 'פנינה' },
+    { firstName: 'פנינה', awaitingRegistration: ['פנינה'], selfTrainee: true }
+  );
+  assert.match(self, /הספקת להירשם במתנ״ס\?/);
+  assert.doesNotMatch(self, /ההרשמה של/);
+
+  // A parent is still addressed about the child, and two children stay plural.
+  const parent = followUpMessage(
+    { reason: 'pending_signup', subject: 'ראם' },
+    { firstName: 'דלק', awaitingRegistration: ['ראם', 'אלה'], selfTrainee: false }
+  );
+  assert.match(parent, /ההרשמה של ראם ואלה/);
+});
+
 test('two follow-ups born in the same tick keep separate ids', () => {
   // The generic id is a table prefix plus a millisecond: a placement and a
   // "check with me tomorrow" in one turn collided, and only one was ever sent.

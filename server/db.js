@@ -413,9 +413,11 @@ function flushDbToDisk() {
 // make a just-saved record disappear until the next refresh.
 let lastLocalWriteAt = 0;
 
-function writeDb(data, { lazy = false } = {}) {
+function writeDb(data, { lazy = false, markLocalWrite = !lazy } = {}) {
   dbCache = data;
-  if (!lazy) lastLocalWriteAt = Date.now();
+  // markLocalWrite ו-lazy נפרדים: כתיבה מקומית אמיתית עם flush דחוי (הריצה
+  // הלילית) חייבת עדיין לקדם את lastLocalWriteAt, אחרת hydrate ברקע ידרוס אותה.
+  if (markLocalWrite) lastLocalWriteAt = Date.now();
   // A real write must not be held back by a lazy flush that is already pending.
   if (flushTimer && !(flushIsLazy && !lazy)) return;
   if (flushTimer) clearTimeout(flushTimer);
@@ -1024,7 +1026,13 @@ export const db = {
     return data.whatsapp_settings;
   },
 
-  insert: (table, record) => {
+  /**
+   * opts.skipSync — הקורא מתחייב לעמידות בעצמו (durableRecordingStore עם flush
+   * מרוכז); בלעדיו כל שורה יורה upsert צף משלה — אלפי כאלה בריצה הלילית
+   * הפילו את השרת (OOM). opts.deferFlush — כתיבת db.json נדחית (עדיין נספרת
+   * ככתיבה מקומית מול hydrate).
+   */
+  insert: (table, record, { skipSync = false, deferFlush = false } = {}) => {
     const data = readDb();
     if (!data[table]) data[table] = [];
     // Spread first, then force id — otherwise `id: undefined` in record wipes the generated id.
@@ -1034,8 +1042,8 @@ export const db = {
       created_at: record.created_at || new Date().toISOString(),
     };
     data[table].push(newRecord);
-    writeDb(data);
-    syncUpsert(table, newRecord);
+    writeDb(data, deferFlush ? { lazy: true, markLocalWrite: true } : {});
+    if (!skipSync) syncUpsert(table, newRecord);
     return newRecord;
   },
 
@@ -1083,14 +1091,14 @@ export const db = {
     return added;
   },
 
-  update: (table, id, updates) => {
+  update: (table, id, updates, { skipSync = false, deferFlush = false } = {}) => {
     const data = readDb();
     if (!data[table]) return null;
     const index = data[table].findIndex(item => item.id === id);
     if (index === -1) return null;
     data[table][index] = { ...data[table][index], ...updates, updated_at: new Date().toISOString() };
-    writeDb(data);
-    syncUpsert(table, data[table][index]);
+    writeDb(data, deferFlush ? { lazy: true, markLocalWrite: true } : {});
+    if (!skipSync) syncUpsert(table, data[table][index]);
     return data[table][index];
   },
 

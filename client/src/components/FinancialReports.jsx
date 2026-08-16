@@ -10,16 +10,28 @@ import {
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { icountClientUrl } from '../utils/icountLinks.js';
+import MatchingCentre from './finance/MatchingCentre.jsx';
+import ProfitDashboard from './finance/ProfitDashboard.jsx';
+import ExpenseCenter from './finance/ExpenseCenter.jsx';
+import { PaymentMethodTag, paymentMethodBadge, INCOME_SOURCE_ICONS } from '../utils/financeBadges.jsx';
+import ProfitabilityTables from './finance/ProfitabilityTables.jsx';
 
+// ארבעה טאבים לפי הלוגיקה העסקית: מה קורה (סקירה), מה נכנס (הכנסות),
+// מה יוצא (הוצאות), ומה דורש טיפול (תיבה אחת עם מונה).
+// הצבעים מקובעים עם --tab-accent כדי לא לתלות אותם במיקום.
 const TABS = [
-  ['overview', 'סקירה', BarChart3],
-  ['payments', 'תשלומים ועסקאות', WalletCards],
-  ['revenue', 'הכנסות', TrendingUp],
-  ['expenses', 'הוצאות וספקים', ReceiptText],
-  ['automation', 'קליטה והתאמה', Sparkles],
-  ['profit', 'רווחיות ותזרים', Scale],
-  ['reconciliation', 'התאמות ואיכות נתונים', FileSearch],
+  ['overview', 'סקירה', BarChart3, '#38BDF8'],
+  ['income', 'הכנסות', WalletCards, '#2DD4BF'],
+  ['expenses', 'הוצאות וספקים', ReceiptText, '#FB923C'],
+  ['inbox', 'תיבת טיפול', Sparkles, '#F472B6'],
 ];
+
+// כתובות ישנות ממשיכות לעבוד: כל טאב היסטורי ממופה לביתו החדש.
+const LEGACY_TABS = {
+  sales: 'income', payments: 'income', revenue: 'income',
+  automation: 'inbox', matching: 'inbox', reconciliation: 'inbox',
+  profit: 'overview',
+};
 
 const money = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 });
 const moneyPrecise = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -39,8 +51,13 @@ async function fetchJson(url, options) {
   return body;
 }
 
-function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false }) {
-  return <article className="finance-metric" style={{ '--metric': color }}>
+function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false, onClick }) {
+  return <article
+    className={`finance-metric ${onClick ? 'is-clickable' : ''}`}
+    style={{ '--metric': color }}
+    onClick={onClick}
+    role={onClick ? 'button' : undefined}
+    title={onClick ? 'לחיצה מציגה את העסקאות שמאחורי המספר' : undefined}>
     <span className="finance-metric-icon"><Icon size={18} /></span><span className="finance-metric-label">{label}</span>
     <strong>{plain ? number.format(value || 0) : money.format(value || 0)}</strong>{note && <small>{note}</small>}
   </article>;
@@ -156,6 +173,19 @@ const PAYMENT_STATUS_FILTERS = [
 
 const paymentStatus = (value) => PAYMENT_STATUS[value] || { label: value || 'לא ידוע', cls: 'badge badge-gray' };
 
+// אייקונים לפילטר הסטטוס — גם בתפריט וגם בטריגר (optionIcon של AppSelect).
+const STATUS_FILTER_ICONS = {
+  debt: { Icon: AlertTriangle, color: '#FBBF24' },
+  paid: { Icon: CheckCircle2, color: '#34D399' },
+  pending: { Icon: Clock3, color: '#FBBF24' },
+  open: { Icon: Clock3, color: '#FBBF24' },
+  quoted: { Icon: ReceiptText, color: '#60A5FA' },
+  partial_refund: { Icon: RotateCcw, color: '#A78BFA' },
+  refunded: { Icon: RotateCcw, color: '#F87171' },
+  cancelled: { Icon: XCircle, color: '#94A3B8' },
+  failed: { Icon: XCircle, color: '#F87171' },
+};
+
 async function downloadPaymentDocument(row, kind = 'charge') {
   const url = row.payment_id
     ? `/api/payments/${encodeURIComponent(row.payment_id)}/invoice?kind=${encodeURIComponent(kind)}`
@@ -210,14 +240,22 @@ function printPaymentDocument(row, kind = 'charge') {
   document.body.appendChild(frame);
 }
 
-function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to, onReload }) {
+// תוויות סוג מסמך (row.document_type) — הצעת מחיר איננה חשבונית.
+const DOC_TYPE_LABELS = {
+  invrec: 'חשבונית מס קבלה', invoice: 'חשבונית מס', receipt: 'קבלה',
+  offer: 'הצעת מחיר', proforma: 'חשבון עסקה', payment: 'תשלום ללא מסמך',
+  refund: 'זיכוי', credit: 'זיכוי',
+};
+
+function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to, onReload, initialStatus = 'all' }) {
   const rows = data?.rows || [];
   const summary = data?.summary || {};
   const filters = data?.filters || {};
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');
+  const [status, setStatus] = useState(initialStatus);
   const [method, setMethod] = useState('all');
   const [source, setSource] = useState('all');
+  const [docType, setDocType] = useState('all');
   const [product, setProduct] = useState('all');
   const [activity, setActivity] = useState('all');
   const [sort, setSort] = useState('newest');
@@ -232,6 +270,7 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       if (status !== 'all' && status !== 'debt' && row.status !== status) return false;
       if (method !== 'all' && row.payment_method_label !== method) return false;
       if (source !== 'all' && row.source !== source) return false;
+      if (docType !== 'all' && String(row.document_type || '') !== docType) return false;
       if (product !== 'all' && !row.product_names?.includes(product)) return false;
       if (activity !== 'all' && !row.activities?.includes(activity)) return false;
       if (!needle) return true;
@@ -249,13 +288,13 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       if (sort === 'open-high') return Number(b.open_amount || 0) - Number(a.open_amount || 0);
       return String(b.created_at || b.date).localeCompare(String(a.created_at || a.date));
     });
-  }, [rows, query, status, method, source, product, activity, sort]);
+  }, [rows, query, status, method, source, docType, product, activity, sort]);
 
   const clear = () => {
-    setQuery(''); setStatus('all'); setMethod('all'); setSource('all');
+    setQuery(''); setStatus('all'); setMethod('all'); setSource('all'); setDocType('all');
     setProduct('all'); setActivity('all'); setSort('newest'); setExpanded('');
   };
-  const hasFilters = query || status !== 'all' || method !== 'all' || source !== 'all' || product !== 'all' || activity !== 'all' || sort !== 'newest';
+  const hasFilters = query || status !== 'all' || method !== 'all' || source !== 'all' || docType !== 'all' || product !== 'all' || activity !== 'all' || sort !== 'newest';
 
   const act = async (key, action, success) => {
     setBusyKey(key); setMessage({ type: '', text: '' });
@@ -398,18 +437,29 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       </header>
 
       <div className="finance-payment-filters">
-        <label className="finance-payment-search"><span>חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
-        <label><span>סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">כל הסטטוסים</option>{PAYMENT_STATUS_FILTERS.map(([key, label]) => {
+        <label className="finance-payment-search"><span><Search size={12} /> חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
+        <label><span><CheckCircle2 size={12} /> סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}
+          optionIcon={(value) => STATUS_FILTER_ICONS[value] || null}>
+          <option value="all">כל הסטטוסים</option>{PAYMENT_STATUS_FILTERS.map(([key, label]) => {
           const count = key === 'debt'
             ? Number(filters.statuses?.pending || 0) + Number(filters.statuses?.open || 0)
             : Number(filters.statuses?.[key] || 0);
           return <option key={key} value={key}>{label}{count ? ` (${count})` : ''}</option>;
         })}</AppSelect></label>
-        <label><span>אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}><option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
-        <label><span>מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>אירוע</span><AppSelect className="input select input-sm" value={activity} onChange={(event) => setActivity(event.target.value)}><option value="all">כל האירועים</option>{(filters.events || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>מיון</span><AppSelect className="input select input-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">החדש ביותר</option><option value="oldest">הישן ביותר</option><option value="amount-high">סכום גבוה</option><option value="amount-low">סכום נמוך</option><option value="open-high">חוב פתוח גבוה</option><option value="customer">שם לקוח</option></AppSelect></label>
+        <label><span><CreditCard size={12} /> אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}
+          optionIcon={(value) => (value === 'all' ? null : { Icon: paymentMethodBadge(value).Icon, color: paymentMethodBadge(value).color })}>
+          <option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><Building2 size={12} /> מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}
+          optionIcon={(value) => INCOME_SOURCE_ICONS[value] || null}>
+          <option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
+        <label><span><ReceiptText size={12} /> סוג מסמך</span><AppSelect className="input select input-sm" value={docType} onChange={(event) => setDocType(event.target.value)}>
+          <option value="all">כל המסמכים</option>
+          {[...new Set(rows.map((row) => String(row.document_type || '')))].filter(Boolean).sort()
+            .map((type) => <option key={type} value={type}>{DOC_TYPE_LABELS[type] || type}</option>)}
+        </AppSelect></label>
+        <label><span><ShoppingBag size={12} /> מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><CalendarRange size={12} /> אירוע</span><AppSelect className="input select input-sm" value={activity} onChange={(event) => setActivity(event.target.value)}><option value="all">כל האירועים</option>{(filters.events || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><LayoutList size={12} /> מיון</span><AppSelect className="input select input-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">החדש ביותר</option><option value="oldest">הישן ביותר</option><option value="amount-high">סכום גבוה</option><option value="amount-low">סכום נמוך</option><option value="open-high">חוב פתוח גבוה</option><option value="customer">שם לקוח</option></AppSelect></label>
       </div>
       <div className="finance-payment-filter-meta"><span>מוצגות {number.format(visibleRows.length)} מתוך {number.format(rows.length)} רשומות</span>{hasFilters && <button className="btn btn-ghost btn-sm" onClick={clear}><XCircle size={14} />ניקוי סינון</button>}</div>
       {message.text && <div className={`alert alert-${message.type}`} style={{ margin: '0 18px 14px' }}>{message.text}</div>}
@@ -430,7 +480,7 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
               <td>{customerLink ? <a href={customerLink} onClick={(event) => event.stopPropagation()}><strong>{row.customer_name}</strong></a> : <strong>{row.customer_name}</strong>}<small>{row.customer_phone || row.customer_email || ''}</small></td>
               <td><strong>{row.description}</strong><small>{row.activities?.join(', ') || row.product_names?.slice(0, 2).join(', ')}</small></td>
               <td><span className="finance-payment-source">{PAYMENT_SOURCE[row.source] || row.source}</span><small>{row.sold_by || ''}</small></td>
-              <td>{row.payment_method_label}<small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
+              <td><PaymentMethodTag label={row.payment_method_label} /><small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
               <td><strong>{moneyPrecise.format(row.amount)}</strong>{row.open_amount > 0 && <small className="finance-open-amount">פתוח {moneyPrecise.format(row.open_amount)}</small>}{row.refund_amount > 0 && <small className="finance-refund-amount">זוכה {moneyPrecise.format(row.refund_amount)}</small>}</td>
               <td><span className={meta.cls}>{row.is_debt && ['pending', 'open'].includes(row.status) ? 'חוב פתוח' : meta.label}</span>{row.is_debt && row.debt_reason && <small>{row.debt_reason}</small>}</td>
               <td><button className="btn btn-ghost btn-icon btn-sm" aria-label="פתיחת פירוט" onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? '' : row.id); }}><ChevronDown size={16} style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }} /></button></td>
@@ -500,6 +550,29 @@ const readFile = (file, mode = 'data-url') => new Promise((resolve, reject) => {
   else reader.readAsDataURL(file);
 });
 
+/** פאנל בריאות הסנכרון (FINANCE_SPEC 4.3.9) — מה רץ, מה תקוע, איפה הפערים. */
+function SyncHealthPanel() {
+  const [health, setHealth] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    fetchJson('/api/finance/health').then(setHealth).catch(() => setFailed(true));
+  }, []);
+  if (failed || !health) return null;
+  const lastRun = health.sync?.lastRun;
+  const gapMonths = (health.reconciliation || []).filter((row) => row.status !== 'balanced');
+  return <article className="card finance-panel finance-quality">
+    <header><div><h2>בריאות הסנכרון</h2><p>iCount, בנק, והג'וב הלילי</p></div></header>
+    <div className="finance-quality-list">
+      <span><CloudCog /> סנכרון iCount אחרון: {lastRun ? `${formatDateTime(lastRun.started_at)} · ${lastRun.status === 'completed' ? 'תקין' : lastRun.status}` : 'טרם רץ'}</span>
+      <span><RefreshCw /> משיכת בנק: {health.bank?.last_run_at ? formatDateTime(health.bank.last_run_at) : 'ממתינה להפעלה (חסם B1)'}</span>
+      <span><Clock3 /> ריצה לילית: {health.nightly?.last_run_at ? formatDateTime(health.nightly.last_run_at) : 'טרם רצה'}</span>
+      <span><Send /> תור הנפקות: {number.format(health.outbox?.counts?.pending || 0)} ממתינים · {number.format((health.outbox?.dead || []).length)} כשלים סופיים</span>
+      <span><AlertTriangle /> תיבת נכנס: {number.format(health.inbox?.open || 0)} פריטים פתוחים</span>
+      <span><Scale /> יישוב חודשי: {gapMonths.length ? `${gapMonths.length} חודשים עם פער — ראה מרכז התאמות` : 'אפס פערים בחודשים שנבדקו'}</span>
+    </div>
+  </article>;
+}
+
 function MatchBadge({ match }) {
   if (match?.status === 'matched') return <span className="finance-match-badge is-matched"><CheckCircle2 size={13} /> מותאם {Math.round((match.confidence || 0) * 100)}%</span>;
   if (match?.status === 'review') return <span className="finance-match-badge is-review"><AlertTriangle size={13} /> לבדיקה {Math.round((match.confidence || 0) * 100)}%</span>;
@@ -509,8 +582,23 @@ function MatchBadge({ match }) {
 export default function FinancialReports() {
   const requestedTab = new URLSearchParams(window.location.search).get('tab');
   const requestedSalesView = new URLSearchParams(window.location.search).get('view');
-  const normalizedRequestedTab = requestedTab === 'sales' ? 'payments' : requestedTab;
-  const [tab, setTab] = useState(normalizedRequestedTab === 'payments' || TABS.some(([key]) => key === normalizedRequestedTab) ? normalizedRequestedTab : 'overview');
+  const normalizedRequestedTab = LEGACY_TABS[requestedTab] || requestedTab;
+  const [tab, setTab] = useState(TABS.some(([key]) => key === normalizedRequestedTab) ? normalizedRequestedTab : 'overview');
+  const [inboxCount, setInboxCount] = useState(0);
+  const [incomePreset, setIncomePreset] = useState(() =>
+    new URLSearchParams(window.location.search).get('status') || 'all');
+  const [overviewView, setOverviewView] = useState('dash');
+
+  // קובייה לחיצה בסקירה פותחת את טאב ההכנסות מסונן מראש, עם כתובת ברת-שיתוף.
+  const openIncome = (presetStatus = 'all') => {
+    setIncomePreset(presetStatus);
+    setTab('income');
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'income');
+    if (presetStatus !== 'all') url.searchParams.set('status', presetStatus);
+    else url.searchParams.delete('status');
+    window.history.replaceState(window.history.state, '', url);
+  };
   const [from, setFrom] = useState(yearStart());
   const [to, setTo] = useState(today());
   const [dashboard, setDashboard] = useState(null);
@@ -526,6 +614,7 @@ export default function FinancialReports() {
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
   const [automation, setAutomation] = useState({ summary: {}, settings: {}, transactions: [], expenses: [] });
+  const [featureFlags, setFeatureFlags] = useState({});
   const [automationBusy, setAutomationBusy] = useState(false);
   const [invoiceFile, setInvoiceFile] = useState(null);
   const [bankImport, setBankImport] = useState({ account_type: 'credit_card', provider: '', account_last4: '', file: null });
@@ -545,6 +634,8 @@ export default function FinancialReports() {
         fetchJson('/api/finance/automation'),
       ]);
       setDashboard(dashboardBody); setTransactions(transactionBody.rows || []); setSalesBreakdown(salesBody); setPaymentsReport(paymentsBody); setReconciliation(reconciliationBody); setSyncStatus(statusBody); setAutomation(automationBody);
+      fetchJson('/api/finance/flags').then(setFeatureFlags).catch(() => setFeatureFlags({}));
+      fetchJson('/api/finance/inbox?status=open').then((body) => setInboxCount(body.total || 0)).catch(() => {});
     } catch (loadError) { setError(loadError.message); }
     finally { setLoading(false); }
   }, [from, to]);
@@ -680,8 +771,17 @@ export default function FinancialReports() {
   const automationSummary = automation.summary || {};
   const automationSettings = automation.settings || {};
   return <div className="finance-page">
-    <section className="finance-toolbar card"><div><div className="finance-sync-line"><CloudCog size={17} /><strong>iCount חי · Notion ארכיון</strong></div><small>{number.format(counts.documents || 0)} מסמכים · {number.format(counts.expenses || 0)} הוצאות · {number.format(counts.suppliers || 0)} ספקים</small></div>
-      <div className="finance-toolbar-actions"><PeriodButtons onChange={(a, b) => { setFrom(a); setTo(b); }} /><label><span>מ־</span><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label><label><span>עד</span><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label><a className="btn btn-ghost" href={`/api/finance/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={16} /> CSV</a><button className="btn btn-ghost" onClick={() => setShowExpenseForm((value) => !value)}><Plus size={16} />הוספת הוצאה</button><button className="btn btn-primary" onClick={sync} disabled={syncing}><RefreshCw size={16} className={syncing ? 'spin' : ''} />{syncing ? 'מסנכרן…' : 'סנכרון iCount'}</button></div>
+    <section className="finance-toolbar card">
+      <div className="finance-toolbar-actions">
+        <PeriodButtons onChange={(a, b) => { setFrom(a); setTo(b); }} />
+        <label><span>מ־</span><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label><span>עד</span><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <a className="btn btn-ghost" href={`/api/finance/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={16} /> CSV</a>
+        <button className="btn btn-ghost" onClick={() => setShowExpenseForm((value) => !value)}><Plus size={16} />הוספת הוצאה</button>
+      </div>
+      <button className="btn btn-ghost finance-sync-mini" title={`סנכרון iCount (${number.format(counts.documents || 0)} מסמכים · ${number.format(counts.expenses || 0)} הוצאות)`} onClick={sync} disabled={syncing}>
+        <RefreshCw size={16} className={syncing ? 'spin' : ''} />{syncing ? 'מסנכרן…' : 'סנכרון'}
+      </button>
     </section>
     {error && <div className="finance-alert"><AlertTriangle size={18} />{error}</div>}
     {showExpenseForm && <form className="card finance-expense-form" onSubmit={saveExpense}>
@@ -689,41 +789,42 @@ export default function FinancialReports() {
       <div className="finance-expense-fields"><label><span>תיאור *</span><input className="input" required value={expenseForm.name} onChange={(e) => setExpenseForm((value) => ({ ...value, name: e.target.value }))} /></label><label><span>תאריך *</span><input className="input" type="date" required value={expenseForm.expense_date} onChange={(e) => setExpenseForm((value) => ({ ...value, expense_date: e.target.value }))} /></label><label><span>סכום כולל *</span><input className="input" type="number" min="0.01" step="0.01" required value={expenseForm.amount_gross} onChange={(e) => setExpenseForm((value) => ({ ...value, amount_gross: e.target.value }))} /></label><label><span>ספק</span><input className="input" value={expenseForm.supplier_name} onChange={(e) => setExpenseForm((value) => ({ ...value, supplier_name: e.target.value }))} /></label><label><span>סיווגים, מופרדים בפסיק</span><input className="input" value={expenseForm.categories} onChange={(e) => setExpenseForm((value) => ({ ...value, categories: e.target.value }))} /></label><label><span>מספר מסמך</span><input className="input" value={expenseForm.document_number} onChange={(e) => setExpenseForm((value) => ({ ...value, document_number: e.target.value }))} /></label><label><span>אמצעי תשלום</span><select className="select" value={expenseForm.payment_method} onChange={(e) => setExpenseForm((value) => ({ ...value, payment_method: e.target.value }))}><option value="">לא צוין</option><option value="credit_card">כרטיס אשראי</option><option value="bank_transfer">העברה בנקאית</option><option value="cash">מזומן</option></select></label><label><span>הערה</span><input className="input" value={expenseForm.note} onChange={(e) => setExpenseForm((value) => ({ ...value, note: e.target.value }))} /></label><label className="finance-file-field"><span>חשבונית / קבלה</span><input type="file" accept="application/pdf,image/jpeg,image/png" onChange={(e) => setInvoiceFile(e.target.files?.[0] || null)} /><strong><FileUp size={15} />{invoiceFile?.name || 'בחירת קובץ'}</strong></label></div>
       <div className="finance-expense-checks"><label><input type="checkbox" checked={expenseForm.includes_vat} onChange={(e) => setExpenseForm((value) => ({ ...value, includes_vat: e.target.checked }))} />הסכום כולל מע״מ</label><label><input type="checkbox" checked={expenseForm.paid} onChange={(e) => setExpenseForm((value) => ({ ...value, paid: e.target.checked }))} />שולם</label><button className="btn btn-primary" disabled={savingExpense}>{savingExpense ? 'שומר…' : 'שמירת הוצאה'}</button></div>
     </form>}
-    <div className="tab-bar finance-tabs">{TABS.map(([key, label, Icon]) => <button key={key} className={`tab-pill ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}><Icon size={16} />{label}</button>)}</div>
+    <div className="tab-bar finance-tabs">{TABS
+      .map(([key, label, Icon, accent]) => <button key={key} className={`tab-pill ${tab === key ? 'active' : ''}`} style={accent ? { '--tab-accent': accent } : undefined} onClick={() => setTab(key)}>
+        <Icon size={16} />{label}
+        {key === 'inbox' && inboxCount > 0 && <span className="finance-tab-count">{inboxCount}</span>}
+      </button>)}</div>
     {loading ? <div className="finance-loading"><RefreshCw className="spin" /> טוען דוחות…</div> : <>
-      {(tab === 'overview' || tab === 'revenue') && <><section className="finance-metrics">
-        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" />
-      </section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>{tab === 'revenue' && <article className="card finance-panel"><header><div><h2>מסמכי הכנסה</h2><p>הצעות וחשבונות עסקה אינם הכנסה</p></div></header><TransactionsTable rows={transactions} kind="document" /></article>}</>}
-      {tab === 'payments' && <PaymentCentre data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />}
-      {tab === 'expenses' && <><section className="finance-metrics"><Metric label="הוצאות לפני מע״מ" value={kpi.expenses_net} note="הזנה ישירה + iCount + ארכיון Notion" icon={ReceiptText} color="#FB7185" /><Metric label="הוצאות כולל מע״מ" value={kpi.expenses_gross} note={`${number.format(counts.expenses || 0)} רשומות שמורות`} icon={Banknote} color="#F97316" /></section><section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הוצאות לפי סיווג</h2><p>חלוקה ניהולית מכל מקורות ההוצאות</p></div></header><div className="finance-category-list">{expenseCategories.map(([category, amount]) => <div key={category}><span>{category}</span><div><i style={{ width: `${Math.max(4, amount / Math.max(1, expenseCategories[0]?.[1]) * 100)}%` }} /></div><strong>{money.format(amount)}</strong></div>)}</div></article><article className="card finance-panel finance-source-card"><header><div><h2>מקורות הנתונים</h2><p>הזנה שוטפת כאן; Notion נשאר ארכיון</p></div></header><div><span className="finance-source is-manual">הזנה ישירה</span><p>הוצאות חדשות נשמרות במערכת הזו.</p></div><div><span className="finance-source is-icount">iCount</span><p>מקור חשבונאי לסכומים, מע״מ וסטטוס.</p></div><div><span className="finance-source is-notion">Notion · ארכיון</span><p>היסטוריה שיובאה פעם אחת; ללא סנכרון שוטף.</p></div></article></section><article className="card finance-panel"><header><div><h2>פירוט הוצאות</h2><p>כל ההוצאות השמורות במערכת</p></div></header><TransactionsTable rows={transactions} kind="expense" /></article></>}
-      {tab === 'automation' && <div className="finance-automation">
-        <section className="card finance-automation-hero"><div><span className="finance-eyebrow"><Sparkles size={15} /> מנוע הוצאות חכם</span><h2>מחשבונית לתנועה — ומשם לרואה החשבון</h2><p>המערכת שומרת את המסמך, מתאימה אותו לתנועת בנק או אשראי, ומעבירה רק התאמות ודאיות. כל ספק נשאר גלוי לבדיקה.</p></div><button className="btn btn-primary" onClick={runMatching} disabled={automationBusy}><Link2 size={16} />{automationBusy ? 'מעבד…' : 'הרצת התאמה'}</button></section>
-        <section className="finance-intake-stats">
-          <div><CreditCard /><strong>{number.format(automationSummary.transactions || 0)}</strong><span>תנועות כספיות</span></div>
-          <div><ReceiptText /><strong>{number.format(automationSummary.invoices || 0)}</strong><span>חשבוניות שנקלטו</span></div>
-          <div className="is-success"><CheckCircle2 /><strong>{number.format(automationSummary.matched || 0)}</strong><span>התאמות ודאיות</span></div>
-          <div className="is-warning"><AlertTriangle /><strong>{number.format(automationSummary.review || 0)}</strong><span>ממתינות לבדיקה</span></div>
-          <div><Send /><strong>{number.format(automationSummary.sent_to_accountant || 0)}</strong><span>נשלחו לרו״ח</span></div>
-        </section>
-        <section className="finance-connectors">
-          <article className="card"><CreditCard /><div><strong>כרטיסי אשראי</strong><span>{automationSummary.transactions ? 'ייבוא תנועות פעיל' : 'מוכן לייבוא ראשון'}</span></div><em className={automationSummary.transactions ? 'is-ready' : ''}>{automationSummary.transactions ? 'פעיל' : 'מוכן'}</em></article>
-          <article className="card"><Building2 /><div><strong>חשבון בנק</strong><span>CSV כעת · API מאובטח בהמשך</span></div><em>להגדרה</em></article>
-          <article className="card"><Mail /><div><strong>תיבת מייל</strong><span>{automationSettings.email_address || 'Gmail / Outlook — חיבור בהמשך'}</span></div><em className={automationSettings.email_address ? 'is-ready' : ''}>{automationSettings.email_address ? 'הוגדר' : 'להגדרה'}</em></article>
-          <article className="card"><Send /><div><strong>WhatsApp רואה חשבון</strong><span>{automationSettings.accountant_phone ? `מסתיים ב־${automationSettings.accountant_phone.slice(-4)}` : 'לא הוגדר מספר יעד'}</span></div><em className={automationSettings.accountant_phone ? 'is-ready' : ''}>{automationSettings.accountant_phone ? 'מוכן' : 'להגדרה'}</em></article>
-        </section>
+      {tab === 'overview' && <><section className="finance-metrics">
+        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" onClick={() => openIncome('all')} /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" onClick={() => openIncome('paid')} /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" onClick={() => openIncome('debt')} /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" onClick={() => openIncome('refunded')} /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" onClick={() => openIncome('all')} />
+      </section>{featureFlags.dashboard_v2
+        ? <>
+          <div className="tab-bar tab-bar-sub finance-overview-sub">
+            <button className={`tab-pill ${overviewView === 'dash' ? 'active' : ''}`} onClick={() => setOverviewView('dash')}>מבט על</button>
+            <button className={`tab-pill ${overviewView === 'profit' ? 'active' : ''}`} onClick={() => setOverviewView('profit')}>רווחיות חוגים ואירועים</button>
+          </div>
+          {overviewView === 'dash' ? <ProfitDashboard from={from} to={to} /> : <ProfitabilityTables initialMonth={to.slice(0, 7)} />}
+        </>
+        : <section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>}</>}
+      {tab === 'income' && <>
+        <PaymentCentre key={incomePreset} initialStatus={incomePreset} data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />
+        <article className="card finance-panel"><header><div><h2>מסמכי הכנסה</h2><p>הצעות וחשבונות עסקה אינם הכנסה</p></div></header><TransactionsTable rows={transactions} kind="document" /></article>
+      </>}
+      {tab === 'expenses' && <ExpenseCenter from={from} to={to} onAddExpense={() => { setShowExpenseForm(true); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />}
+      {tab === 'inbox' && <div className="finance-automation">
+        <MatchingCentre />
         <section className="finance-grid-two finance-automation-setup">
           <form className="card finance-panel" onSubmit={importBankCsv}><header><div><h2>ייבוא תנועות בנק / אשראי</h2><p>CSV מאתר הבנק או חברת האשראי. כפילויות מסוננות אוטומטית.</p></div><FileUp /></header><div className="finance-import-fields"><label><span>מקור</span><select className="select" value={bankImport.account_type} onChange={(e) => setBankImport((value) => ({ ...value, account_type: e.target.value }))}><option value="credit_card">כרטיס אשראי</option><option value="bank">חשבון בנק</option></select></label><label><span>בנק / חברת אשראי</span><input className="input" placeholder="לדוגמה MAX או הפועלים" value={bankImport.provider} onChange={(e) => setBankImport((value) => ({ ...value, provider: e.target.value }))} /></label><label><span>4 ספרות אחרונות בלבד</span><input className="input" inputMode="numeric" maxLength="4" value={bankImport.account_last4} onChange={(e) => setBankImport((value) => ({ ...value, account_last4: e.target.value.replace(/\D/g, '') }))} /></label><label className="finance-file-field"><span>קובץ CSV</span><input type="file" accept=".csv,text/csv" onChange={(e) => setBankImport((value) => ({ ...value, file: e.target.files?.[0] || null }))} /><strong><FileUp size={15} />{bankImport.file?.name || 'בחירת קובץ'}</strong></label></div><button className="btn btn-primary" disabled={automationBusy || !bankImport.file}><FileUp size={16} />ייבוא והתאמה</button></form>
-          <form className="card finance-panel" onSubmit={saveAutomationSettings}><header><div><h2>מסירה לרואה החשבון</h2><p>שליחה אוטומטית רק לאחר התאמה ודאית, עם תיעוד ומניעת כפילויות.</p></div><ShieldCheck /></header><div className="finance-import-fields"><label><span>שם רואה החשבון</span><input className="input" value={automationSettings.accountant_name || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, accountant_name: e.target.value } }))} /></label><label><span>מספר WhatsApp</span><input className="input" dir="ltr" placeholder="972…" value={automationSettings.accountant_phone || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, accountant_phone: e.target.value } }))} /></label><label><span>תיבת חשבוניות</span><input className="input" type="email" placeholder="בעת חיבור Gmail / Outlook" value={automationSettings.email_address || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, email_address: e.target.value } }))} /></label><label><span>ספק מייל עתידי</span><select className="select" value={automationSettings.email_provider || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, email_provider: e.target.value } }))}><option value="">טרם חובר</option><option value="gmail">Gmail</option><option value="outlook">Outlook</option></select></label></div><div className="finance-auto-toggle"><label><input type="checkbox" checked={automationSettings.auto_send === true} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, auto_send: e.target.checked } }))} />שליחה אוטומטית לאחר התאמה ודאית</label><button className="btn btn-primary" disabled={automationBusy}>שמירת הגדרות</button></div></form>
+          <form className="card finance-panel" onSubmit={saveAutomationSettings}><header><div><h2>מסירה לרואה החשבון</h2><p>שליחה אוטומטית רק לאחר התאמה ודאית, עם תיעוד ומניעת כפילויות.</p></div><ShieldCheck /></header><div className="finance-import-fields"><label><span>שם רואה החשבון</span><input className="input" value={automationSettings.accountant_name || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, accountant_name: e.target.value } }))} /></label><label><span>מייל רואה החשבון (לשליחת חשבוניות)</span><input className="input" type="email" dir="ltr" value={automationSettings.accountant_email || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, accountant_email: e.target.value } }))} /></label><label><span>מספר WhatsApp</span><input className="input" dir="ltr" placeholder="972…" value={automationSettings.accountant_phone || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, accountant_phone: e.target.value } }))} /></label><label><span>תיבת חשבוניות</span><input className="input" type="email" placeholder="בעת חיבור Gmail / Outlook" value={automationSettings.email_address || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, email_address: e.target.value } }))} /></label><label><span>ספק מייל עתידי</span><select className="select" value={automationSettings.email_provider || ''} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, email_provider: e.target.value } }))}><option value="">טרם חובר</option><option value="gmail">Gmail</option><option value="outlook">Outlook</option></select></label></div><div className="finance-auto-toggle"><label><input type="checkbox" checked={automationSettings.auto_send === true} onChange={(e) => setAutomation((value) => ({ ...value, settings: { ...value.settings, auto_send: e.target.checked } }))} />שליחה אוטומטית לאחר התאמה ודאית</label><button className="btn btn-primary" disabled={automationBusy}>שמירת הגדרות</button></div></form>
         </section>
         <article className="card finance-panel"><header><div><h2>תיבת טיפול בחשבוניות</h2><p>{number.format(automationSummary.missing_payment || 0)} חשבוניות ללא תשלום מותאם · {number.format(automationSummary.missing_invoice || 0)} תנועות ללא חשבונית</p></div><button className="btn btn-ghost" onClick={() => { setShowExpenseForm(true); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Plus size={16} />חשבונית חדשה</button></header><div className="finance-inbox-list">{(automation.expenses || []).slice(0, 80).map((expense) => {
           const attachment = expense.attachment_metadata?.[expense.attachment_metadata.length - 1];
           return <div className="finance-inbox-row" key={expense.id}><div className="finance-inbox-main"><span className={`finance-doc-icon ${attachment ? 'has-file' : ''}`}><ReceiptText /></span><div><strong>{expense.supplier_name || expense.name}</strong><small>{expense.expense_date || 'ללא תאריך'} · {moneyPrecise.format(expense.amount_gross || 0)}{expense.document_number ? ` · מס׳ ${expense.document_number}` : ''}</small></div></div><div className="finance-inbox-state"><span className={attachment ? 'is-filed' : 'is-empty'}>{attachment ? attachment.file_name : 'חסרה חשבונית'}</span><MatchBadge match={expense.match} />{expense.accountant_delivery ? <span className="finance-sent"><Send size={13} /> נשלח</span> : null}</div><div className="finance-inbox-actions">{attachment ? <a className="btn btn-ghost btn-sm" href={`/api/finance/expenses/${expense.id}/attachments/${attachment.id}/download`}>הורדה</a> : <label className="btn btn-ghost btn-sm"><FileUp size={14} />צרף<input type="file" hidden accept="application/pdf,image/jpeg,image/png" onChange={(e) => uploadExistingInvoice(expense.id, e.target.files?.[0])} /></label>}{expense.match?.status === 'review' && <button className="btn btn-ghost btn-sm" onClick={() => confirmMatch(expense.id, expense.match.transaction_id)}><CheckCircle2 size={14} />אישור</button>}{attachment && !expense.accountant_delivery && <button className="btn btn-ghost btn-sm" onClick={() => sendToAccountant(expense.id)}><Send size={14} />שלח</button>}</div></div>;
         })}{!(automation.expenses || []).length && <div className="finance-empty">הוסף הוצאה או ייבא תנועות כדי להתחיל</div>}</div></article>
         <article className="card finance-panel"><header><div><h2>תנועות שדורשות חשבונית</h2><p>המערכת אינה מניחה שכל חיוב הוא הוצאה מוכרת.</p></div></header><div className="finance-transaction-list">{(automation.transactions || []).slice(0, 60).map((row) => <div key={row.id}><span className="finance-doc-icon"><CreditCard /></span><div><strong>{row.description}</strong><small>{row.transaction_date} · {row.provider || (row.account_type === 'bank' ? 'בנק' : 'אשראי')}{row.account_last4 ? ` · •••• ${row.account_last4}` : ''}</small></div><b>{moneyPrecise.format(row.amount)}</b><MatchBadge match={row.match} /></div>)}{!(automation.transactions || []).length && <div className="finance-empty">טרם יובאו תנועות בנק או אשראי</div>}</div></article>
+        <SyncHealthPanel />
         <div className="finance-security-note"><ShieldCheck size={16} /><span>המערכת שומרת רק תנועות ו־4 ספרות אחרונות — ללא סיסמת בנק, ללא מספר כרטיס מלא וללא הרשאת ביצוע פעולות.</span></div>
       </div>}
-      {tab === 'profit' && <section className="finance-metrics finance-profit-metrics"><Metric label="רווח תפעולי" value={kpi.operating_profit} note="הכנסה נטו פחות הוצאות נטו" icon={Scale} color={kpi.operating_profit >= 0 ? '#34D399' : '#F87171'} /><Metric label="תזרים" value={kpi.cash_flow} note="גבייה בפועל פחות הוצאות ששולמו" icon={WalletCards} color={kpi.cash_flow >= 0 ? '#2DD4BF' : '#F87171'} /><Metric label="צבר עתידי" value={kpi.pipeline} note="אינו הכנסה" icon={TrendingUp} color="#A78BFA" /></section>}
-      {tab === 'reconciliation' && <section className="finance-grid-two"><article className="card finance-panel finance-quality"><header><div><h2>מצב התאמות</h2><p>התאמות רכות אינן מאוחדות אוטומטית</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(reconciliation.counts?.matched || 0)} התאמות ודאיות</span><span><AlertTriangle /> {number.format(reconciliation.counts?.review || 0)} דורשות בדיקה</span><span><FileSearch /> {number.format(reconciliation.counts?.notion_only || 0)} רק ב־Notion</span><span><PackageSearch /> {number.format(reconciliation.counts?.missing_date || 0)} ללא תאריך · {number.format(reconciliation.counts?.missing_amount || 0)} ללא סכום</span></div></article><article className="card finance-panel"><header><div><h2>כללי מניעת כפילויות</h2><p>מספר מסמך + ספק + סכום הוא מפתח ודאי.</p></div></header><div className="finance-rule"><CheckCircle2 />iCount גובר בהתאמה ודאית.</div><div className="finance-rule"><AlertTriangle />תאריך + ספק + סכום דורש אישור.</div><div className="finance-rule"><FileSearch />אין שינוי של נתונים ב־Notion.</div></article></section>}
     </>}
   </div>;
 }

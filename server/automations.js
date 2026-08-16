@@ -14,11 +14,13 @@ import { persistCore } from './db.js';
 import { recordBotAction } from './botActivityLog.js';
 import { securityLogRef } from './security.js';
 import {
+  hasOpenBotHandoff,
   isOptedOut,
   isBotPaused,
   parentFirstName,
   withBotMark,
 } from './whatsappBot.js';
+import { outreachPausedUntil } from './botOutreachPause.js';
 import {
   FOLLOWUP_COLLECTION,
   claimFollowUpSend,
@@ -41,6 +43,12 @@ import { buildEquipmentRedirectUrl } from './equipmentService.js';
 import { studentsStillAwaitingRegistration } from './centreRegistrationChecks.js';
 
 /**
+ * How long an unanswered handoff keeps automatic nudges off the customer.
+ * Long enough to cover a weekend; past that the errand is ours again.
+ */
+const HANDOFF_QUIET_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
  * What is still open for this family, read now rather than when the row was
  * written. A follow-up promised yesterday must not ask about an errand that
  * was finished overnight; see followUpMessage.
@@ -56,6 +64,7 @@ function liveFollowUpState(row, parent) {
     .map((s) => String(s.name || '').trim().split(/\s+/)[0])
     .filter(Boolean);
 
+  const selfTrainee = traineeIsTheCustomer(students, parent);
   const standing = familyEquipmentStanding(db, { students });
   // Reuse a link the family already has rather than minting one from a
   // background scan; without a live token there is nothing useful to say.
@@ -76,9 +85,24 @@ function liveFollowUpState(row, parent) {
 
   return {
     awaitingRegistration,
-    equipmentLine: equipmentOpenLine(standing, { link }),
+    equipmentLine: equipmentOpenLine(standing, { link, selfTrainee }),
     formLine,
+    selfTrainee,
   };
+}
+
+/**
+ * The customer and the trainee are the same person — an adult who signed
+ * herself up rather than a parent. Every message that names the trainee has to
+ * switch to second person, or it reads as though it were written about
+ * somebody else entirely.
+ */
+function traineeIsTheCustomer(students = [], parent = {}) {
+  if (students.length !== 1) return false;
+  const normalize = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+  const student = normalize(students[0]?.name);
+  const customer = normalize(parent?.name);
+  return Boolean(student) && student === customer;
 }
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
@@ -86,6 +110,22 @@ async function closeFollowUp(row, status) {
   const updated = db.update(FOLLOWUP_COLLECTION, row.id, {
     status,
     closed_at: new Date().toISOString(),
+  });
+  if (updated) await persistCore(FOLLOWUP_COLLECTION, updated);
+}
+
+/**
+ * The follow-up stays open and moves to the day the customer named. It also
+ * needs a template from here on: a date a week or a month out is far outside
+ * Meta's free-text window, whatever the row was created as.
+ */
+async function postponeFollowUp(row, until) {
+  const at = new Date(until).toISOString();
+  const updated = db.update(FOLLOWUP_COLLECTION, row.id, {
+    due_at: at,
+    due_date: at.slice(0, 10),
+    needs_template: true,
+    postponed_at: new Date().toISOString(),
   });
   if (updated) await persistCore(FOLLOWUP_COLLECTION, updated);
 }
@@ -680,6 +720,7 @@ export const automationsService = {
     const settings = db.getSettings ? db.getSettings() : {};
     let sent = 0;
     let resolved = 0;
+    let postponed = 0;
     const needStaff = [];
 
     for (const rowGroup of groupDueFollowUps(due)) {
@@ -694,6 +735,25 @@ export const automationsService = {
       // person, must not get an automatic nudge on top of that.
       if (isOptedOut(parent) || isBotPaused(parent)) {
         for (const item of rowGroup) await closeFollowUp(item, 'cancelled');
+        continue;
+      }
+      // „אני בחו״ל”, „נירשם רק באוקטובר”. The errand is still open and the
+      // follow-up is still wanted — just not today. Postponing keeps the
+      // promise; cancelling here is how a family is forgotten instead.
+      const quietUntil = outreachPausedUntil(db, parent.id, now);
+      if (quietUntil) {
+        for (const item of rowGroup) await postponeFollowUp(item, quietUntil);
+        postponed += 1;
+        continue;
+      }
+      // A person was asked to step in and has not written yet. A customer who
+      // said she cannot pay from abroad, was told the team would call, and
+      // then got the same reminder the next morning is the bot arguing with
+      // its own escalation.
+      if (hasOpenBotHandoff(parent, phone, { withinMs: HANDOFF_QUIET_MS })) {
+        const nextDay = new Date(new Date(now).getTime() + 24 * 60 * 60 * 1000).toISOString();
+        for (const item of rowGroup) await postponeFollowUp(item, nextDay);
+        postponed += 1;
         continue;
       }
 
@@ -837,6 +897,7 @@ export const automationsService = {
       due: due.length,
       sent,
       resolved,
+      postponed,
       window_closed: needStaff.length,
       staffNotified,
     };
