@@ -2916,22 +2916,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   // דרך equipmentItemTone ולא דרך payment_status ישירות: „מהבית” ו„לא
   // מעוניינים” אינם 'paid', ובלי זה הם נספרו כחוב ופריט מסודר הוצג
   // כ„ממתין לתשלום”.
-  const equipmentUnpaid = equipmentItems.filter(
-    (i) => equipmentItemTone(i) === 'unpaid'
-  ).length;
-  const equipmentAwaiting = equipmentItems.filter(
-    (i) => equipmentItemTone(i) === 'awaiting'
-  ).length;
+  // „הוסדר” הוא שלכל פריט יש תשובה: יש מהבית, שולם, או שהמשפחה בחרה לא לקחת.
+  // מה שנשאר פתוח מקבל שם ולא מספר — „2 פריטים” לא אומר על מה להתקשר. פריט
+  // ששולם וטרם נמסר אינו חסר: המסירה עצמה נמצאת בגיליון הנוכחות ובטאב הציוד.
+  const equipmentMissing = equipmentItems
+    .filter((item) => equipmentItemTone(item) === 'unpaid')
+    .sort((a, b) => EQUIPMENT_ORDER.indexOf(a.item_type) - EQUIPMENT_ORDER.indexOf(b.item_type))
+    .map((item) => EQUIPMENT_LABELS[item.item_type] || item.item_type);
   const equipmentSummary = !showEquipment
     ? ''
-    : equipmentLoading
+    // אותו תנאי כמו בגוף הטאב: רענון אחרי שינוי סטטוס לא יחזיר את השורה ל„טוען”.
+    : equipmentLoading && !equipmentItems.length
       ? 'טוען...'
-      : equipmentUnpaid + equipmentAwaiting === 0
-        ? 'הכל תקין'
-        : [
-            equipmentUnpaid ? `${equipmentUnpaid} ממתין לתשלום` : null,
-            equipmentAwaiting ? `${equipmentAwaiting} שולם` : null,
-          ].filter(Boolean).join(' · ');
+      : !equipmentItems.length
+        ? 'אין פריטי ציוד'
+        : equipmentMissing.length
+          ? `חסר: ${equipmentMissing.join(', ')}`
+          : 'הוסדר';
   const attendanceSummary = attendanceLoading
     ? 'טוען...'
     : attendanceHistory.length === 0
@@ -2980,17 +2981,33 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const currentPlacementGroups = groups
     .filter((group) => currentGroupPlacements[String(group.id)])
     .map((group) => ({ group, mode: currentGroupPlacements[String(group.id)] }));
+  // „רשום” ולא „שיבוץ קבוע” — זו המילה שכבר מופיעה על אותו מצב בבורר הקבוצות.
   const placementModeLabels = {
-    fixed: 'שיבוץ קבוע',
+    fixed: 'רשום',
     hold: 'מקום שמור',
     waitlist: 'רשימת המתנה',
     none: 'לא משויך',
   };
-  const groupSummary = currentPlacementGroups.length
-    ? (currentPlacementGroups.length === 1
-      ? groupDisplayName(currentPlacementGroups[0].group)
-      : `${currentPlacementGroups.length} קבוצות`)
-    : placementModeLabels.none;
+  // השורה המקוצרת צריכה לענות על שלוש שאלות בלי לפתוח את הטאב: איזו קבוצה,
+  // מתי היא נפגשת, ובאיזה מצב השיבוץ. שם הקבוצה לבדו לא ענה על אף אחת מהן,
+  // כי groupDisplayName מסיר ממנו בכוונה את היום והשעה.
+  const groupSlotLabel = (group) => (
+    [groupDaysLabel(group), group?.time || ''].filter(Boolean).join(' ')
+  );
+  const groupSummary = currentPlacementGroups.length === 1
+    ? [
+        groupDisplayName(currentPlacementGroups[0].group),
+        groupSlotLabel(currentPlacementGroups[0].group),
+        placementModeLabels[currentPlacementGroups[0].mode],
+      ].filter(Boolean).join(' · ')
+    : currentPlacementGroups.length
+      // כמה שיבוצים — אין מקום לימים ולשעות, אבל כל סטטוס שקיים נאמר פעם אחת,
+      // כי „2 קבוצות” לבד מסתיר שאחת מהן היא רק מקום שמור.
+      ? [
+          `${currentPlacementGroups.length} קבוצות`,
+          ...new Set(currentPlacementGroups.map(({ mode }) => placementModeLabels[mode])),
+        ].filter(Boolean).join(' · ')
+      : placementModeLabels.none;
   const introBooking = ['payment_pending', 'scheduled', 'awaiting_decision', 'payment_needs_review']
     .includes(registrationLifecycle.intro?.status)
     ? registrationLifecycle.intro

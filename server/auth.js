@@ -169,6 +169,10 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/work-assignments\/approve$/, module: 'hr', level: 'edit', sensitive: 'hr' },
   { methods: WRITE, pattern: /^\/shifts\/approve$/, module: 'hr', level: 'edit', sensitive: 'hr' },
   { methods: WRITE, pattern: /^\/(work-assignments|shifts)(\/|$)/, module: 'shifts', level: 'edit' },
+  // טופס ההרשמה למשמרות חי באותה הרשאה כמו הרוסטר עצמו: מי שרשאי לשבץ רשאי
+  // גם לשאול את הצוות מי פנוי, ומי שרואה משמרות רואה גם את התשובות.
+  { methods: READ, pattern: /^\/shift-signup(\/|$)/, module: 'shifts' },
+  { methods: WRITE, pattern: /^\/shift-signup(\/|$)/, module: 'shifts', level: 'edit' },
   { methods: READ, pattern: /^\/staff-roles(\/|$)/, module: 'employees' },
   { methods: WRITE, pattern: /^\/staff-roles(\/|$)/, module: 'hr', level: 'edit', sensitive: 'hr' },
 

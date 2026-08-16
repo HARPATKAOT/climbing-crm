@@ -61,6 +61,21 @@ function cleanDate(value) {
   return DATE.test(text) ? text : null;
 }
 
+/**
+ * כמה מהמשמרות שסומנו העובד באמת רוצה.
+ *
+ * סימון הוא אופציה, ורוב האנשים מסמנים בנדיבות — כל מה שהם *יכולים*. בלי המספר
+ * הזה „סימן שבע” נקרא כמו בקשה לשבע משמרות, והמנהל מגלה רק בדיעבד שהכוונה
+ * הייתה לשתיים. אפס פירושו „לא אמר”, ואז מספר הסימונים הוא כל מה שיש.
+ */
+function cleanWantedCount(value, pickedCount = 0) {
+  if (value === '' || value === null || value === undefined) return 0;
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  // בקשה ליותר משמרות ממה שסומן היא סתירה: אי אפשר לקבל משמרת שלא סומנה.
+  return Math.min(n, pickedCount || n);
+}
+
 /** 0 = Sunday … 6 = Saturday, from a civil date (noon UTC is safe in Israel). */
 export function weekdayOf(dateStr) {
   const day = cleanDate(dateStr);
@@ -330,12 +345,26 @@ export function newSignupToken() {
   return token;
 }
 
+/**
+ * מי מקבל את הקישור. רשימה ריקה פירושה „כל מי שמסומן בתפקיד” — כך טופס נשאר
+ * פתוח למי שיקבל את התפקיד מחר, בלי לחזור ולערוך אותו. רשימה מפורשת גוברת על
+ * התפקיד: המנהל שבחר שלושה שמות התכוון לשלושה, גם אם חמישה מוסמכים.
+ */
+function cleanRecipients(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((id) => cleanText(id, 60)).filter(Boolean))].slice(0, 200);
+}
+
 export function normalizeWindow(body = {}, { existing = null } = {}) {
   const title = cleanText(body.title ?? existing?.title, 80);
   if (!title) return { error: 'צריך שם לטופס (למשל „משמרות פתיחה — שבוע הבא”)' };
 
   const role = cleanText(body.role !== undefined ? body.role : existing?.role, 60);
   if (!role) return { error: 'צריך לבחור לאיזה תפקיד הטופס פונה' };
+
+  const recipients = body.recipients !== undefined
+    ? cleanRecipients(body.recipients)
+    : cleanRecipients(existing?.recipients);
 
   const workType = SIGNUP_WORK_TYPES.includes(body.work_type)
     ? body.work_type
@@ -365,6 +394,7 @@ export function normalizeWindow(body = {}, { existing = null } = {}) {
     window: {
       title,
       role,
+      recipients,
       work_type: workType,
       status,
       deadline,
@@ -451,6 +481,7 @@ export function applyResponse(windowRow, responses = [], payload = {}, { today =
       employee_id: employeeId,
       employee_name: cleanText(payload.employee_name, 80) || existing?.employee_name || '',
       slot_ids: picked,
+      wanted_count: cleanWantedCount(payload.wanted_count, picked.length),
       note: cleanText(payload.note, 300),
       submitted_at: new Date().toISOString(),
     },
@@ -466,14 +497,22 @@ export function applyResponse(windowRow, responses = [], payload = {}, { today =
  * `certifications` list — the same marks the roster already filters by — so a
  * window for "עוזר מדריך" reaches exactly the people the schedule screen would
  * have offered for that slot, and nobody has to keep a second list in step.
+ *
+ * A named recipient list overrides the role. The manager who ticked three people
+ * meant those three, and filtering their names through the role afterwards would
+ * quietly drop whoever is missing a certification mark — the same person the
+ * manager just picked on purpose.
  */
-export function eligibleEmployees(employees = [], role) {
+export function eligibleEmployees(employees = [], role, recipients = []) {
   const wanted = cleanText(role, 60);
+  const named = new Set(cleanRecipients(recipients).map(String));
   return (employees || [])
     .filter((employee) => employee?.is_active !== false && employee?.active !== false)
-    .filter((employee) => !wanted || (Array.isArray(employee.certifications) ? employee.certifications : [])
-      .map((r) => cleanText(r, 60))
-      .includes(wanted))
+    .filter((employee) => (named.size
+      ? named.has(String(employee.id))
+      : !wanted || (Array.isArray(employee.certifications) ? employee.certifications : [])
+        .map((r) => cleanText(r, 60))
+        .includes(wanted)))
     .map((employee) => ({ id: employee.id, name: employee.name || 'עובד/ת' }))
     .sort((a, b) => a.name.localeCompare(b.name, 'he'));
 }
@@ -519,6 +558,10 @@ export function signupBoard(windowRow, responses = [], employees = [], assignmen
           name: nameOf(r.employee_id),
           note: r.note || '',
           submitted_at: r.submitted_at || null,
+          // כמה סימן בסך הכל וכמה מהן הוא באמת רוצה — שתי המספרים נדרשים בכל
+          // שורה, כי מסך האישור עובד משמרת-משמרת ולא עובד-עובד.
+          picked_count: (r.slot_ids || []).length,
+          wanted_count: Number(r.wanted_count) || 0,
           assigned: Boolean(assignment),
           // Carried so the board can undo a placement it just made, without a
           // second round trip to find the row again.
@@ -547,7 +590,163 @@ export function respondentSummary(windowRow, responses = [], employees = [], ass
       note: response.note || '',
       submitted_at: response.submitted_at || null,
       picked: picked.length,
+      wanted: Number(response.wanted_count) || 0,
       assigned: picked.filter((slot) => isSlotAssigned(assignments, response.employee_id, slot)).length,
     };
   });
+}
+
+// ─── אישור השיבוצים ─────────────────────────────────────────────────────────
+
+/**
+ * להפוך סימונים לשיבוצים — כל הטופס בפעולה אחת.
+ *
+ * המסך הקודם שיבץ בכל לחיצה על שם, וזה הפך כל טופס לעשרים החלטות נפרדות שאי
+ * אפשר לראות יחד: מי קיבל יותר מדי, למי הבטחנו שתיים ונתנו אחת, ואיזו משמרת
+ * עדיין ריקה. כאן המנהל מסמן טיוטה שלמה, רואה את החריגות, ומאשר פעם אחת —
+ * ורק אז נכתבות השורות ונשלחות ההודעות.
+ *
+ * מה שנבנה כאן הוא בדיוק שורות `work_assignments`, כי זו הטבלה שממנה מחושבים
+ * גם היומן, גם התזכורות וגם השכר. אין כאן מסלול תשלום נפרד.
+ *
+ * @param {object} windowRow הטופס
+ * @param {Array<{slot_id: string, employee_id: string}>} picks טיוטת השיבוץ
+ * @param {object} options `assignments` — מה שכבר קיים ברוסטר, `today`
+ * @returns {{ rows: Array<{assignment: object, slot: object}>, skipped: object[], error?: string }}
+ *   `rows` — מה שצריך להיווצר, כל אחד עם המשמרת שממנה נגזר (ההודעה לעובד
+ *   צריכה את השם והשעות, ושורת רוסטר לא נושאת אותם); `skipped` — מי שכבר
+ *   משובץ לאותה משמרת או שהמשמרת שלו כבר עברה.
+ */
+export function planAssignments(windowRow, picks = [], { assignments = [], today = israelDateStr() } = {}) {
+  if (!windowRow) return { rows: [], skipped: [], error: 'הטופס לא נמצא' };
+  const slotsById = new Map((windowRow.slots || []).map((s) => [s.id, s]));
+  const rows = [];
+  const skipped = [];
+  const seen = new Set();
+
+  for (const pick of Array.isArray(picks) ? picks : []) {
+    const slot = slotsById.get(cleanText(pick?.slot_id, 60));
+    const employeeId = cleanText(pick?.employee_id, 60);
+    if (!slot || !employeeId) continue;
+    // אותו זוג פעמיים בטיוטה — לחיצה כפולה, לא שתי משמרות.
+    const key = `${slot.id}|${employeeId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // משמרת שכבר עברה אינה שיבוץ אלא תיקון היסטוריה, וזה נעשה ביומן העבודה.
+    if (slot.date < today) {
+      skipped.push({ slot_id: slot.id, employee_id: employeeId, reason: 'past' });
+      continue;
+    }
+    if (isSlotAssigned(assignments, employeeId, slot)) {
+      skipped.push({ slot_id: slot.id, employee_id: employeeId, reason: 'already' });
+      continue;
+    }
+    rows.push({
+      slot,
+      assignment: {
+        employee_id: employeeId,
+        date: slot.date,
+        start_time: slot.start_time,
+        end_time: slot.end_time,
+        activity_id: slot.activity_id || null,
+        group_id: slot.group_id || null,
+        work_type: slot.work_type || windowRow.work_type || 'counter_shift',
+        role: windowRow.role || null,
+        source: 'shift_signup',
+      },
+    });
+  }
+  return { rows, skipped };
+}
+
+/**
+ * חריגות שהמנהל צריך לראות *לפני* שהוא מאשר, לא אחרי.
+ *
+ * שתיהן חוקיות ולכן אינן שגיאה: משמרת שקיבלה יותר אנשים מהדרוש היא לפעמים
+ * חפיפה מכוונת, ועובד שמקבל יותר ממה שביקש הוא לפעמים בדיוק מה שסוכם בטלפון.
+ * התפקיד כאן הוא להגיד את זה בקול, לא לחסום.
+ */
+export function planWarnings(windowRow, picks = [], { responses = [], assignments = [], employees = [] } = {}) {
+  const slotsById = new Map((windowRow?.slots || []).map((s) => [s.id, s]));
+  const nameOf = (employeeId) => (employees || []).find((e) => e.id === employeeId)?.name
+    || (responses || []).find((r) => r.employee_id === employeeId)?.employee_name
+    || 'עובד/ת';
+  const perSlot = new Map();
+  const perEmployee = new Map();
+
+  for (const pick of Array.isArray(picks) ? picks : []) {
+    const slot = slotsById.get(String(pick?.slot_id || ''));
+    const employeeId = String(pick?.employee_id || '');
+    if (!slot || !employeeId) continue;
+    if (!perSlot.has(slot.id)) perSlot.set(slot.id, new Set());
+    perSlot.get(slot.id).add(employeeId);
+    perEmployee.set(employeeId, (perEmployee.get(employeeId) || 0) + 1);
+  }
+
+  const warnings = [];
+  for (const [slotId, employeeIds] of perSlot) {
+    const slot = slotsById.get(slotId);
+    // מי שכבר משובץ ברוסטר ואינו בטיוטה נספר גם הוא — אחרת משמרת שכבר מלאה
+    // תיראה פנויה, ושני אנשים יגיעו למקום של אחד.
+    const outside = (assignments || []).filter((row) => (
+      !employeeIds.has(String(row.employee_id))
+      && String(row.date || '').slice(0, 10) === slot.date
+      && (slot.activity_id
+        ? row.activity_id === slot.activity_id
+        : slot.group_id
+          ? row.group_id === slot.group_id
+          : !row.activity_id && !row.group_id && String(row.start_time || '').slice(0, 5) === slot.start_time)
+    )).length;
+    const total = employeeIds.size + outside;
+    if (total > slot.capacity) {
+      warnings.push({
+        type: 'over_capacity',
+        slot_id: slotId,
+        text: `${whenText(slot)} — ${total} אנשים למשמרת שצריכה ${slot.capacity}`,
+      });
+    }
+  }
+  for (const [employeeId, count] of perEmployee) {
+    const wanted = Number((responses || []).find((r) => r.employee_id === employeeId)?.wanted_count) || 0;
+    if (wanted && count > wanted) {
+      warnings.push({
+        type: 'over_wanted',
+        employee_id: employeeId,
+        text: `${nameOf(employeeId)} — ${count} משמרות, ביקש ${wanted}`,
+      });
+    }
+  }
+  return warnings;
+}
+
+const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+/** „יום ג׳, 5.8 · 16:00–20:00” — איך משמרת נקראת בהודעה ובאזהרה. */
+export function whenText(slot = {}) {
+  const [y, m, d] = String(slot.date || '').split('-').map(Number);
+  if (!y) return '';
+  const weekday = DAY_NAMES[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  const hours = [slot.start_time, slot.end_time].filter(Boolean).join('–');
+  return `יום ${weekday}, ${d}.${m}${hours ? ` · ${hours}` : ''}`;
+}
+
+/**
+ * ההודעה שכל עובד מקבל אחרי האישור — כל המשמרות שלו בהודעה אחת.
+ *
+ * אחת ולא אחת-לכל-משמרת: מי שקיבל ארבע משמרות ומקבל עליהן ארבע הודעות נפרדות
+ * לא יודע מה סך הכול קיבל, וזו בדיוק השאלה שהוא שואל.
+ */
+export function assignmentMessageText(windowRow, slots = []) {
+  const lines = (slots || [])
+    .slice()
+    .sort((a, b) => (a.date === b.date
+      ? String(a.start_time).localeCompare(String(b.start_time))
+      : String(a.date).localeCompare(String(b.date))))
+    .map((slot) => `• ${whenText(slot)}${slot.label ? ` · ${slot.label}` : ''}`);
+  // שורה ריקה בין החלקים היא מה שהופך את זה להודעה ולא לגוש. `filter(Boolean)`
+  // על מערך שורות היה בולע אותה, ולכן החלקים מורכבים בנפרד ורק אז מחוברים.
+  const head = ['📋 השיבוץ שלך', windowRow?.title].filter(Boolean).join('\n');
+  return [head, lines.join('\n'), 'אם משהו לא מסתדר — תכתבו לי כאן.']
+    .filter(Boolean)
+    .join('\n\n');
 }

@@ -84,6 +84,8 @@ export const CUSTOMER_TOOL_RULES = [
   'לקוח שמבקש לחזור אליו («תבדוק איתי מחר», «נדבר בשבוע הבא») — קרא ל-scheduleFollowUp עם מספר הימים ועם מה שסוכם, ואמור לו שנחזור אליו. אל תבטיח שעה מדויקת.',
   'לקוח שאומר שאינו יכול להתקדם עכשיו — «אני בחו״ל», «זה לא מאפשר לי לשלם מכאן», «נירשם רק באוקטובר», «תחזרו אליי אחרי החגים» — קרא ל-pauseOutreach כדי שלא יקבל תזכורות בינתיים. אם הוא נקב במועד, העבר אותו ב-days, ב-targetMonth או ב-untilDate. אם לא נקב — שאל אותו מתי נוח שנחזור, ורק אחרי שיענה קרא לכלי. אין להמשיך לשלוח לו קישורי טופס, ציוד או הרשמה באותה שיחה אחרי שאמר את זה.',
   'לקוח שכבר אמר פעם אחת שאינו יכול עכשיו ואמר זאת שוב — זה סימן שהתזכורות שלנו ממשיכות להגיע אליו. התנצל במשפט אחד, ודא שנקראה pauseOutreach, ואל תחזור על אותה בקשה.',
+  'שגיאה שכלי החזיר היא עניין פנימי שלנו. אסור לתאר אותה ללקוח כתקלה, כפילות, סתירה או בעיה בכרטיס שלו — «יש כפילות בכרטיס של נעמי» נאמר לאמא שלא הייתה שום כפילות אצלה, והמשמעות היחידה של השגיאה הייתה שיותר מקבוצה אחת התאימה. אם הכלי מבקש לשאול — שאל את השאלה. אם צריך אדם — כתוב שאתה מעביר לצוות, בלי להמציא סיבה.',
+  'לקוח שנקב בשני ימים («ראשון ורביעי», «שני וחמישי») כבר ענה על שאלת התדירות: זה פעמיים בשבוע. העבר frequency «פעמיים בשבוע» ואל תשאל אותו לבחור יום אחד מהשניים שהוא ביקש.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
   'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תבקש תאריך לידה בשיחה. תאריך לידה מתעדכן דרך טופס ההרשמה; אם הטופס כבר מולא והסתירה נשארה, העבר לצוות.',
   'הגיל של ילד מגיע מוכן מהמערכת בשדה «גיל». אל תחשב גיל מתאריך לידה בעצמך, ואל תסיק ממנו שכבה.',
@@ -438,6 +440,62 @@ export function contradictsDirectEligibility(replyText, eligibility) {
   const text = String(replyText || '');
   if (APPROVAL_DEMAND.test(text)) return true;
   return PLACEMENT_REFUSAL.test(text) && !OTHER_BLOCKER.test(text);
+}
+
+/**
+ * What the customer reads when the model claimed an action we cannot back.
+ *
+ * „אני לא רואה שהפעולה נקלטה במערכת” says nothing to the person holding the
+ * phone: they did not ask about a system, and „פעולה” is our word, not
+ * theirs. Each of these says what will happen next instead.
+ */
+export function unbackedClaimHandoffText(unbacked = []) {
+  const claims = new Set(unbacked);
+  const tail = 'מישהו מהצוות יחזור אליכם בהקדם.';
+  if (claims.has('placement') || claims.has('cancellation')) {
+    return `תודה 🙏 שינוי שיבוץ נעשה מול הקבוצה עצמה, אז אני מעביר את זה לצוות.\n${tail}`;
+  }
+  if (claims.has('birth_date') || claims.has('customer_name')) {
+    return `תודה 🙏 את עדכון הפרטים בכרטיס עושה הצוות — העברתי אליהם.\n${tail}`;
+  }
+  if (claims.has('follow_up')) {
+    return `תודה 🙏 העברתי לצוות כדי שיחזרו אליכם במועד שסיכמנו.\n${tail}`;
+  }
+  if (claims.has('interest_or_waitlist') || claims.has('noted_request')) {
+    return `תודה 🙏 העברתי את הבקשה לצוות כדי שתהיה אצל מישהו ולא תישכח.\n${tail}`;
+  }
+  return `תודה 🙏 אני מעביר את זה לצוות כדי שיטפלו ויעדכנו אתכם.\n${tail}`;
+}
+
+/**
+ * The customer reported a registration and the model answered around it.
+ *
+ * Doing it here rather than leaving it to the prompt: the message is explicit,
+ * the tool is deterministic, and the alternative the customer actually got was
+ * being told twice in twenty minutes that nothing had reached the system.
+ */
+async function recordReportedRegistration({ incoming, tools, allowed, successfulCalls, toolsUsed }) {
+  if (!isExplicitCentreRegistrationReport(incoming)) return null;
+  if (!allowed.has('reportCentreRegistration')) return null;
+  if (successfulCalls.some((call) => call.name === 'reportCentreRegistration')) return null;
+  try {
+    const result = await tools.reportCentreRegistration({});
+    toolsUsed.push('reportCentreRegistration');
+    // Ambiguous card, no trainee, nothing saved — the team, as before.
+    if (!result || result.error) return null;
+    const text = centreRegistrationAcknowledgement(result);
+    if (!text) return null;
+    return {
+      text,
+      handoff: false,
+      unsure: false,
+      toolsUsed,
+      reason: 'registration_report_recorded',
+    };
+  } catch (err) {
+    console.error(`recording a reported registration failed: ${err.message}`);
+    return null;
+  }
 }
 
 export function isExplicitCentreRegistrationReport(text) {
@@ -810,7 +868,8 @@ export async function runCustomerToolTurn({
       if (unbacked.includes('registered_status')) {
         console.error('bot claimed a completed registration without a registered CRM status');
         return {
-          text: 'רגע — אני רוצה לוודא את מצב ההרשמה מול הצוות כדי לא למסור לכם מידע שגוי 🙏\nמישהו יחזור אליכם.',
+          text: 'תודה 🙏 אני בודק את מצב ההרשמה מול הצוות כדי לא למסור לכם מידע לא מדויק.\n'
+            + 'מישהו יחזור אליכם בהקדם.',
           handoff: true,
           unsure: false,
           toolsUsed,
@@ -828,14 +887,30 @@ export async function runCustomerToolTurn({
           claimCorrectionSent = true;
           continue;
         }
+        // The customer told us twice that they had registered, and twice the
+        // answer was that we could not see an action in the system. They were
+        // not asking about an action — they were reporting one. Recording it
+        // is what they wanted, and the tool for it exists.
+        const recorded = await recordReportedRegistration({
+          incoming, tools, allowed, successfulCalls, toolsUsed,
+        });
+        if (recorded) return recorded;
         return {
-          text: 'רגע — אני לא רואה שהפעולה נקלטה במערכת, ואני לא רוצה לאשר משהו שלא קרה 🙏\nמעביר לצוות ומישהו יחזור אליכם.',
+          text: unbackedClaimHandoffText(unbacked),
           handoff: true,
           unsure: false,
           toolsUsed,
           reason: 'unverified_action',
         };
       }
+
+      // The customer reported a registration and the turn is ending without
+      // it having been written down. Whatever the model chose to say about it,
+      // the report is the thing they wanted recorded.
+      const reported = await recordReportedRegistration({
+        incoming, tools, allowed, successfulCalls, toolsUsed,
+      });
+      if (reported) return reported;
 
       const customerText = handoff
         ? explicitGroupSuitabilityHandoff(incoming, text)

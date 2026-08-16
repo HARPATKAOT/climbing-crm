@@ -6,6 +6,7 @@ import {
   whatsappifyMarkdown,
   unknownUrlsInReply,
   unbackedReplyClaims,
+  unbackedClaimHandoffText,
   CUSTOMER_TOOL_RULES,
   explicitGroupSuitabilityHandoff,
   confirmsLastBotQuestion,
@@ -482,6 +483,25 @@ test('a model that keeps claiming an action it never performed still ends with a
   });
   assert.equal(turn.reason, 'unverified_action');
   assert.equal(turn.handoff, true);
+  // What the customer reads has to mean something to the customer. "אני לא
+  // רואה שהפעולה נקלטה במערכת" is our sentence about our database, sent to
+  // somebody who only asked us to keep a request in mind.
+  assert.doesNotMatch(turn.text, /נקלטה במערכת|הפעולה/);
+  assert.match(turn.text, /העברתי את הבקשה לצוות/);
+});
+
+test('the fallback says what happens next, in the customer\'s words', () => {
+  assert.match(unbackedClaimHandoffText(['placement']), /שינוי שיבוץ נעשה מול הקבוצה/);
+  assert.match(unbackedClaimHandoffText(['cancellation']), /שינוי שיבוץ נעשה מול הקבוצה/);
+  assert.match(unbackedClaimHandoffText(['birth_date']), /עדכון הפרטים בכרטיס/);
+  assert.match(unbackedClaimHandoffText(['follow_up']), /שיחזרו אליכם במועד/);
+  assert.match(unbackedClaimHandoffText(['noted_request']), /לא תישכח/);
+  assert.match(unbackedClaimHandoffText(['something_new']), /אני מעביר את זה לצוות/);
+  for (const claim of ['placement', 'birth_date', 'follow_up', 'noted_request', 'x']) {
+    const text = unbackedClaimHandoffText([claim]);
+    assert.doesNotMatch(text, /נקלטה|במערכת/);
+    assert.match(text, /יחזור אליכם/);
+  }
 });
 
 test('the bot cannot call a pending trainee registered without registered CRM evidence', async () => {
@@ -492,7 +512,7 @@ test('the bot cannot call a pending trainee registered without registered CRM ev
   });
   assert.equal(turn.reason, 'unverified_registration');
   assert.equal(turn.handoff, true);
-  assert.match(turn.text, /לוודא את מצב ההרשמה/);
+  assert.match(turn.text, /בודק את מצב ההרשמה מול הצוות/);
 
   assert.deepEqual(
     unbackedReplyClaims('ראם כבר רשום לחוג', [

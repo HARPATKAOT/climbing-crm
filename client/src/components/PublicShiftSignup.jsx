@@ -28,6 +28,8 @@ export default function PublicShiftSignup() {
   const [loading, setLoading] = useState(true);
   const [employeeId, setEmployeeId] = useState('');
   const [picked, setPicked] = useState([]);
+  // כמה מהמשמרות שסומנו העובד באמת רוצה. 0 = לא ענה, ואז הסימון הוא כל מה שיש.
+  const [wanted, setWanted] = useState(0);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -59,13 +61,19 @@ export default function PublicShiftSignup() {
     setEmployeeId(id);
     const mine = (data?.mine || []).find((row) => String(row.employee_id) === String(id));
     setPicked(mine?.slot_ids || []);
+    setWanted(mine?.wanted_count || 0);
     setNote(mine?.note || '');
   };
 
   const toggleSlot = (slotId) => {
-    setPicked((current) => (current.includes(slotId)
-      ? current.filter((id) => id !== slotId)
-      : [...current, slotId]));
+    setPicked((current) => {
+      const next = current.includes(slotId)
+        ? current.filter((id) => id !== slotId)
+        : [...current, slotId];
+      // „רוצה 4” אחרי שהורדנו לשלוש סימונים הוא בקשה למשמרת שלא סומנה.
+      setWanted((n) => (n > next.length ? next.length : n));
+      return next;
+    });
   };
 
   const submit = async (event) => {
@@ -81,7 +89,9 @@ export default function PublicShiftSignup() {
       const response = await fetch(`/api/public/shift-signup/${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employee_id: employeeId, slot_ids: picked, note }),
+        body: JSON.stringify({
+          employee_id: employeeId, slot_ids: picked, wanted_count: wanted, note,
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -129,7 +139,7 @@ export default function PublicShiftSignup() {
           <p style={{ color: 'rgba(255,255,255,.7)', fontSize: 15, lineHeight: 1.6 }}>
             {picked.length === 0
               ? 'רשמנו שאף אחת מהמשמרות לא מתאימה לך.'
-              : `סימנת ${picked.length} משמרות. השיבוץ הסופי יישלח אליך בהמשך.`}
+              : `סימנת ${picked.length} משמרות${wanted ? `, ורוצה ${wanted} מהן` : ''}. השיבוץ הסופי יישלח אליך בהמשך.`}
           </p>
           <button
             type="button"
@@ -216,6 +226,36 @@ export default function PublicShiftSignup() {
               </div>
             </section>
 
+            {/* כמה מהסימונים הם באמת בקשה. רוב האנשים מסמנים כל מה שהם *יכולים*,
+                וזה נקרא כמו בקשה לכל אחת מהן — כאן הם אומרים כמה הם רוצים. */}
+            {picked.length > 1 && (
+              <section>
+                <h2 style={{ padding: 0 }}>כמה מהן אתם רוצים?</h2>
+                <p className="event-hint">
+                  סימנתם {picked.length} משמרות אפשריות. כמה מהן אתם רוצים בפועל?
+                </p>
+                <div className="want-row">
+                  {Array.from({ length: picked.length }, (_, index) => index + 1).map((n) => (
+                    <button
+                      type="button"
+                      key={n}
+                      className={`want-pill ${wanted === n ? 'is-on' : ''}`}
+                      onClick={() => setWanted(wanted === n ? 0 : n)}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`want-pill ${wanted === 0 ? 'is-on' : ''}`}
+                    onClick={() => setWanted(0)}
+                  >
+                    כמה שיש
+                  </button>
+                </div>
+              </section>
+            )}
+
             <section>
               <label className="event-field">
                 <span>הערה למנהל (לא חובה)</span>
@@ -252,6 +292,11 @@ export default function PublicShiftSignup() {
         .shift-row-day{font-weight:800;font-size:15px;color:#fff}
         .shift-row-meta{font-size:12.5px;color:#94a3b8}
         .shift-row.is-on .shift-row-meta{color:var(--form-accent-text,#7dd3fc)}
+        .want-row{display:flex;flex-wrap:wrap;gap:8px}
+        .want-pill{min-width:44px;padding:10px 14px;border-radius:11px;font:inherit;font-weight:700;
+          cursor:pointer;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.04);color:#e2e8f0}
+        .want-pill.is-on{border-color:var(--form-accent-solid,#38bdf8);
+          background:var(--form-accent-soft-strong,rgba(56,189,248,.18));color:#fff}
       `}</style>
     </div>
   );

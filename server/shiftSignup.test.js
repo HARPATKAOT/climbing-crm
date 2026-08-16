@@ -9,11 +9,14 @@ import {
   isSlotAssigned,
   isWindowOpen,
   normalizeWindow,
+  planAssignments,
+  planWarnings,
   publicWindowView,
   signupBoard,
   slotId,
   slotTickCounts,
   respondentSummary,
+  assignmentMessageText,
 } from './shiftSignup.js';
 
 const TODAY = '2026-08-10';
@@ -430,4 +433,153 @@ test('the respondent list counts what each person is still waiting to hear about
   ]);
   assert.equal(summary[0].picked, 2);
   assert.equal(summary[0].assigned, 1);
+});
+
+// ─── נמענים מפורשים ─────────────────────────────────────────────────────────
+
+test('a named recipient list overrides the role', () => {
+  const employees = [
+    { id: 'e1', name: 'דנה', certifications: ['עוזר מדריך'] },
+    { id: 'e2', name: 'יואב', certifications: ['עוזר מדריך'] },
+    // אין לו את התפקיד, ובכל זאת המנהל בחר בו במפורש.
+    { id: 'e3', name: 'נועה', certifications: [] },
+  ];
+  assert.deepEqual(
+    eligibleEmployees(employees, 'עוזר מדריך', ['e2', 'e3']).map((e) => e.id),
+    ['e2', 'e3']
+  );
+  // רשימה ריקה חוזרת להתנהגות לפי תפקיד.
+  assert.deepEqual(eligibleEmployees(employees, 'עוזר מדריך', []).map((e) => e.id), ['e1', 'e2']);
+});
+
+test('an archived employee is never offered the form, even when named', () => {
+  const employees = [{ id: 'e1', name: 'דנה', is_active: false, certifications: ['עוזר מדריך'] }];
+  assert.deepEqual(eligibleEmployees(employees, 'עוזר מדריך', ['e1']), []);
+});
+
+test('recipients survive an edit that does not mention them', () => {
+  const first = windowFixture({ recipients: ['e1', 'e2'] });
+  const { window: edited } = normalizeWindow({ title: 'שם חדש' }, { existing: first });
+  assert.deepEqual(edited.recipients, ['e1', 'e2']);
+});
+
+// ─── כמה משמרות אני רוצה ────────────────────────────────────────────────────
+
+test('the wanted count cannot exceed what was actually ticked', () => {
+  const row = windowFixture();
+  const { record } = applyResponse(row, [], {
+    employee_id: 'e1',
+    slot_ids: [row.slots[0].id],
+    wanted_count: 5,
+  }, { today: TODAY });
+  assert.equal(record.wanted_count, 1);
+});
+
+test('an unanswered wanted count is zero, not one', () => {
+  const row = windowFixture();
+  const { record } = applyResponse(row, [], {
+    employee_id: 'e1',
+    slot_ids: [row.slots[0].id, row.slots[1].id],
+    wanted_count: '',
+  }, { today: TODAY });
+  assert.equal(record.wanted_count, 0);
+});
+
+// ─── אישור השיבוצים ─────────────────────────────────────────────────────────
+
+test('picks become roster rows carrying what the shift staffs', () => {
+  const row = windowFixture({
+    slots: [{
+      date: '2026-08-11', start_time: '15:30', end_time: '18:00', capacity: 2,
+      activity_id: 'a1', work_type: 'route_building_shift', label: 'בניית מסלולים',
+    }],
+  });
+  const { rows } = planAssignments(row, [{ slot_id: row.slots[0].id, employee_id: 'e1' }], {
+    assignments: [],
+    today: TODAY,
+  });
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].assignment, {
+    employee_id: 'e1',
+    date: '2026-08-11',
+    start_time: '15:30',
+    end_time: '18:00',
+    activity_id: 'a1',
+    group_id: null,
+    work_type: 'route_building_shift',
+    role: 'עוזר מדריך',
+    source: 'shift_signup',
+  });
+});
+
+test('approving twice does not place the same person twice', () => {
+  const row = windowFixture();
+  const picks = [{ slot_id: row.slots[0].id, employee_id: 'e1' }];
+  const { rows, skipped } = planAssignments(row, picks, {
+    assignments: [{ id: 'w9', employee_id: 'e1', date: '2026-08-11', start_time: '15:30' }],
+    today: TODAY,
+  });
+  assert.equal(rows.length, 0);
+  assert.equal(skipped[0].reason, 'already');
+});
+
+test('a double-clicked name is one placement', () => {
+  const row = windowFixture();
+  const pick = { slot_id: row.slots[0].id, employee_id: 'e1' };
+  const { rows } = planAssignments(row, [pick, { ...pick }], { assignments: [], today: TODAY });
+  assert.equal(rows.length, 1);
+});
+
+test('a shift that already passed is skipped rather than back-dated', () => {
+  const row = windowFixture();
+  const { rows, skipped } = planAssignments(row, [{ slot_id: row.slots[0].id, employee_id: 'e1' }], {
+    assignments: [],
+    today: '2026-08-20',
+  });
+  assert.equal(rows.length, 0);
+  assert.equal(skipped[0].reason, 'past');
+});
+
+test('over-capacity and over-wanted are warned about, not blocked', () => {
+  const row = windowFixture();
+  // המשמרת השנייה צריכה אחד; שניים נבחרו אליה.
+  const picks = [
+    { slot_id: row.slots[1].id, employee_id: 'e1' },
+    { slot_id: row.slots[1].id, employee_id: 'e2' },
+    { slot_id: row.slots[0].id, employee_id: 'e1' },
+  ];
+  const warnings = planWarnings(row, picks, {
+    responses: [{ window_id: 'w1', employee_id: 'e1', wanted_count: 1 }],
+    employees: [{ id: 'e1', name: 'דנה' }],
+    assignments: [],
+  });
+  assert.equal(warnings.filter((w) => w.type === 'over_capacity').length, 1);
+  const wanted = warnings.find((w) => w.type === 'over_wanted');
+  assert.match(wanted.text, /דנה — 2 משמרות, ביקש 1/);
+  // התכנון עצמו עדיין מייצר את כל השורות: אזהרה אינה חסימה.
+  assert.equal(planAssignments(row, picks, { assignments: [], today: TODAY }).rows.length, 3);
+});
+
+test('someone already on the roster counts toward the capacity warning', () => {
+  const row = windowFixture();
+  const warnings = planWarnings(row, [{ slot_id: row.slots[1].id, employee_id: 'e2' }], {
+    responses: [],
+    employees: [],
+    assignments: [{ employee_id: 'e1', date: '2026-08-12', start_time: '15:30' }],
+  });
+  assert.equal(warnings.filter((w) => w.type === 'over_capacity').length, 1);
+});
+
+test('the message to an employee lists every shift they got, in order', () => {
+  const row = windowFixture();
+  const text = assignmentMessageText(row, [
+    { date: '2026-08-12', start_time: '15:30', end_time: '18:00', label: 'פתיחת קיר' },
+    { date: '2026-08-11', start_time: '15:30', end_time: '18:00' },
+  ]);
+  const lines = text.split('\n').filter((line) => line.startsWith('•'));
+  assert.deepEqual(lines, [
+    '• יום שלישי, 11.8 · 15:30–18:00',
+    '• יום רביעי, 12.8 · 15:30–18:00 · פתיחת קיר',
+  ]);
+  assert.match(text, /משמרות פתיחה/);
 });
