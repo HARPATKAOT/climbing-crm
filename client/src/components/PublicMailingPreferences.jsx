@@ -120,6 +120,52 @@ export default function PublicMailingPreferences() {
     );
   }
 
+  // מסך נפרד אחרי שמירה — לא הודעה קטנה בתוך הטופס. הלקוח רואה שהפעולה
+  // הושלמה, מה בדיוק נשאר פעיל, ויכול לחזור ולערוך אם התחרט.
+  if (status === 'saved') {
+    const activeLists = (data?.lists || []).filter((list) => selection[list.key] !== false);
+    return (
+      <main className="mailing-preferences-page" dir="rtl">
+        <section className="mailing-preferences-card mailing-preferences-done" role="status">
+          <span className="mailing-preferences-done-icon" aria-hidden="true"><Check /></span>
+          <h1>ההעדפות נשמרו בהצלחה</h1>
+          <p className="mailing-preferences-done-sub">
+            {activeLists.length
+              ? 'מהיום תקבלו עדכונים רק בנושאים שבחרתם:'
+              : 'הוסרתם מכל רשימות הדיוור. הודעות שירות חיוניות עדיין עשויות להישלח.'}
+          </p>
+          {activeLists.length > 0 && (
+            <ul className="mailing-preferences-done-list">
+              {activeLists.map((list) => (
+                <li key={list.key}>
+                  <span
+                    className="mailing-preferences-list-icon"
+                    aria-hidden="true"
+                    style={{ background: `color-mix(in srgb, ${listColorHex(list.color)} 14%, transparent)` }}
+                  >
+                    <ListIcon icon={list.icon} size={18} color={list.color || '#38bdf8'} />
+                  </span>
+                  {list.label}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mailing-preferences-done-note">
+            אפשר לסגור את הדף. הקישור האישי נשאר שלכם — כל דיוור עתידי יכלול אותו,
+            ואפשר לחזור ולעדכן דרכו בכל זמן.
+          </p>
+          <button
+            type="button"
+            className="mailing-preferences-save mailing-preferences-done-edit"
+            onClick={() => { setStatus('ready'); setMessage(''); }}
+          >
+            עריכת ההעדפות מחדש
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="mailing-preferences-page" dir="rtl">
       <section className="mailing-preferences-card" aria-labelledby="mailing-preferences-title">
