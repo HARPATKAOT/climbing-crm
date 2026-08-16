@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCentreReport,
+  centreNameTokens,
   firstBillableSession,
   findStudentsByName,
   attendanceCounts,
@@ -119,4 +120,70 @@ test('an exact name wins over a partial one', () => {
 test('dates are written the way a person outside the system reads them', () => {
   assert.equal(formatReportDate('2026-07-05'), '5.7.2026');
   assert.equal(formatReportDate(''), '');
+});
+
+test('the verb the centre types is not part of the name, and the order is not fixed', () => {
+  const roster = [
+    { id: 'a', name: 'קרני אלימלך' },
+    { id: 'b', name: 'נטע יאירי' },
+    { id: 'c', name: 'יאיר כהן' },
+    { id: 'd', name: 'יאיר לוי' },
+  ];
+  // "אלימלך קרני נרשם" was looked up whole — verb included, names reversed —
+  // and came back as a child we do not have.
+  assert.deepEqual(findStudentsByName(roster, 'אלימלך קרני נרשם').map((s) => s.id), ['a']);
+  assert.deepEqual(findStudentsByName(roster, 'קרני אלימלך').map((s) => s.id), ['a']);
+
+  // "יאירי נטע" matched four children called יאיר, because the typed string
+  // contains their whole name. Every word typed has to be in the name.
+  assert.deepEqual(findStudentsByName(roster, 'יאירי נטע').map((s) => s.id), ['b']);
+  assert.deepEqual(findStudentsByName(roster, 'יאיר').map((s) => s.id), ['c', 'd']);
+
+  // A message that is all verbs is not a name at all.
+  assert.deepEqual(findStudentsByName(roster, 'הוא נרשם במתנס'), []);
+  assert.deepEqual(centreNameTokens('אלימלך קרני נרשם'), ['אלימלך', 'קרני']);
+});
+
+test('before the season opens the answer is the opening day, charged in full', () => {
+  const weekly = { id: 'w1', name: 'נטע יאירי', groupId: 'weekly' };
+  const report = buildCentreReport({
+    students: [weekly],
+    attendance: [],
+    groups,
+    name: 'נטע יאירי',
+    seasonStart: '2026-09-01',
+    today: '2026-08-16',
+  });
+  // 1.9.2026 is a Tuesday; the weekly group trains on Sunday, so the first
+  // session is the 6th. Nobody has attendance in August — that is not a
+  // missing register, it is a season that has not started.
+  assert.equal(report.ok, true);
+  assert.equal(report.date, '2026-09-06');
+  assert.equal(report.beforeSeason, true);
+  assert.equal(report.billing.label, 'חודש מלא');
+  assert.match(report.reply, /האימון הראשון 6\.9\.2026/);
+  assert.match(report.reply, /מחויב במלואו/);
+
+  // Once the season is running, only the register may say when a child began.
+  const started = buildCentreReport({
+    students: [weekly],
+    attendance: [],
+    groups,
+    name: 'נטע יאירי',
+    seasonStart: '2026-09-01',
+    today: '2026-09-20',
+  });
+  assert.equal(started.ok, false);
+  assert.equal(started.reason, 'no_attendance');
+
+  // Without a group there is no training day to name, so it stays a person's job.
+  const noGroup = buildCentreReport({
+    students: [{ id: 'w2', name: 'רון כץ' }],
+    attendance: [],
+    groups,
+    name: 'רון כץ',
+    seasonStart: '2026-09-01',
+    today: '2026-08-16',
+  });
+  assert.equal(noGroup.reason, 'no_attendance');
 });

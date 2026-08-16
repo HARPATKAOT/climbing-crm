@@ -13,6 +13,9 @@ import {
   mergeBotSettings,
   applyBusinessBrand,
   isStaffPhone,
+  centrePhones,
+  centreContactName,
+  isCentrePhone,
   isHumanOutboundLog,
   shouldDeferToHumanStaff,
   withBotMark,
@@ -111,6 +114,25 @@ test('only a listed staff number gets the CRM agent', () => {
   assert.equal(isStaffPhone(settings, '0529876543'), true);
   assert.equal(isStaffPhone(settings, '972544444444'), false);
   assert.equal(isStaffPhone({ aiStaffPhones: '' }, '972501234567'), false);
+});
+
+test('a centre number may carry the name of the person who writes from it', () => {
+  // The secretary was asked "מה השם הפרטי שלך?" by a bot that already had her
+  // number on a list. The name sits beside the number, and a list of bare
+  // numbers keeps working exactly as before.
+  const named = { aiCentrePhones: '0526688649 כרמית, 0501234567' };
+  assert.deepEqual(centrePhones(named), ['0526688649', '0501234567']);
+  assert.equal(isCentrePhone(named, '972526688649'), true);
+  assert.equal(centreContactName(named, '972526688649'), 'כרמית');
+  assert.equal(centreContactName(named, '972501234567'), '');
+  assert.equal(centreContactName({ aiCentrePhones: '' }, '972526688649'), '');
+
+  // The live value was pasted into a right-to-left field, so it arrived
+  // wrapped in invisible direction marks. They used to be harmless; now they
+  // would have swallowed the name.
+  const pasted = { aiCentrePhones: '⁦+972526688649⁩ כרמית' };
+  assert.deepEqual(centrePhones(pasted), ['+972526688649']);
+  assert.equal(centreContactName(pasted, '972526688649'), 'כרמית');
 });
 
 test('every bot reply is marked, and the mark never stacks', () => {
