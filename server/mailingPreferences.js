@@ -27,6 +27,44 @@ function safeEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * The list icons as WhatsApp sees them.
+ *
+ * The CRM screens and the preferences page draw the `icon` field with lucide
+ * components; a message has only the character itself. Same field, same order,
+ * so a customer reading the confirmation sees the list they just ticked —
+ * "תקבלו עדכונים על: תפעולי, חוגי טיפוס." was a sentence, not a list.
+ */
+export const LIST_EMOJI = Object.freeze({
+  bell: '🔔',
+  mountain: '🧗',
+  compass: '🧭',
+  tent: '⛺',
+  party: '🎉',
+  megaphone: '📣',
+});
+
+export function listEmoji(icon) {
+  return LIST_EMOJI[String(icon || '')] || LIST_EMOJI.megaphone;
+}
+
+/**
+ * What the customer gets back after saving. Best-effort by design — outside
+ * the 24-hour window it simply does not send — so it never throws.
+ */
+export function mailingConfirmationMessage(snapshot = {}) {
+  const active = (snapshot.lists || []).filter((list) => list.subscribed);
+  if (!active.length) {
+    return 'העדפות הדיוור נשמרו ✔\n'
+      + 'הוסרתם מכל רשימות הדיוור. הודעות שירות חיוניות עדיין עשויות להישלח.';
+  }
+  return [
+    'העדפות הדיוור נשמרו ✔',
+    'תקבלו עדכונים על:',
+    ...active.map((list) => `${listEmoji(list.icon)} ${list.label}`),
+  ].join('\n');
+}
+
 function sortedListDefs(database) {
   return [...(database.getBroadcastListDefs?.() || [])]
     .filter((list) => list?.key && list?.label)
