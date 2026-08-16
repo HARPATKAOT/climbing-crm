@@ -14,6 +14,7 @@ import MatchingCentre from './finance/MatchingCentre.jsx';
 import ProfitDashboard from './finance/ProfitDashboard.jsx';
 import ExpenseCenter from './finance/ExpenseCenter.jsx';
 import { PaymentMethodTag, paymentMethodBadge, INCOME_SOURCE_ICONS } from '../utils/financeBadges.jsx';
+import ProfitabilityTables from './finance/ProfitabilityTables.jsx';
 
 // ארבעה טאבים לפי הלוגיקה העסקית: מה קורה (סקירה), מה נכנס (הכנסות),
 // מה יוצא (הוצאות), ומה דורש טיפול (תיבה אחת עם מונה).
@@ -586,6 +587,7 @@ export default function FinancialReports() {
   const [inboxCount, setInboxCount] = useState(0);
   const [incomePreset, setIncomePreset] = useState(() =>
     new URLSearchParams(window.location.search).get('status') || 'all');
+  const [overviewView, setOverviewView] = useState('dash');
 
   // קובייה לחיצה בסקירה פותחת את טאב ההכנסות מסונן מראש, עם כתובת ברת-שיתוף.
   const openIncome = (presetStatus = 'all') => {
@@ -769,8 +771,17 @@ export default function FinancialReports() {
   const automationSummary = automation.summary || {};
   const automationSettings = automation.settings || {};
   return <div className="finance-page">
-    <section className="finance-toolbar card"><div><div className="finance-sync-line"><CloudCog size={17} /><strong>iCount חי · Notion ארכיון</strong></div><small>{number.format(counts.documents || 0)} מסמכים · {number.format(counts.expenses || 0)} הוצאות · {number.format(counts.suppliers || 0)} ספקים</small></div>
-      <div className="finance-toolbar-actions"><PeriodButtons onChange={(a, b) => { setFrom(a); setTo(b); }} /><label><span>מ־</span><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label><label><span>עד</span><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label><a className="btn btn-ghost" href={`/api/finance/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={16} /> CSV</a><button className="btn btn-ghost" onClick={() => setShowExpenseForm((value) => !value)}><Plus size={16} />הוספת הוצאה</button><button className="btn btn-primary" onClick={sync} disabled={syncing}><RefreshCw size={16} className={syncing ? 'spin' : ''} />{syncing ? 'מסנכרן…' : 'סנכרון iCount'}</button></div>
+    <section className="finance-toolbar card">
+      <div className="finance-toolbar-actions">
+        <PeriodButtons onChange={(a, b) => { setFrom(a); setTo(b); }} />
+        <label><span>מ־</span><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label><span>עד</span><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <a className="btn btn-ghost" href={`/api/finance/export.csv?from=${from}&to=${to}`}><ArrowDownToLine size={16} /> CSV</a>
+        <button className="btn btn-ghost" onClick={() => setShowExpenseForm((value) => !value)}><Plus size={16} />הוספת הוצאה</button>
+      </div>
+      <button className="btn btn-ghost finance-sync-mini" title={`סנכרון iCount (${number.format(counts.documents || 0)} מסמכים · ${number.format(counts.expenses || 0)} הוצאות)`} onClick={sync} disabled={syncing}>
+        <RefreshCw size={16} className={syncing ? 'spin' : ''} />{syncing ? 'מסנכרן…' : 'סנכרון'}
+      </button>
     </section>
     {error && <div className="finance-alert"><AlertTriangle size={18} />{error}</div>}
     {showExpenseForm && <form className="card finance-expense-form" onSubmit={saveExpense}>
@@ -787,7 +798,13 @@ export default function FinancialReports() {
       {tab === 'overview' && <><section className="finance-metrics">
         <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" onClick={() => openIncome('all')} /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" onClick={() => openIncome('paid')} /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" onClick={() => openIncome('debt')} /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" onClick={() => openIncome('refunded')} /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" onClick={() => openIncome('all')} />
       </section>{featureFlags.dashboard_v2
-        ? <ProfitDashboard from={from} to={to} />
+        ? <>
+          <div className="tab-bar tab-bar-sub finance-overview-sub">
+            <button className={`tab-pill ${overviewView === 'dash' ? 'active' : ''}`} onClick={() => setOverviewView('dash')}>מבט על</button>
+            <button className={`tab-pill ${overviewView === 'profit' ? 'active' : ''}`} onClick={() => setOverviewView('profit')}>רווחיות חוגים ואירועים</button>
+          </div>
+          {overviewView === 'dash' ? <ProfitDashboard from={from} to={to} /> : <ProfitabilityTables initialMonth={to.slice(0, 7)} />}
+        </>
         : <section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>}</>}
       {tab === 'income' && <>
         <PaymentCentre key={incomePreset} initialStatus={incomePreset} data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />

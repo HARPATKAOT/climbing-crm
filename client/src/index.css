@@ -2110,7 +2110,7 @@ select option, select optgroup {
 .finance-category-list > div > div { height: 7px; background: var(--bg-input); border-radius: 99px; overflow: hidden; }.finance-category-list i { display: block; height: 100%; background: linear-gradient(90deg, var(--coral), var(--amber)); border-radius: inherit; }
 .finance-category-list strong { direction: ltr; text-align: right; color: var(--text-2); }
 .finance-source-card > div { display: grid; grid-template-columns: 70px 1fr; align-items: start; gap: 10px; margin-top: 14px; }.finance-source-card p { color: var(--text-2); font-size: 13px; }
-.finance-profit-metrics { grid-template-columns: repeat(3, minmax(200px, 1fr)); }
+.finance-profit-metrics { grid-template-columns: repeat(4, minmax(170px, 1fr)); }
 .finance-alert { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border: 1px solid rgba(248,113,113,.35); border-radius: var(--radius-sm); color: #FCA5A5; background: rgba(248,113,113,.08); }
 .finance-loading, .finance-empty { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 110px; color: var(--text-3); }
 .spin { animation: finance-spin .9s linear infinite; } @keyframes finance-spin { to { transform: rotate(360deg); } }
@@ -2183,6 +2183,10 @@ select option, select optgroup {
 .finance-matching-panes .is-matched-row { opacity: .5; }
 .finance-inbox-row.is-focused { background: color-mix(in srgb, var(--purple) 9%, transparent); box-shadow: inset 3px 0 0 var(--purple); }
 .finance-automation-hero p svg { vertical-align: -2px; margin-inline-end: 4px; color: var(--amber); }
+/* toolbar מסודר: הפעולות בשורה, הסנכרון קטן בקצה */
+.finance-sync-mini { margin-inline-start: auto; flex: 0 0 auto; }
+.finance-overview-sub { margin-top: 2px; }
+.finance-month-label { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
 /* קוביית KPI לחיצה */
 .finance-metric.is-clickable { cursor: pointer; transition: transform .12s ease, border-color .12s ease; }
 .finance-metric.is-clickable:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--metric) 55%, var(--border)); }

@@ -526,15 +526,49 @@ financeRouter.get('/profit-centers', (req, res) => {
   const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : new Date().toISOString().slice(0, 7);
   const factor = employerCostFactor(db.get('finance_center_settings'));
   const { rows } = laborCostRows({ workAssignments: db.get('work_assignments'), factor });
+
+  // הכנסה פר אירוע: שורות הספר שמשויכות למרכז העלות של הפעילות.
+  const centerRef = new Map(db.get('finance_cost_centers')
+    .filter((center) => center.ref_table === 'activities')
+    .map((center) => [String(center.id), String(center.ref_id)]));
+  const revenueByActivity = new Map();
+  for (const entry of db.get('finance_ledger_entries')) {
+    if (entry.voided_at || entry.basis !== 'cash' || entry.period !== month) continue;
+    if (!(entry.amount_agorot > 0)) continue;
+    const activityId = centerRef.get(String(entry.cost_center_id || ''));
+    if (!activityId) continue;
+    revenueByActivity.set(activityId, (revenueByActivity.get(activityId) || 0) + entry.amount_agorot);
+  }
+  const activityById = new Map(db.get('activities').map((activity) => [String(activity.id), activity]));
+  const laborByActivity = new Map(costByKey(rows.filter((row) => row.month === month), 'activity_id')
+    .map((entry) => [String(entry.activity_id), entry]));
+  const eventRows = [...new Set([...revenueByActivity.keys(), ...laborByActivity.keys()])].map((activityId) => {
+    const activity = activityById.get(activityId);
+    const revenue = revenueByActivity.get(activityId) || 0;
+    const labor = laborByActivity.get(activityId) || { employer_cost_agorot: 0, hours: 0 };
+    return {
+      activity_id: activityId,
+      name: activity?.name || 'פעילות',
+      date: activity?.date || null,
+      revenue_agorot: revenue,
+      labor_cost_agorot: labor.employer_cost_agorot,
+      labor_hours: labor.hours || 0,
+      profit_agorot: revenue - labor.employer_cost_agorot,
+    };
+  }).sort((a, b) => b.profit_agorot - a.profit_agorot);
+
   res.json({
     month,
+    employer_cost_factor: factor,
     classes: classProfitability({
       groups: db.get('groups'),
       enrollments: db.get('enrollments'),
       laborRows: rows,
       month,
     }),
-    activities: costByKey(rows.filter((row) => row.month === month), 'activity_id'),
+    events: eventRows,
+    employees: effectiveCostPerHour(rows.filter((row) => row.month === month))
+      .map((row) => ({ ...row, employee_name: db.get('employees').find((employee) => String(employee.id) === String(row.employee_id))?.name || row.employee_id })),
   });
 });
 
