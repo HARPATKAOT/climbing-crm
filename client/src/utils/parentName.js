@@ -17,6 +17,13 @@ export function joinParentName(first, lastName) {
   return [clean(first), clean(lastName)].filter(Boolean).join(' ');
 }
 
+/** The name a parent is listed under — first name and surname, never empty. */
+export function parentDisplayName(parent) {
+  if (!parent) return 'ללא הורה';
+  const parts = splitParentName(parent);
+  return joinParentName(parts.first, parts.lastName) || parent.name || 'ללא שם';
+}
+
 /**
  * Fill both boxes from a card that may predate the split.
  *

@@ -38,12 +38,59 @@ export function awaitingSince(parent, students = []) {
   return Math.max(latestInboundTime(parent), latestRegistrationTime(students));
 }
 
+function familyParentsOf(row) {
+  return row?.parents?.length ? row.parents : [row?.parent];
+}
+
 function familyAwaitingSince(row) {
-  const familyParents = row?.parents?.length ? row.parents : [row?.parent];
   return Math.max(
     0,
-    ...familyParents.map((parent) => awaitingSince(parent, row?.students || []))
+    ...familyParentsOf(row).map((parent) => awaitingSince(parent, row?.students || []))
   );
+}
+
+/**
+ * „ממתינים לטיפול” — רק מי שהתהליך שלו נעצר והבוט העביר אותו לצוות.
+ *
+ * בהתחלה כל שיחה נכנסת נכנסה לתור, כדי שתהיה בקרה על הבוט. משהבוט עונה לבד,
+ * תור כזה הוא רשימת כל השיחות בשם אחר, ומי שבאמת תקוע נבלע בתוכה. הסימן
+ * היחיד שיש כאן עבודה לאדם הוא `bot_handoff_at`: הבוט רשם אותו כשהעביר את
+ * השיחה, והוא מתאפס לבד ברגע שאיש צוות עונה ללקוח (מהמערכת או מהטלפון).
+ *
+ * שני סייגים: העברה ישנה מדי היא היסטוריה ולא תור, וסימון „לקוח טופל”
+ * (`communication_handled_at`) סוגר אותה ידנית.
+ */
+export const MAX_HANDOFF_WAIT_MS = 14 * 24 * 60 * 60 * 1000;
+
+export function handoffSince(parent) {
+  const handed = Date.parse(parent?.bot_handoff_at || '');
+  return Number.isFinite(handed) ? handed : 0;
+}
+
+export function isHandedToStaff(parent, now = Date.now()) {
+  const handed = handoffSince(parent);
+  if (!handed) return false;
+  if (now - handed > MAX_HANDOFF_WAIT_MS) return false;
+  const handledTime = Date.parse(parent?.communication_handled_at || '');
+  return !(Number.isFinite(handledTime) && handledTime >= handed);
+}
+
+/** ההעברה הוותיקה ביותר שעדיין פתוחה במשק הבית (0 — אין כזו). */
+export function familyHandoffSince(row, now = Date.now()) {
+  const times = familyParentsOf(row)
+    .filter((parent) => isHandedToStaff(parent, now))
+    .map((parent) => handoffSince(parent));
+  return times.length ? Math.min(...times) : 0;
+}
+
+/** האם למשק הבית יש בכלל שיחה — כלומר מישהו בו כתב לנו אי פעם. */
+export function hasConversation(parent) {
+  return latestInboundTime(parent) > 0;
+}
+
+/** מתי מישהו במשק הבית כתב לנו לאחרונה — בלי לערבב הרשמות. */
+export function familyLatestInbound(row) {
+  return Math.max(0, ...familyParentsOf(row).map((parent) => latestInboundTime(parent)));
 }
 
 function familyParentName(row) {
@@ -58,13 +105,18 @@ const HEBREW_NAME_COLLATOR = new Intl.Collator('he', {
   numeric: true,
 });
 
-/** Sort the household-level handling queue without mutating its source rows. */
-export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc') {
+/**
+ * Sort the household-level handling queue without mutating its source rows.
+ *
+ * `timeOf` is what „זמן שיחה” means for this list: the waiting queue counts a
+ * fresh registration as an event, the conversations tab counts only messages.
+ */
+export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc', timeOf = familyAwaitingSince) {
   const sorted = [...rows];
   sorted.sort((a, b) => {
     let difference = 0;
     if (sortBy === 'conversation_asc') {
-      difference = familyAwaitingSince(a) - familyAwaitingSince(b);
+      difference = timeOf(a) - timeOf(b);
     } else if (sortBy === 'name_asc') {
       difference = HEBREW_NAME_COLLATOR.compare(familyParentName(a), familyParentName(b));
     } else if (sortBy === 'created_desc') {
@@ -72,7 +124,7 @@ export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc') {
     } else if (sortBy === 'created_asc') {
       difference = (Date.parse(a?.created || '') || 0) - (Date.parse(b?.created || '') || 0);
     } else {
-      difference = familyAwaitingSince(b) - familyAwaitingSince(a);
+      difference = timeOf(b) - timeOf(a);
     }
 
     if (difference) return difference;
@@ -81,6 +133,16 @@ export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc') {
     return String(a?.key || '').localeCompare(String(b?.key || ''));
   });
   return sorted;
+}
+
+/** תור ההעברות לצוות — מי שממתין הכי הרבה זמן נמצא למעלה. */
+export function sortHandoffRows(rows = []) {
+  return sortCommunicationRows(rows, 'conversation_asc', familyHandoffSince);
+}
+
+/** כל השיחות, לפי סדר השיחה עצמה. */
+export function sortConversationRows(rows = [], sortBy = 'conversation_desc') {
+  return sortCommunicationRows(rows, sortBy, familyLatestInbound);
 }
 
 /** The row immediately after the open household in the visible queue order. */

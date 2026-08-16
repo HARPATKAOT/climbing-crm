@@ -75,11 +75,13 @@ import {
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
 import {
-  isAwaitingHandling,
+  hasConversation,
+  isHandedToStaff,
   latestInboundTime,
   nextCommunicationRow,
   pickCommunicationTarget,
-  sortCommunicationRows,
+  sortConversationRows,
+  sortHandoffRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
 import { consecutiveAbsences, getGroupDays, shortGroupLabel } from '../scheduleUtils.js';
@@ -104,10 +106,29 @@ import {
   formatRentalRange,
 } from './equipmentUtils.js';
 import AppSelect from './AppSelect.jsx';
-import { joinParentName, splitParentName } from '../utils/parentName.js';
+import DeclarationIcons from './DeclarationIcons.jsx';
+import FamilyTable from './FamilyTable.jsx';
+import { joinParentName, parentDisplayName, splitParentName } from '../utils/parentName.js';
 
 /** One shared empty list, so "nothing loaded yet" is a stable identity. */
 const EMPTY_ROWS = Object.freeze([]);
+
+/**
+ * שתי לשוניות שאינן סטטוס של ליד אלא מצב של השיחה — ולכן שתיהן קוראות גם את
+ * הארכיון: לקוח ותיק שהבוט העביר לצוות הוא עבודה, גם אם התיק שלו סגור.
+ */
+const QUEUE_TABS = new Set(['communication', 'conversations']);
+
+function matchesQueueTab(tab, parent) {
+  return tab === 'communication' ? isHandedToStaff(parent) : hasConversation(parent);
+}
+
+/** „אין תוצאות” לא אומר כלום בתור ריק — ותור ריק כאן הוא בשורה טובה. */
+function emptyQueueMessage(tab) {
+  if (tab === 'communication') return 'אין אף לקוח שהבוט העביר לצוות — הכול מטופל';
+  if (tab === 'conversations') return 'אין עדיין שיחות';
+  return 'אין תוצאות';
+}
 
 function restrictedProgramForGroup(group = {}) {
   const text = `${group.skillLevel || ''} ${group.name || ''} ${group.ageCategory || ''}`;
@@ -339,12 +360,6 @@ function ageLabel(birthDateStr) {
   return months != null && months >= 6 ? `${years} וחצי` : String(years);
 }
 
-function parentDisplayName(parent) {
-  if (!parent) return 'ללא הורה';
-  const parts = parentNameParts(parent);
-  return [parts.firstName, parts.lastName].filter(Boolean).join(' ') || parent.name || 'ללא שם';
-}
-
 /** Adults first, then children — fixed order that does not follow who is open. */
 function compareTraineeChips(a, b) {
   const adultDiff = (a?.isAdult ? 0 : 1) - (b?.isAdult ? 0 : 1);
@@ -415,75 +430,6 @@ const sourceLabel = (m) => {
 
 
 /** Collapsible folder row for lead detail panel */
-/**
- * Declaration state for one climber, as icons: the climber is the wall form,
- * footprints the outdoor trip, gift a booked activity. Green means a valid
- * signature is on file, amber means it is missing or expired — the row is
- * scanned, not read, so the colour has to carry the answer.
- *
- * `validOnly` keeps just the green marks (the customer-file name row). The
- * leads table still wants the amber gaps so a missing signature stands out.
- */
-function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
-  const marks = [
-    // האייקון מגיע מקטלוג סוגי ההצהרות, כדי שאותו סימן ישמש כאן ובתיק הלקוח.
-    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'אישור פעילות בקיר' },
-    { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'טופס השתתפות לטיולים' },
-  ];
-  const validMarks = marks.filter(({ key }) => {
-    const state = status?.[key];
-    return !!state?.signed && !state?.expired;
-  });
-  // Name-row mode: green icons for every valid signature; if none, one amber
-  // climber so a missing wall form still reads at a glance.
-  const shown = validOnly
-    ? (validMarks.length ? validMarks : marks.filter(({ key }) => key === 'wall'))
-    : marks.filter(({ key }) => {
-      const state = status?.[key];
-      // Wall always shows (missing is the amber signal). Extra activities only
-      // appear once there is something to say about them.
-      return key === 'wall' || !!state?.signed;
-    });
-  if (!shown.length) return null;
-  const Wrap = onClick ? 'button' : 'span';
-  return (
-    <Wrap
-      {...(onClick
-        ? { type: 'button', onClick, title: `פתיחת תיקיית ${FORM_FOLDER}` }
-        : {})}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        ...(onClick
-          ? {
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }
-          : {}),
-      }}
-    >
-      {shown.map(({ key, Icon, label }) => {
-        const state = status?.[key];
-        const ok = !!state?.signed && !state?.expired;
-        const title = !state?.signed
-          ? `${label}: לא נחתמה`
-          : state.expired ? `${label}: פג תוקף` : `${label}: בתוקף`;
-        return (
-          // The tooltip hangs off a span: a `title` attribute on an <svg> is
-          // not what browsers show on hover.
-          <span key={key} title={title} aria-label={title} style={{ display: 'inline-flex' }}>
-            <Icon size={size} style={{ color: ok ? 'var(--green)' : 'var(--amber)', opacity: ok ? 1 : 0.75 }} />
-          </span>
-        );
-      })}
-    </Wrap>
-  );
-}
-
 function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, renderBody, summaryColor, accent = 'var(--blue)', style, headerless = false }) {
   // Large folders contain maps, formatting and controls for years of customer
   // history. A render callback means React does none of that work until the
@@ -7602,7 +7548,7 @@ export default function Leads({
   );
   // A direct search is archive-inclusive so an old customer can always be
   // found without the employee first guessing which status tab contains them.
-  const leadEntries = searchActive || showArchived || filterStatus === 'communication'
+  const leadEntries = searchActive || showArchived || QUEUE_TABS.has(filterStatus)
     ? leadEntryScopes.archiveInclusive
     : leadEntryScopes.working;
 
@@ -7617,8 +7563,8 @@ export default function Leads({
         : showArchived
           ? isArchivedParent(parent)
           : filterStatus === 'all'
-            || (filterStatus === 'communication'
-              ? isAwaitingHandling(parent, [s])
+            || (QUEUE_TABS.has(filterStatus)
+              ? matchesQueueTab(filterStatus, parent)
               : s.status === filterStatus);
       return matchSearch && matchStatus;
     }).map((entry) => entry.student);
@@ -7627,9 +7573,10 @@ export default function Leads({
   // Table: one row per family. Kanban stays per-student for the funnel.
   const unfilteredFamilyRows = useMemo(() => {
     const rows = buildFamilyRows(filtered, parents, students);
-    if (filterStatus === 'communication') {
-      return sortCommunicationRows(rows, communicationSort);
-    }
+    // The stuck queue is work, so the longest wait is on top and there is
+    // nothing to choose. The conversations tab is a list to browse.
+    if (filterStatus === 'communication') return sortHandoffRows(rows);
+    if (filterStatus === 'conversations') return sortConversationRows(rows, communicationSort);
     return rows;
   }, [filtered, parents, students, filterStatus, communicationSort]);
 
@@ -7648,13 +7595,10 @@ export default function Leads({
   // employee selected for incoming enquiries.
   const communicationFamilyRows = useMemo(() => {
     const waitingStudents = leadEntryScopes.archiveInclusive
-      .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
+      .filter(({ parent }) => isHandedToStaff(parent))
       .map(({ student }) => student);
-    return sortCommunicationRows(
-      buildFamilyRows(waitingStudents, parents, students),
-      communicationSort
-    );
-  }, [leadEntryScopes, parents, students, communicationSort]);
+    return sortHandoffRows(buildFamilyRows(waitingStudents, parents, students));
+  }, [leadEntryScopes, parents, students]);
 
   // The customer table is a thousand-odd households, and drawing every row cost
   // roughly a second of frozen screen on each visit and each keystroke in
@@ -7691,7 +7635,14 @@ export default function Leads({
       // number whichever tab happens to be open.
       communication: buildFamilyRows(
         leadEntryScopes.archiveInclusive
-          .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
+          .filter(({ parent }) => isHandedToStaff(parent))
+          .map(({ student }) => student),
+        parents,
+        students
+      ).length,
+      conversations: buildFamilyRows(
+        leadEntryScopes.archiveInclusive
+          .filter(({ parent }) => hasConversation(parent))
           .map(({ student }) => student),
         parents,
         students
@@ -8083,8 +8034,16 @@ export default function Leads({
         <button
           className={`btn btn-sm ${filterStatus === 'communication' ? 'btn-primary' : 'btn-ghost'}`}
           onClick={() => setFilterStatus('communication')}
+          title="לקוחות שהבוט העביר לצוות ואיש עוד לא ענה להם"
         >
           ממתינים לטיפול ({familyCountByStatus.communication})
+        </button>
+        <button
+          className={`btn btn-sm ${filterStatus === 'conversations' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setFilterStatus('conversations')}
+          title="כל מי שכתב לנו אי פעם, לפי סדר השיחות"
+        >
+          כל השיחות ({familyCountByStatus.conversations})
         </button>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
           פעילים ({familyCountByStatus.all})
@@ -8103,15 +8062,15 @@ export default function Leads({
             <Archive size={13} /> ארכיון ({familyCountByStatus.archived})
           </button>
         )}
-        {filterStatus === 'communication' && familyCountByStatus.communication > 0 && (
-          <div style={{ marginInlineStart: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {filterStatus === 'conversations' && familyCountByStatus.conversations > 0 && (
+          <div style={{ marginInlineStart: 'auto' }}>
             <AppSelect
               value={communicationSort}
               onChange={(event) => setCommunicationSort(event.target.value)}
               className="btn btn-sm btn-ghost"
               style={{ width: 218 }}
-              aria-label="מיון הממתינים לטיפול"
-              title="מיון רשימת הממתינים לטיפול"
+              aria-label="מיון השיחות"
+              title="מיון רשימת השיחות"
             >
               <option value="conversation_desc">מיון: זמן שיחה · חדש לישן</option>
               <option value="conversation_asc">מיון: זמן שיחה · ישן לחדש</option>
@@ -8119,6 +8078,11 @@ export default function Leads({
               <option value="created_desc">מיון: תאריך קליטה · חדש לישן</option>
               <option value="created_asc">מיון: תאריך קליטה · ישן לחדש</option>
             </AppSelect>
+          </div>
+        )}
+        {filterStatus === 'communication' && familyCountByStatus.communication > 0 && (
+          <div style={{ marginInlineStart: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="text-muted" style={{ fontSize: 12 }}>הוותיק ביותר למעלה</span>
             <button
               className="btn btn-sm btn-success"
               disabled={markingAllHandled}
@@ -8347,186 +8311,26 @@ export default function Leads({
             </div>
           )}
         </div>
-        <div className="table-wrap">
-          <table className="crm-table">
-            <thead>
-              <tr>
-                <th>שם ההורה</th>
-                <th>ילדים / מתאמנים</th>
-                <th>טלפון</th>
-                <th>קבוצה</th>
-                <th>סטטוס</th>
-                <th>תאריך קליטה</th>
-                <th>פעולות</th>
-              </tr>
-            </thead>
-            <tbody>
-              {familyRows.length === 0 && (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
-                    {activeFilterCount > 0 && unfilteredFamilyRows.length > 0 ? (
-                      <>
-                        אין תוצאות לסינון הזה
-                        <div style={{ marginTop: 10 }}>
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilters(EMPTY_LEAD_FILTERS)}>
-                            <X size={13} /> נקה סינון
-                          </button>
-                        </div>
-                      </>
-                    ) : 'אין תוצאות'}
-                  </td>
-                </tr>
-              )}
-              {visibleFamilyRows.map((family) => {
-                const parent = family.parent;
-                const primary = family.primaryStudent;
-                const isIg = parent?.instagram_id || parent?.channel === 'instagram'
-                  || family.students.some((s) => s.notes?.includes('אינסטגרם'));
-                const namedChildren = family.students.filter((s) => s.name && !isParentOnlyLead(s));
-                const groupsInFamily = [...new Set(
-                  family.students.flatMap((s) => studentGroupIds(s))
-                )].map((gid) => groups.find((g) => g.id === gid)).filter(Boolean);
-                // The second parent of the household — same customer, one row.
-                const otherParents = (family.parents || [])
-                  .filter((p) => String(p.id) !== String(parent?.id));
-                const awaiting = [parent, ...otherParents].some((p) => p && isAwaitingHandling(p));
-
-                return (
-                  <tr
-                    key={family.key}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => primary && setSelectedStudentId(primary.id)}
-                  >
-                    <td style={{ fontWeight: 700 }}>
-                      {parentDisplayName(parent) || '—'}
-                      {otherParents.length > 0 && (
-                        <div style={{ marginTop: 2, fontWeight: 500, fontSize: 11, color: 'var(--text-3)' }}>
-                          {otherParents.map((p) => parentDisplayName(p)).filter(Boolean).join(' · ')}
-                        </div>
-                      )}
-                      {awaiting && (
-                        <div style={{ marginTop: 4 }}>
-                          <span className="badge badge-amber" style={{ fontSize: 10 }}>ממתין לטיפול</span>
-                        </div>
-                      )}
-                      {isArchivedParent(parent) && (
-                        <div style={{ marginTop: 4 }}>
-                          <span className="badge badge-gray" style={{ fontSize: 10 }}>ארכיון</span>
-                        </div>
-                      )}
-                    </td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      {namedChildren.length === 0 ? (
-                        <span style={{ color: 'var(--text-3)' }}>ללא מתאמן רשום</span>
-                      ) : (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {namedChildren.map((child) => {
-                            const st = STATUSES[child.status];
-                            const statusColor = st?.color;
-                            const declStatus = studentDeclarationStatus(declarations, child, parent?.phone);
-                            return (
-                              <button
-                                key={child.id}
-                                type="button"
-                                className="btn btn-ghost btn-xs"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 5,
-                                  padding: '2px 8px',
-                                  border: `1px solid ${statusColor ? `${statusColor}66` : 'var(--border)'}`,
-                                  background: statusColor ? `${statusColor}1F` : undefined,
-                                  borderRadius: 999,
-                                  fontWeight: 600,
-                                }}
-                                onClick={() => setSelectedStudentId(child.id)}
-                                title={st?.label || child.status}
-                              >
-                                {/* First in the chip, so in RTL the icons sit on the leading
-                                    edge and line up down the column however long the names are. */}
-                                <DeclarationIcons status={declStatus} />
-                                <GenderMark gender={child.gender} size={11} />
-                                {child.isAdult && <AdultMark size={11} />}
-                                {child.name}
-                                {/* The signed-declaration status is the icons now, so the
-                                    text label would only repeat them. */}
-                                {!child.isAdult && namedChildren.length > 1 && child.status !== 'health_signed' && (
-                                  <span style={{ color: statusColor || 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
-                                    {st?.label || ''}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ direction: 'ltr', unicodeBidi: 'plaintext', color: isIg && !parent?.phone ? '#ff80bf' : 'var(--text-2)' }}>
-                      {isIg && !parent?.phone ? `📸 IG (${parent?.instagram_id || 'DM'})` : parent?.phone}
-                      {otherParents
-                        .map((p) => p.phone)
-                        .filter((phone) => phone && normPhone(phone) !== normPhone(parent?.phone))
-                        .map((phone) => (
-                          <div key={phone} style={{ fontSize: 11, color: 'var(--text-3)' }}>{phone}</div>
-                        ))}
-                    </td>
-                    <td>
-                      {groupsInFamily.length === 0
-                        ? <span className="badge badge-gray">—</span>
-                        : groupsInFamily.map((g) => (
-                          <span key={g.id} className="badge badge-blue" style={{ marginInlineEnd: 4 }}>
-                            {g.name.split(' ')[0]}
-                          </span>
-                        ))}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {family.statuses.map((st) => (
-                          <StatusBadge key={st} status={st} />
-                        ))}
-                      </div>
-                    </td>
-                    <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{family.created}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => primary && setSelectedStudentId(primary.id)}>
-                          <Eye size={13} /> פרטים
-                        </button>
-                        {isAwaitingHandling(parent) && (
-                          <button
-                            type="button"
-                            className="btn btn-success btn-xs"
-                            disabled={markingHandledId === parent?.id}
-                            onClick={() => handleMarkHandled(parent?.id)}
-                          >
-                            <Check size={13} /> {markingHandledId === parent?.id ? 'מסמן...' : 'לקוח טופל'}
-                          </button>
-                        )}
-                        {parent?.phone && !isIg ? (
-                          <a href={`https://wa.me/${normalizePhone(parent?.phone)}`}
-                            target="_blank" rel="noreferrer" className="btn btn-success btn-xs" onClick={(e) => e.stopPropagation()}>
-                            💬
-                          </a>
-                        ) : isIg ? (
-                          <span className="btn btn-xs" style={{ background: 'linear-gradient(45deg, #f09433, #dc2743)', color: 'white', border: 'none' }}>
-                            📸 DM
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {visibleFamilyRows.length < familyRows.length && (
-                <tr ref={moreRowsRef}>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--text-3)', fontSize: 12 }}>
-                    מציג {visibleFamilyRows.length} מתוך {familyRows.length} — גוללים כדי לראות עוד
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <FamilyTable
+          rows={familyRows}
+          visibleRows={visibleFamilyRows}
+          groups={groups}
+          declarations={declarations}
+          onOpenStudent={setSelectedStudentId}
+          onMarkHandled={handleMarkHandled}
+          markingHandledId={markingHandledId}
+          moreRowsRef={moreRowsRef}
+          empty={activeFilterCount > 0 && unfilteredFamilyRows.length > 0 ? (
+            <>
+              אין תוצאות לסינון הזה
+              <div style={{ marginTop: 10 }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilters(EMPTY_LEAD_FILTERS)}>
+                  <X size={13} /> נקה סינון
+                </button>
+              </div>
+            </>
+          ) : emptyQueueMessage(filterStatus)}
+        />
       </div>
       )}
     </div>
