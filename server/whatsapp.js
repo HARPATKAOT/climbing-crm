@@ -91,6 +91,8 @@ import { isCapabilityEnabled } from './botCapabilities.js';
 import {
   buildCentreReport,
   centreNameTokens,
+  centreReportsCancellation,
+  centreReportsRegistration,
   findStudentsByName,
   formatReportDate,
 } from './centreReport.js';
@@ -272,10 +274,14 @@ export function centreStudentName(text) {
       .trim();
   }
   if (/^(?:תודה|מעולה|קיבלתי|הבנתי|סבבה|בוקר טוב|ערב טוב|היי|שלום|הי)[!?. ]*$/u.test(typed)) return '';
-  if (typed.split(/\s+/).length > 4 || typed.length > 40) return '';
   // „אלימלך קרני נרשם” is a name and a verb. Looking the whole string up came
-  // back as a child we do not have, and the team was told so.
-  return centreNameTokens(typed).join(' ');
+  // back as a child we do not have, and the team was told so. The length limit
+  // counts what is left after the verbs, so „נטע יאירי נרשמה אצלכם במתנ״ס”
+  // is still a two-word name and not a sentence we decline to read.
+  const tokens = centreNameTokens(typed);
+  if (!tokens.length || tokens.length > 4) return '';
+  const name = tokens.join(' ');
+  return name.length <= 40 ? name : '';
 }
 
 /** A greeting from the centre is answered by name, never with "מה שמך?". */
@@ -295,22 +301,50 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const isStartQuestion = /^מתי(?:\s|$)/u.test(typed)
     && /(?:^|\s)התחיל(?:ה)?(?:\s|[?!.,]|$)/u.test(typed);
   const studentName = centreStudentName(typed);
-  // A bare name confirms registration. The centre may also ask the fixed
-  // billing question "מתי … התחיל?"; ordinary acknowledgements are ignored.
-  if (!studentName) {
-    // „בוקר טוב” from the centre used to fall through to the customer flow,
-    // which answered the secretary with "מה השם הפרטי שלך?". She is not a new
-    // customer, and we already know who she is.
-    if (isCentreGreeting(typed)) {
-      const contact = centreContactName(await loadBrandedBotSettings(), phone);
-      return {
-        ok: true,
-        reason: 'greeting',
-        reply: `${greetingFor(typed)}${contact ? ` ${contact}` : ''} 🙂\n`
-          + 'אפשר לכתוב שם של ילד/ה ואחזור עם התאריך לחיוב.',
-      };
-    }
-    return null;
+
+  // „בוקר טוב” used to fall through to the customer flow, which answered the
+  // secretary with "מה השם הפרטי שלך?". She is not a new customer.
+  if (isCentreGreeting(typed)) {
+    const contact = centreContactName(await loadBrandedBotSettings(), phone);
+    return {
+      ok: true,
+      reason: 'greeting',
+      reply: `${greetingFor(typed)}${contact ? ` ${contact}` : ''} 🙂\n`
+        + 'אפשר לכתוב שם של מתאמן/ת עם המילה «נרשם» ואחזור עם התאריך לחיוב.',
+    };
+  }
+
+  // Two things only are answered automatically: „<שם> נרשם”, and the fixed
+  // billing question „מתי <שם> התחיל?”. A bare name used to be treated as a
+  // registration — but the same two words appear when the centre asks us
+  // something, and when it tells us a child has cancelled. Marking a child
+  // registered off a message that said the opposite is a mistake nobody on
+  // our side can see afterwards, so everything else is a person's job.
+  const reportsRegistration = centreReportsRegistration(typed);
+  if (!studentName || !(isStartQuestion || reportsRegistration)) {
+    await notifyStaffOfHandoff({
+      settings: db.getSettings(),
+      parent: { name: 'המתנ״ס' },
+      phone,
+      customerText: centreReportsCancellation(typed)
+        ? `המתנ״ס כתב על ביטול: "${typed}"`
+        : `המתנ״ס כתב: "${typed}" — אין כאן שם ומילת הרשמה, ולכן לא נענה אוטומטית`,
+      reason: 'handoff',
+      isSimulator,
+    });
+    recordBotAction(db, persistCore, {
+      type: 'centre_report',
+      summary: `הודעה מהמתנ״ס הועברה לצוות: "${typed}"`,
+      details: {
+        ok: false,
+        reason: centreReportsCancellation(typed) ? 'cancellation' : 'no_registration_word',
+        typed,
+      },
+      phone,
+    });
+    // Silent on purpose: a wrong answer to the centre is a wrong charge to a
+    // family, and the team now has the message.
+    return { silent: true, reason: 'needs_staff' };
   }
 
   if (supa.isEnabled()) {
@@ -351,7 +385,7 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
   let needsStaffMark = false;
   // Whatever happens to the status, the weekly loop for this trainee is over:
   // the centre has answered about them, and Sunday must not ask again.
-  if (!isStartQuestion && student && registrationMatches.length === 1) {
+  if (reportsRegistration && !isStartQuestion && student && registrationMatches.length === 1) {
     await markCentreCheckConfirmed({ db, persist: persistCore, studentId: student.id })
       .catch((err) => console.error('centre check confirm failed:', err.message));
     if (String(student.status || '') !== 'registered' && String(student.status || '') !== 'active') {
@@ -1767,6 +1801,12 @@ export const whatsappService = {
     // the model: a wrong date here is a wrong charge to a family.
     if (isCapabilityEnabled(settings, 'centre_report') && isCentrePhone(settings, normalizedPhone)) {
       const report = await handleCentreMessage({ text, phone: normalizedPhone, isSimulator });
+      // The centre is never handed to the customer flow. Whatever it wrote,
+      // the answer is either the fixed one or a person — asking the מתנ״ס
+      // secretary which of her children we are talking about is neither.
+      if (report?.silent) {
+        return { parent, student, isNew, replied: false, skippedReason: report.reason || 'centre_needs_staff' };
+      }
       if (report) {
         await whatsappService.sendBotReply(normalizedPhone, report.reply, {
             isSimulator, source: 'bot_control', logType: 'reply', replyKey,
