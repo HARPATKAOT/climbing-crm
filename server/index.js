@@ -32,6 +32,20 @@ import { runOneTimeBotDataMigrations } from './oneTimeBotDataMigrations.js';
 import { recoverStalledIntroOffers } from './introOfferPolicy.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
+  applyResponse,
+  calendarSlotCandidates,
+  eligibleEmployees,
+  expandWeeklySlots,
+  isWindowOpen,
+  normalizeWindow,
+  planAssignments,
+  publicWindowView,
+  respondentSummary,
+  responsesForWindow,
+  signupBoard,
+} from './shiftSignup.js';
+import { sendAssignmentSummaries, sendSignupInvites } from './shiftSignupNotify.js';
+import {
   DENOMINATIONS,
   sessionSnapshot,
   openSession,
@@ -14625,6 +14639,299 @@ app.delete('/api/work-assignments/:id', (req, res) => {
   const ok = db.delete('work_assignments', id);
   if (!ok) return res.status(404).json({ error: 'Work assignment not found' });
   res.json({ success: true });
+});
+
+// ─── הרשמה למשמרות ──────────────────────────────────────────────────────────
+// הטופס שהחליף את הסקר בוואטסאפ. הזרימה: המנהל פותח טופס מהיומן, שולח קישור
+// למי שבחר, הצוות מסמן זמינות, והמנהל מאשר הכול בפעולה אחת — שכותבת שורות
+// ליומן העבודה ושולחת לכל עובד את השיבוץ שלו.
+
+const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
+
+/**
+ * איזה תפקיד מתאים לאיזו רשומה ביומן — כפי שבורר המשמרות צריך לראות את זה.
+ *
+ * חוג אינו סוג פעילות אלא קבוצה, ולכן אין לו שורה בקטלוג: התפקידים שיכולים
+ * לקחת אותו הם הדרכה ועזרה בהדרכה, ומכאן הרשימה הנפרדת.
+ */
+async function signupRoleCatalog() {
+  const catalog = await readRoleCatalog();
+  const rolesByType = {};
+  for (const type of Object.keys(catalog.activityRoles || {})) {
+    rolesByType[type] = await rolesForActivityType(type);
+  }
+  const labelOf = (key) => catalog.system.find((r) => r.key === key)?.label || '';
+  const classRoles = [labelOf(SYSTEM_ROLE_KEYS.TRAINER), labelOf(SYSTEM_ROLE_KEYS.ASSISTANT)]
+    .filter(Boolean);
+  return { rolesByType, classRoles };
+}
+
+/** רשומת טופס עם הספירות שהרשימה מציגה, בלי גוף המשמרות. */
+function signupWindowSummary(windowRow, responses, today, assignments = null) {
+  const answers = responsesForWindow(responses, windowRow.id);
+  const slots = windowRow.slots || [];
+  const dates = slots.map((slot) => slot.date).sort();
+  // כמה שיבוצים עוד חסרים בטופס כולו. מחושב מהרוסטר ולא נשמר, מאותה סיבה
+  // שהלוח עצמו נגזר ממנו: משמרת שבוטלה ביומן חוזרת להיות חסרה מעצמה.
+  const board = assignments ? signupBoard(windowRow, responses, [], assignments) : null;
+  return {
+    id: windowRow.id,
+    title: windowRow.title,
+    role: windowRow.role,
+    work_type: windowRow.work_type,
+    status: windowRow.status,
+    deadline: windowRow.deadline || null,
+    note: windowRow.note || '',
+    token: windowRow.token,
+    recipients: windowRow.recipients || [],
+    sent_at: windowRow.sent_at || null,
+    slot_count: slots.length,
+    first_date: dates[0] || null,
+    last_date: dates[dates.length - 1] || null,
+    missing: board ? board.reduce((sum, slot) => sum + slot.missing, 0) : null,
+    respondents: answers.length,
+    open: isWindowOpen(windowRow, today),
+    created_at: windowRow.created_at || null,
+  };
+}
+
+app.get('/api/shift-signup/windows', async (_req, res) => {
+  try {
+    const [windows, responses] = await readTables(...SIGNUP_TABLES);
+    const today = israelDateStr();
+    const assignments = db.get('work_assignments') || [];
+    const rows = [...windows]
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+      .map((row) => signupWindowSummary(row, responses, today, assignments));
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/shift-signup/expand-slots', (req, res) => {
+  const { slots, error } = expandWeeklySlots(req.body || {});
+  if (error) return res.status(400).json({ error });
+  res.json({ slots });
+});
+
+app.get('/api/shift-signup/calendar-slots', async (req, res) => {
+  try {
+    const [activities, groups, assignments] = await readTables('activities', 'groups', 'work_assignments');
+    const catalog = await signupRoleCatalog();
+    const { candidates, withoutHours, error } = calendarSlotCandidates({
+      activities,
+      groups,
+      assignments,
+      rolesByType: catalog.rolesByType,
+      classRoles: catalog.classRoles,
+      role: req.query.role || '',
+      from: req.query.from,
+      to: req.query.to,
+      capacity: req.query.capacity,
+    });
+    if (error) return res.status(400).json({ error });
+    res.json({ candidates, withoutHours });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/shift-signup/windows', (req, res) => {
+  const { window: record, error } = normalizeWindow(req.body || {});
+  if (error) return res.status(400).json({ error });
+  const created = db.insert('shift_signup_windows', record);
+  res.status(201).json(created);
+});
+
+app.get('/api/shift-signup/windows/:id', async (req, res) => {
+  try {
+    const [windows, responses] = await readTables(...SIGNUP_TABLES);
+    const windowRow = windows.find((row) => row.id === req.params.id);
+    if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+    const employees = db.get('employees') || [];
+    const assignments = db.get('work_assignments') || [];
+    const answers = responsesForWindow(responses, windowRow.id);
+    res.json({
+      ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
+      slots: windowRow.slots || [],
+      board: signupBoard(windowRow, responses, employees, assignments),
+      respondents_detail: respondentSummary(windowRow, responses, employees, assignments),
+      // מי שהטופס פונה אליו ועדיין לא ענה — השאלה הראשונה של כל מנהל שפתח
+      // את הלוח ורואה ארבע תשובות במקום שבע.
+      pending: eligibleEmployees(employees, windowRow.role, windowRow.recipients)
+        .filter((person) => !answers.some((answer) => answer.employee_id === person.id)),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/shift-signup/windows/:id', (req, res) => {
+  const existing = db.getOne('shift_signup_windows', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const { window: record, error } = normalizeWindow(req.body || {}, { existing });
+  if (error) return res.status(400).json({ error });
+  res.json(db.update('shift_signup_windows', existing.id, record));
+});
+
+app.delete('/api/shift-signup/windows/:id', (req, res) => {
+  const existing = db.getOne('shift_signup_windows', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  for (const answer of responsesForWindow(db.get('shift_signup_responses') || [], existing.id)) {
+    db.delete('shift_signup_responses', answer.id);
+  }
+  db.delete('shift_signup_windows', existing.id);
+  res.json({ success: true });
+});
+
+/**
+ * שליחת הקישור בוואטסאפ למי שהטופס פונה אליו.
+ *
+ * הבקשה יכולה לנקוב בשמות (`employee_ids`) — למשל תזכורת רק למי שטרם ענה —
+ * וברירת המחדל היא רשימת הנמענים של הטופס. השליחה חוסמת בכוונה: המנהל צריך
+ * לראות מיד למי לא הגיע, כי מי שלא קיבל צריך טיפול ידני עכשיו ולא בעוד יום.
+ */
+app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const employees = db.get('employees') || [];
+  const audience = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
+  const only = Array.isArray(req.body?.employee_ids) && req.body.employee_ids.length
+    ? new Set(req.body.employee_ids.map(String))
+    : null;
+  const targets = audience
+    .filter((person) => !only || only.has(String(person.id)))
+    .map((person) => employees.find((e) => e.id === person.id))
+    .filter(Boolean);
+  if (!targets.length) return res.status(400).json({ error: 'לא נבחר אף עובד לשליחה' });
+
+  const link = `${eventPublicBase()}/shift-signup/${windowRow.token}`;
+  try {
+    const { sent, results } = await sendSignupInvites({ windowRow, employees: targets, link });
+    db.update('shift_signup_windows', windowRow.id, { sent_at: new Date().toISOString() });
+    res.json({ sent, results, link });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * אישור השיבוצים של טופס אחד.
+ *
+ * `picks` היא הטיוטה שהמנהל סימן במסך. השורות נכתבות ליומן העבודה דרך אותה
+ * נורמליזציה של שיבוץ ידני — כדי שהשעות, התעריף וקיפאון השכר יתנהגו בדיוק
+ * כמו בכל שורה אחרת — ורק אז יוצאת לכל עובד הודעה אחת עם כל מה שקיבל.
+ */
+app.post('/api/shift-signup/windows/:id/assign', async (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  try {
+    rejectWorkPayOverride(req, req.body || {});
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
+
+  const picks = Array.isArray(req.body?.picks) ? req.body.picks : [];
+  if (!picks.length) return res.status(400).json({ error: 'לא נבחר אף שיבוץ לאישור' });
+  const { rows, skipped, error } = planAssignments(windowRow, picks, {
+    assignments: db.get('work_assignments') || [],
+  });
+  if (error) return res.status(400).json({ error });
+  if (!rows.length) {
+    return res.json({ created: 0, skipped, notified: [], message: 'כל השיבוצים שנבחרו כבר קיימים ביומן' });
+  }
+
+  try {
+    requireActiveEmployees([...new Set(rows.map((row) => row.assignment.employee_id))]);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({ error: err.message, code: err.code });
+  }
+
+  const bySlots = new Map();
+  const created = [];
+  for (const { assignment, slot } of rows) {
+    // מזהה מפורש: ברירת המחדל של `db.insert` היא חותמת זמן במילישניות, ולולאה
+    // שכותבת חמש שורות ברצף מסיימת בתוך אותה מילישנייה — חמש שורות עם אותו id,
+    // שדורסות זו את זו באחסון העמיד ונמחקות יחד.
+    const record = db.insert('work_assignments', {
+      ...withFrozenPay(normalizeWorkAssignment(assignment)),
+      id: `wo${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+    });
+    created.push(record);
+    const key = String(assignment.employee_id);
+    if (!bySlots.has(key)) bySlots.set(key, []);
+    bySlots.get(key).push(slot);
+  }
+
+  // ההודעה יוצאת אחרי שהשורות כבר נשמרו: עובד שקיבל הודעה על משמרת שלא נרשמה
+  // הוא התקלה היחידה שאי אפשר לתקן בדיעבד.
+  let notified = [];
+  try {
+    ({ results: notified } = await sendAssignmentSummaries({
+      windowRow,
+      byEmployee: bySlots,
+      employees: db.get('employees') || [],
+    }));
+  } catch (err) {
+    console.error('shift signup summaries failed:', err.message);
+  }
+
+  res.status(201).json({
+    created: created.length,
+    skipped,
+    notified,
+    assignments: created.map((row) => workAssignmentForRequest(req, row)),
+  });
+});
+
+app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res) => {
+  try {
+    const [windows, responses] = await readTables(...SIGNUP_TABLES);
+    const windowRow = windows.find((row) => row.token === req.params.token);
+    if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+    const employees = db.get('employees') || [];
+    const answers = responsesForWindow(responses, windowRow.id);
+    res.json({
+      ...publicWindowView(windowRow, answers),
+      eligible: eligibleEmployees(employees, windowRow.role, windowRow.recipients),
+      // מה שכל אחד כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
+      // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
+      mine: answers.map((answer) => ({
+        employee_id: answer.employee_id,
+        slot_ids: answer.slot_ids || [],
+        wanted_count: answer.wanted_count || 0,
+        note: answer.note || '',
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res) => {
+  try {
+    const [windows, responses] = await readTables(...SIGNUP_TABLES);
+    const windowRow = windows.find((row) => row.token === req.params.token);
+    if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+
+    // רק מי שהטופס פונה אליו יכול לענות: הקישור עובר בוואטסאפ ואפשר להעביר
+    // אותו הלאה, ותשובה בשם מישהו אחר היא בדיוק מה שאסור שיקרה כאן.
+    const employees = db.get('employees') || [];
+    const allowed = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
+    if (!allowed.some((person) => String(person.id) === String(req.body?.employee_id || ''))) {
+      return res.status(403).json({ error: 'השם הזה לא מופיע ברשימת הטופס' });
+    }
+
+    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {});
+    if (error) return res.status(400).json({ error });
+    const saved = existing
+      ? db.update('shift_signup_responses', existing.id, record)
+      : db.insert('shift_signup_responses', record);
+    res.status(existing ? 200 : 201).json({ success: true, picked: (saved.slot_ids || []).length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Safety check types, inspections & incidents

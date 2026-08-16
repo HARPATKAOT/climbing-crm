@@ -4,7 +4,7 @@ import {
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check, ChevronLeft, CalendarRange,
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
-, Pencil , Bell , Shield } from 'lucide-react';
+, Pencil , Bell , Shield , CalendarCheck } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import EntityLink, { takeOpenParam } from '../utils/entityLinks.jsx';
 import { PaymentMethodBadge } from '../utils/paymentMethod.jsx';
@@ -47,6 +47,7 @@ import AppSelect from './AppSelect.jsx';
 import EmployeePayrollPeriods from './EmployeePayrollPeriods.jsx';
 import PayrollTracking from './PayrollTracking.jsx';
 import WallShiftOperationsJournal from './WallShiftOperationsJournal.jsx';
+import ShiftSignupPanel from './ShiftSignupPanel.jsx';
 import { isWallStaff as employeeIsWallStaff } from '../utils/employeeScope.js';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -3714,6 +3715,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
           ...(canViewHr ? [{ key: 'certs', label: 'תעודות והסמכות', icon: Award }] : []),
           ...(canViewHr ? [{ key: 'wages', label: 'הסכמי שכר', icon: Coins }] : []),
           ...(canViewShifts ? [{ key: 'shifts', label: 'משמרות', icon: Clock }] : []),
+          ...(canViewShifts ? [{ key: 'signup', label: 'הרשמה למשמרות', icon: CalendarCheck }] : []),
           ...(canViewHr ? [{ key: 'payroll', label: 'תשלום חודשי', icon: Banknote }] : []),
           ...(canViewHr ? [{ key: 'settings', label: 'הגדרות', icon: Settings2 }] : []),
           ...(canViewHr ? [{ key: 'onboard-link', label: 'קישור קליטה', icon: Link2 }] : []),
@@ -3797,6 +3799,8 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
       )}
 
       {activeTab === 'onboard-link' && <EmployeeOnboardingLinkPanel />}
+
+      {activeTab === 'signup' && <ShiftSignupPanel />}
 
       {/* ─── Tab 1: Permanent Employees ────────────────────────────────────── */}
       {activeTab === 'permanent' && (
