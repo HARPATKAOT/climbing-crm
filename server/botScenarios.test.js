@@ -871,6 +871,37 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
   });
 });
 
+test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב זה — הדיווח נרשם בכל זאת', async () => {
+  // אביבית כתבה פעמיים שהיא השלימה הרשמה, ופעמיים קיבלה „אני לא רואה
+  // שהפעולה נקלטה במערכת”. היא לא שאלה על פעולה — היא דיווחה על אחת.
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+  }, async () => {
+    const turn = await runCustomerToolTurn({
+      parent: PARENT,
+      phone: PARENT.phone,
+      incomingText: 'היי השלמנו הרשמה אשמח לאשר',
+      apiKey: 'test-key',
+      callModel: async () => ({
+        content: { role: 'model', parts: [{ text: 'מעולה, עדכנתי שההרשמה במתנ״ס הושלמה' }] },
+        error: '',
+      }),
+    });
+
+    assert.equal(turn.reason, 'registration_report_recorded');
+    assert.equal(turn.handoff, false);
+    assert.match(turn.text, /יותם כהן משובץ אצלנו/);
+    assert.doesNotMatch(turn.text, /נקלטה במערכת/);
+    assert.ok(turn.toolsUsed.includes('reportCentreRegistration'));
+    // והדיווח עצמו נשמר, לא רק נאמר.
+    assert.equal((db.get('centre_registration_checks') || []).length > 0, true);
+  });
+});
+
 // מי שנרשם ישירות במתנ״ס לא עבר דרכנו מעולם, ולכן איש לא שלח לו את הטופס.
 // דיווח ההרשמה הוא ההזדמנות האחת לומר לו שבלי זה אין שיבוץ.
 test('נרשם ישירות במתנ״ס — הדיווח מחזיר שחסר טופס ההשתתפות ושאי אפשר לשבץ בלעדיו', async () => {
