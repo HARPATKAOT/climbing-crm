@@ -652,13 +652,28 @@ test('the board is one row per seat, not one per shift', () => {
   assert.equal(board[0].missing, 1);
 });
 
-test('someone placed from the calendar counts even though they never answered', () => {
+test('someone placed from the calendar is shown by name, not just counted', () => {
   const row = windowFixture();
-  const board = signupBoard(row, [], [], [
-    { employee_id: 'e9', date: '2026-08-12', start_time: '15:30', role: WALL },
+  const board = signupBoard(row, [], [{ id: 'e9', name: 'בר שניר' }], [
+    { id: 'w9', employee_id: 'e9', date: '2026-08-12', start_time: '15:30', role: WALL },
   ]);
-  // משמרת שנראית ריקה כי השיבוץ נעשה ביומן היא מלכודת.
-  assert.equal(board[1].seats[0].assigned, 1);
+  // משמרת שנראית ריקה כי השיבוץ נעשה ביומן היא מלכודת — ושם שחסר מהלוח הוא
+  // איך שולחים שניים למקום של אחד.
+  const seat = board[1].seats[0];
+  assert.equal(seat.assigned, 1);
+  assert.equal(board[1].missing, 0);
+  assert.deepEqual(seat.claimants.map((c) => [c.name, c.assigned, c.answered]), [['בר שניר', true, false]]);
+});
+
+test('a placement whose role matches no seat still lands on the board', () => {
+  const row = windowFixture();
+  const board = signupBoard(row, [], [{ id: 'e9', name: 'בר שניר' }], [
+    // שורה ותיקה מהיומן, בלי תפקיד או עם תפקיד שכבר לא מופיע במשמרת.
+    { id: 'w9', employee_id: 'e9', date: '2026-08-12', start_time: '15:30', role: '' },
+  ]);
+  const seat = board[1].seats[0];
+  assert.equal(seat.claimants.length, 1);
+  assert.equal(seat.claimants[0].name, 'בר שניר');
   assert.equal(board[1].missing, 0);
 });
 

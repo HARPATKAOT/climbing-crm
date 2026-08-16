@@ -37,6 +37,7 @@ import {
   eligibleEmployees,
   expandWeeklySlots,
   isWindowOpen,
+  newSignupToken,
   normalizeNeeds,
   normalizeWindow,
   planAssignments,
@@ -14690,6 +14691,26 @@ app.delete('/api/work-assignments/:id', (req, res) => {
 
 const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
 
+/**
+ * מי מחזיק במפתח האישי שבקישור.
+ *
+ * המפתח נוצר בשליחה, אחד לכל עובד, ונשמר על הטופס. הוא מזהה בלי סיסמה ובלי
+ * בחירה מרשימה — וגם חוסם תשובה בשם מישהו אחר, מה שהבורר הפתוח אִפשר.
+ */
+function employeeIdForKey(windowRow, key) {
+  const wanted = String(key || '').trim();
+  if (!wanted) return null;
+  const keys = windowRow?.employee_keys || {};
+  return Object.keys(keys).find((employeeId) => keys[employeeId] === wanted) || null;
+}
+
+/** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
+function windowRowRoles(windowRow) {
+  return [...new Set((windowRow?.slots || [])
+    .flatMap((slot) => (slot.needs || []).map((need) => need.role))
+    .filter(Boolean))];
+}
+
 function staffNeedsFor(activityId) {
   const row = db.getOne(STAFF_NEEDS_TABLE, String(activityId || ''));
   return Array.isArray(row?.needs) ? row.needs : [];
@@ -14880,17 +14901,41 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   const only = Array.isArray(req.body?.employee_ids) && req.body.employee_ids.length
     ? new Set(req.body.employee_ids.map(String))
     : null;
+  // רק מי שיכול לקחת משהו. שליחה למי שאין לו אף אחד מהתפקידים שהטופס מבקש היא
+  // הודעה שאי אפשר לענות עליה — ובגודל הצוות הזה, רוב ההודעות היו כאלה.
+  const wantedRoles = windowRowRoles(windowRow);
   const targets = audience
     .filter((person) => !only || only.has(String(person.id)))
+    .filter((person) => !wantedRoles.length
+      || wantedRoles.some((role) => (person.roles || []).includes(role)))
     .map((person) => employees.find((e) => e.id === person.id))
     .filter(Boolean);
-  if (!targets.length) return res.status(400).json({ error: 'לא נבחר אף עובד לשליחה' });
+  if (!targets.length) {
+    return res.status(400).json({
+      error: wantedRoles.length
+        ? `אף עובד לא מסומן באחד מהתפקידים שהטופס מבקש (${wantedRoles.join(', ')})`
+        : 'לא נבחר אף עובד לשליחה',
+    });
+  }
 
-  const link = `${eventPublicBase()}/shift-signup/${windowRow.token}`;
+  const base = `${eventPublicBase()}/shift-signup/${windowRow.token}`;
   try {
-    const { sent, results } = await sendSignupInvites({ windowRow, employees: targets, link });
-    db.update('shift_signup_windows', windowRow.id, { sent_at: new Date().toISOString() });
-    res.json({ sent, results, link });
+    // קישור אישי לכל אחד: הטופס נפתח על השם שלו בלי שיבחר אותו מרשימה, ואי
+    // אפשר לענות בשם מישהו אחר גם אם הקישור הועבר הלאה.
+    const keys = { ...(windowRow.employee_keys || {}) };
+    for (const employee of targets) {
+      if (!keys[employee.id]) keys[employee.id] = newSignupToken();
+    }
+    const { sent, results } = await sendSignupInvites({
+      windowRow,
+      employees: targets,
+      linkFor: (employee) => `${base}?u=${keys[employee.id]}`,
+    });
+    db.update('shift_signup_windows', windowRow.id, {
+      sent_at: new Date().toISOString(),
+      employee_keys: keys,
+    });
+    res.json({ sent, results, link: base });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -14974,6 +15019,9 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     const answers = responsesForWindow(responses, windowRow.id);
     res.json({
       ...publicWindowView(windowRow, answers),
+      // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
+      // לענות בשם מישהו אחר — הקישור עובר בוואטסאפ ואפשר להעביר אותו הלאה.
+      me: employeeIdForKey(windowRow, req.query.u) || null,
       // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
       // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
       eligible: eligibleEmployees(employees, windowRow.recipients),
@@ -15001,7 +15049,9 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // אותו הלאה, ותשובה בשם מישהו אחר היא בדיוק מה שאסור שיקרה כאן.
     const employees = db.get('employees') || [];
     const allowed = eligibleEmployees(employees, windowRow.recipients);
-    const employeeId = String(req.body?.employee_id || '');
+    // מפתח אישי גובר על מה שהדפדפן שלח: מי שקיבל קישור אישי עונה בשמו בלבד.
+    const keyed = employeeIdForKey(windowRow, req.query.u || req.body?.u);
+    const employeeId = keyed || String(req.body?.employee_id || '');
     if (!allowed.some((person) => String(person.id) === employeeId)) {
       return res.status(403).json({ error: 'השם הזה לא מופיע ברשימת הטופס' });
     }

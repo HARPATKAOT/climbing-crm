@@ -63,10 +63,11 @@ export function reasonLabel(reason) {
  * שליחת הקישור לרשימת עובדים.
  * @returns {Promise<{ sent: number, results: Array<{employee_id, name, ok, reason?}> }>}
  */
-export async function sendSignupInvites({ windowRow, employees = [], link } = {}) {
-  const text = inviteText(windowRow, link);
+export async function sendSignupInvites({ windowRow, employees = [], link, linkFor = null } = {}) {
   const results = [];
   for (const employee of employees) {
+    // קישור אישי כשיש כזה: הטופס נפתח על השם של מי שקיבל אותו, בלי לבחור מרשימה.
+    const text = inviteText(windowRow, linkFor ? linkFor(employee) : link);
     // אין כאן `shift_signup_invite` ברשימת ההתראות, ולכן אין תבנית ליפול אליה:
     // ההזמנה נשלחת כטקסט או לא נשלחת, והמסך אומר את זה במפורש.
     const result = await sendWithTemplateFallback(employee, text, {

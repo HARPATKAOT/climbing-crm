@@ -732,32 +732,58 @@ export function signupBoard(windowRow, responses = [], employees = [], assignmen
 
   return (windowRow.slots || []).map((slot) => {
     const placed = assignmentsForSlot(assignments, slot);
-    const seats = (slot.needs || []).map((need) => {
+    const seatRoles = (slot.needs || []).map((need) => need.role || '');
+    // שיבוץ שהתפקיד שלו אינו אחד ממושבי המשמרת — שורה ותיקה מהיומן, או תפקיד
+    // ששמו שונה מאז. הוא נספר במושב הראשון ולא נעלם: אדם שכבר משובץ ואינו
+    // מופיע כאן הוא בדיוק המקרה שגורם לשלוח שניים למקום של אחד.
+    const homeFor = (row) => (seatRoles.includes(row.role || '') ? (row.role || '') : seatRoles[0] ?? '');
+
+    const seats = (slot.needs || []).map((need, index) => {
       const role = need.role || '';
-      const held = placed.filter((row) => (row.role || '') === role);
-      const claimants = rows
-        .filter((r) => (r.picks || []).some((p) => p.slot_id === slot.id && (p.role || '') === role))
-        .map((r) => {
-          const assignment = held.find((row) => String(row.employee_id) === String(r.employee_id));
-          return {
-            employee_id: r.employee_id,
-            name: nameOf(r.employee_id),
-            note: r.note || '',
-            submitted_at: r.submitted_at || null,
-            // כמה משמרות סימן בסך הכול וכמה הוא באמת רוצה — שניהם נדרשים בכל
-            // שורה, כי המסך עובד משמרת-משמרת ולא עובד-עובד.
-            picked_count: (r.picks || []).length,
-            wanted_count: Number(r.wanted_count) || 0,
-            assigned: Boolean(assignment),
-            // נשמר כדי שאפשר יהיה לבטל שיבוץ מיד, בלי סיבוב נוסף לשרת.
-            assignment_id: assignment?.id || null,
-          };
-        })
-        .sort((a, b) => String(a.submitted_at).localeCompare(String(b.submitted_at)));
+      const held = placed.filter((row) => homeFor(row) === role
+        && (seatRoles.includes(row.role || '') || index === 0));
+      const claimed = rows
+        .filter((r) => (r.picks || []).some((p) => p.slot_id === slot.id && (p.role || '') === role));
+
+      const entryFor = (employeeId, answer, assignment) => ({
+        employee_id: employeeId,
+        name: nameOf(employeeId),
+        note: answer?.note || '',
+        submitted_at: answer?.submitted_at || null,
+        // כמה משמרות סימן בסך הכול וכמה הוא באמת רוצה — שניהם נדרשים בכל
+        // שורה, כי המסך עובד משמרת-משמרת ולא עובד-עובד.
+        picked_count: (answer?.picks || []).length,
+        wanted_count: Number(answer?.wanted_count) || 0,
+        assigned: Boolean(assignment),
+        // מי שמשובץ בלי שענה — שובץ מהיומן, וזה מה שהתווית אומרת במסך.
+        answered: Boolean(answer),
+        // נשמר כדי שאפשר יהיה לבטל שיבוץ מיד, בלי סיבוב נוסף לשרת.
+        assignment_id: assignment?.id || null,
+        role: assignment?.role || role,
+      });
+
+      const seen = new Set();
+      const claimants = [];
+      for (const answer of claimed) {
+        const assignment = held.find((row) => String(row.employee_id) === String(answer.employee_id));
+        seen.add(String(answer.employee_id));
+        claimants.push(entryFor(answer.employee_id, answer, assignment));
+      }
+      // ואז מי שמשובץ ולא ענה. אלה לא "מועמדים" אלא עובדה קיימת, ולכן הם
+      // נכנסים לאותה שורה — המסך צריך להראות מי על המשמרת, לא מי מילא טופס.
+      for (const row of held) {
+        if (seen.has(String(row.employee_id))) continue;
+        seen.add(String(row.employee_id));
+        claimants.push(entryFor(row.employee_id, null, row));
+      }
+      claimants.sort((a, b) => {
+        if (a.assigned !== b.assigned) return a.assigned ? -1 : 1;
+        return String(a.submitted_at).localeCompare(String(b.submitted_at));
+      });
+
       return {
         role,
         needed: need.count,
-        // מי שמשובץ בתפקיד הזה אך לא ענה לטופס — שיבוץ ידני מהיומן.
         assigned: held.length,
         claimants,
         missing: Math.max(0, need.count - held.length),

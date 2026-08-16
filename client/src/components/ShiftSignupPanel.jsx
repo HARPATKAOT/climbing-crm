@@ -13,8 +13,9 @@ import {
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { assignableLabelsOf, useRoleCatalog } from '../utils/staffRoles.js';
-import { activityFilterChips, useActivityTypes } from '../utils/activityTypes.js';
+import { activityFilterChips, activityTypeMeta, useActivityTypes } from '../utils/activityTypes.js';
 import { activityTypeIcon } from '../utils/activityIcons.js';
+import { roleIcon, roleColor } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -70,6 +71,30 @@ const CLASS_CHIP = {
 
 /** „חופשה מאימונים” אינה משמרת שמישהו נרשם אליה — היא ביטול של אימונים. */
 const NOT_A_SHIFT_TYPE = 'training_vacation';
+
+/**
+ * תגית סוג הפעילות, בצבע ובאייקון שלה ביומן.
+ *
+ * שם הרשומה לבדו לא מספיק: „הנקיק השחור” יכול להיות טיול או שעות פתיחה, והסוג
+ * הוא מה שקובע איזה תפקיד מאייש אותה — כלומר בדיוק מה שהמנהל שוקל כשהוא בוחר
+ * מה להציע.
+ */
+function TypeTag({ id }) {
+  const meta = id === CLASS_CHIP.id ? CLASS_CHIP : activityTypeMeta(id);
+  const Icon = id === CLASS_CHIP.id ? GraduationCap : activityTypeIcon(id);
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+        padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+        border: `1px solid ${meta.color}55`, background: meta.bg, color: meta.color,
+      }}
+    >
+      <Icon size={11} strokeWidth={2.4} aria-hidden="true" />
+      {meta.label}
+    </span>
+  );
+}
 
 /**
  * אילו סוגי פעילות ייכנסו לטופס.
@@ -535,16 +560,23 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
                   {on ? <Check size={14} style={{ color: 'var(--blue)' }} /> : <Square size={14} style={{ color: 'var(--text-3)' }} />}
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{dayLabel(slot.date)}</span>
                   <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{slot.start_time}–{slot.end_time}</span>
+                  {/* סוג הפעילות, בצבע שלו מהיומן. „הנקיק השחור” לבדו לא אומר
+                      אם זה טיול או שעות פתיחה, וזה מה שקובע מי מאייש אותו. */}
+                  <TypeTag id={slot.source_type} />
                   <span style={{ fontSize: 12, color: 'var(--text-3)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {slot.label}
                   </span>
                   {/* מה המשמרת צריכה — זה מה שהצוות יראה, ולכן זה מה שכדאי
                       לראות לפני שמחליטים להציע אותה. */}
-                  {(slot.needs || []).filter((n) => n.role).map((need) => (
-                    <span key={need.role} className="badge badge-gray">
-                      {need.role}{need.count > 1 ? ` ×${need.count}` : ''}
-                    </span>
-                  ))}
+                  {(slot.needs || []).filter((n) => n.role).map((need) => {
+                    const NeedIcon = roleIcon(need.role);
+                    return (
+                      <span key={need.role} className="badge badge-gray">
+                        <NeedIcon size={11} style={{ color: roleColor(need.role), flexShrink: 0 }} aria-hidden="true" />
+                        {need.role}{need.count > 1 ? ` ×${need.count}` : ''}
+                      </span>
+                    );
+                  })}
                   {slot.staffed > 0 && (
                     <span className={`badge ${full ? 'badge-green' : 'badge-amber'}`}>
                       {full ? 'מאויש' : `כבר ${slot.staffed}`}
@@ -765,12 +797,14 @@ function SignupBoard({ windowId, onChanged }) {
                   const seatDraft = (seat.claimants || [])
                     .filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length;
                   const seatFull = seat.assigned + seatDraft >= seat.needed;
+                  const SeatIcon = roleIcon(seat.role);
                   return (
                     <div key={seat.role || 'any'} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                       <span
                         className={`badge ${seatFull ? 'badge-green' : 'badge-amber'}`}
-                        style={{ minWidth: 118, justifyContent: 'center' }}
+                        style={{ minWidth: 128, justifyContent: 'center' }}
                       >
+                        <SeatIcon size={12} style={{ color: roleColor(seat.role), flexShrink: 0 }} aria-hidden="true" />
                         {seat.role || 'משמרת'} · {seat.assigned + seatDraft}/{seat.needed}
                       </span>
                       {(seat.claimants || []).length === 0 ? (
@@ -789,7 +823,9 @@ function SignupBoard({ windowId, onChanged }) {
                                 className={`btn btn-sm ${person.assigned ? 'btn-primary' : on ? 'btn-secondary' : 'btn-ghost'}`}
                                 disabled={busySlot === key || busy}
                                 title={person.assigned
-                                  ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
+                                  ? (person.answered
+                                    ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
+                                    : 'שובץ מהיומן, בלי לענות לטופס — לחיצה מבטלת')
                                   : `ביקש ${person.picked_count} משמרות${person.wanted_count ? `, רוצה ${person.wanted_count}` : ''}`}
                                 onClick={() => (person.assigned
                                   ? unassign(slot, person)
@@ -799,6 +835,9 @@ function SignupBoard({ windowId, onChanged }) {
                                   ? <Loader2 size={13} className="spin" />
                                   : person.assigned ? <Check size={13} /> : on ? <UserPlus size={13} /> : <Square size={13} />}
                                 {person.name}
+                                {!person.answered && (
+                                  <span style={{ fontSize: 10, opacity: 0.7 }}> · מהיומן</span>
+                                )}
                                 {person.wanted_count > 0 && !person.assigned && (
                                   <span style={{ fontSize: 10.5, opacity: 0.7 }}> ({person.wanted_count})</span>
                                 )}

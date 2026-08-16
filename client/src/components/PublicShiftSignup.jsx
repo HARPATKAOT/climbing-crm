@@ -14,6 +14,7 @@ import { CalendarCheck, Check, CheckCircle, Loader2 } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import AppSelect from './AppSelect.jsx';
+import { roleIcon, roleColor } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -40,9 +41,12 @@ export default function PublicShiftSignup() {
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
 
+  // המפתח האישי שבקישור. מי שקיבל אותו בוואטסאפ מזוהה בלי לבחור שם מרשימה.
+  const personalKey = new URLSearchParams(window.location.search).get('u') || '';
+
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/public/shift-signup/${encodeURIComponent(token)}`)
+    fetch(`/api/public/shift-signup/${encodeURIComponent(token)}${personalKey ? `?u=${encodeURIComponent(personalKey)}` : ''}`)
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -51,6 +55,14 @@ export default function PublicShiftSignup() {
           return;
         }
         setData(body);
+        // קישור אישי פותח את הטופס על השם של מי שקיבל אותו, כולל מה שכבר ענה.
+        if (body.me) {
+          setEmployeeId(body.me);
+          const mine = (body.mine || []).find((row) => String(row.employee_id) === String(body.me));
+          setPicked(mine?.picks || []);
+          setWanted(mine?.wanted_count || 0);
+          setNote(mine?.note || '');
+        }
       })
       .catch(() => { if (!cancelled) setError('שגיאת רשת — נסו שוב'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -111,6 +123,7 @@ export default function PublicShiftSignup() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           employee_id: employeeId, picks: picked, wanted_count: wanted, note,
+          u: personalKey || undefined,
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -199,12 +212,20 @@ export default function PublicShiftSignup() {
           <form onSubmit={submit}>
             <section style={{ marginTop: 18 }}>
               <label className="event-label">מי ממלא?</label>
-              <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
-                <option value="">בחרו את השם שלכם...</option>
-                {(data.eligible || []).map((employee) => (
-                  <option key={employee.id} value={employee.id}>{employee.name}</option>
-                ))}
-              </AppSelect>
+              {/* קישור אישי כבר יודע מי זה. בורר במקרה כזה הוא לא נוחות אלא
+                  הזמנה לענות בשם מישהו אחר. */}
+              {data.me ? (
+                <div className="event-body" style={{ fontWeight: 700, fontSize: 17 }}>
+                  {(data.eligible || []).find((e) => String(e.id) === String(data.me))?.name || ''}
+                </div>
+              ) : (
+                <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
+                  <option value="">בחרו את השם שלכם...</option>
+                  {(data.eligible || []).map((employee) => (
+                    <option key={employee.id} value={employee.id}>{employee.name}</option>
+                  ))}
+                </AppSelect>
+              )}
               {(data.eligible || []).length === 0 && (
                 <p className="event-hint" style={{ marginTop: 10 }}>
                   אין עובדים פעילים ברשימת הטופס — דברו עם המנהל.
@@ -235,11 +256,15 @@ export default function PublicShiftSignup() {
                         {(slot.needs || []).map((need) => {
                           const on = claim?.role === (need.role || '');
                           const allowed = canTake(need.role);
+                          const Icon = roleIcon(need.role);
                           return (
                             <button
                               type="button"
                               key={need.role || 'any'}
                               className={`seat-pill ${on ? 'is-on' : ''} ${allowed ? '' : 'is-off'}`}
+                              // גוון התפקיד, אותו אחד שבכרטיס העובד. כשמסמנים,
+                              // הוא הופך לרקע — כך רואים מרחוק מה נבחר.
+                              style={{ '--seat-accent': roleColor(need.role) }}
                               disabled={!allowed || !employeeId}
                               aria-pressed={on}
                               title={allowed
@@ -247,7 +272,7 @@ export default function PublicShiftSignup() {
                                 : `התפקיד „${need.role}” לא מסומן אצלכם בכרטיס העובד`}
                               onClick={() => claimSeat(slot.id, need.role || '')}
                             >
-                              {on ? <Check size={13} /> : null}
+                              {on ? <Check size={13} /> : <Icon size={13} aria-hidden="true" />}
                               {need.role || 'משמרת'}
                               <span className="seat-count">
                                 {need.taken > 0 ? `${need.taken}/${need.count}` : `דרושים ${need.count}`}
@@ -342,11 +367,14 @@ export default function PublicShiftSignup() {
         .shift-row-card.is-on{border-color:var(--form-accent-solid,#38bdf8);
           background:var(--form-accent-soft-strong,rgba(56,189,248,.14))}
         .seat-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
-        .seat-pill{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;
+        .seat-pill{--seat-accent:#94a3b8;
+          display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;
           font:inherit;font-size:13px;font-weight:700;cursor:pointer;
-          border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.05);color:#e2e8f0}
-        .seat-pill.is-on{border-color:var(--form-accent-solid,#38bdf8);
-          background:var(--form-accent-solid,#38bdf8);color:#0b1220}
+          border:1px solid color-mix(in srgb, var(--seat-accent) 34%, transparent);
+          background:color-mix(in srgb, var(--seat-accent) 12%, transparent);color:#e2e8f0}
+        .seat-pill svg{color:var(--seat-accent);flex-shrink:0}
+        .seat-pill.is-on{border-color:var(--seat-accent);background:var(--seat-accent);color:#0b1220}
+        .seat-pill.is-on svg{color:#0b1220}
         .seat-pill.is-off{opacity:.4;cursor:not-allowed}
         .seat-pill:disabled{cursor:not-allowed}
         .seat-count{font-weight:500;font-size:11.5px;opacity:.75}
