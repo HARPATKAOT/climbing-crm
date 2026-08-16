@@ -28,7 +28,12 @@ import { quietStatus, nextAllowedTime } from './quietHours.js';
 import { phoneBucket } from './broadcastSuppression.js';
 
 const UNDO_SECONDS = 30;
-const SEND_SPACING_MS = 150;
+// ארבע שליחות במקביל, הפוגה קצרה בין נות. התקרה של Meta היא 80 הודעות
+// בשנייה למספר — אנחנו רחוקים ממנה; מה שקובע בפועל הוא זמן התגובה של ה-API
+// שלהם (~שליש שנייה להודעה), ולכן מקבול פי 4 מקצר דיוור של אלף נמענים
+// מ~8 דקות ל~2. בדיקת השהיה/עצירה רצה בין כל נה.
+const SEND_CONCURRENCY = 4;
+const SEND_SPACING_MS = 100;
 const TICK_MS = 2000;
 
 /** Jobs a loop in this process is actively sending right now. */
@@ -319,7 +324,7 @@ async function processJob(jobId) {
     }
     const isTemplateSend = !!template;
 
-    for (const recipient of pendingRecipients(jobId)) {
+    while (true) {
       const current = jobRow(jobId);
       if (!current || current.status === 'paused') return;
       if (current.status === 'stopping' || current.status === 'stopped' || current.status === 'cancelled') {
@@ -330,37 +335,43 @@ async function processJob(jobId) {
         return;
       }
 
-      const blocked = liveBlockReason(current, recipient);
-      if (blocked) {
-        db.update('broadcast_recipients', recipient.id, {
-          status: 'cancelled',
-          error: blocked,
-        });
-        continue;
-      }
+      const batch = pendingRecipients(jobId).slice(0, SEND_CONCURRENCY);
+      if (!batch.length) break;
 
-      try {
-        const result = await sendToRecipient(current, recipient, {
-          template: isTemplateSend ? template : null,
-        });
-        if (!result.success) throw new Error(result.error || 'שליחה נכשלה');
-        db.update('broadcast_recipients', recipient.id, {
-          status: 'sent',
-          sent_at: new Date().toISOString(),
-          meta_message_id: result.messageId || null,
-        });
-        db.update('broadcast_jobs', jobId, {
-          sent_count: (jobRow(jobId)?.sent_count || 0) + 1,
-        });
-      } catch (err) {
-        db.update('broadcast_recipients', recipient.id, {
-          status: 'failed',
-          error: err.message,
-        });
-        db.update('broadcast_jobs', jobId, {
-          failed_count: (jobRow(jobId)?.failed_count || 0) + 1,
-        });
-      }
+      await Promise.all(batch.map(async (recipient) => {
+        const blocked = liveBlockReason(current, recipient);
+        if (blocked) {
+          db.update('broadcast_recipients', recipient.id, {
+            status: 'cancelled',
+            error: blocked,
+          });
+          return;
+        }
+
+        try {
+          const result = await sendToRecipient(current, recipient, {
+            template: isTemplateSend ? template : null,
+          });
+          if (!result.success) throw new Error(result.error || 'שליחה נכשלה');
+          db.update('broadcast_recipients', recipient.id, {
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            meta_message_id: result.messageId || null,
+          });
+          db.update('broadcast_jobs', jobId, {
+            sent_count: (jobRow(jobId)?.sent_count || 0) + 1,
+          });
+        } catch (err) {
+          db.update('broadcast_recipients', recipient.id, {
+            status: 'failed',
+            error: err.message,
+          });
+          db.update('broadcast_jobs', jobId, {
+            failed_count: (jobRow(jobId)?.failed_count || 0) + 1,
+          });
+        }
+      }));
+
       await sleep(SEND_SPACING_MS);
     }
 
