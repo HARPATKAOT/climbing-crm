@@ -1811,9 +1811,24 @@ export function buildCustomerTools({
       if (!kids.length) return { error: 'אין מתאמן בכרטיס — יש להעביר לצוות' };
 
       const named = String(childName || '').trim();
-      const matches = named
+      let matches = named
         ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
         : kids;
+      if (!named && matches.length > 1) {
+        // „נרשמתי גם במתנ״ס” from a family with an archived sibling read as an
+        // ambiguity, and the report was dropped. A child who left last year is
+        // not a candidate for a registration somebody is reporting now, and
+        // neither is one whose registration is already closed.
+        const open = matches.filter((s) => !['archived', 'cancelled'].includes(String(s.status || '')));
+        if (open.length === 1) matches = open;
+        else if (open.length > 1) {
+          const midRegistration = open.filter((s) => [
+            'pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
+          ].includes(String(s.status || '')));
+          if (midRegistration.length === 1) matches = midRegistration;
+          else matches = open;
+        }
+      }
       if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
       if (matches.length > 1) {
         return {

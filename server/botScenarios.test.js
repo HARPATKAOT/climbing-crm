@@ -956,6 +956,27 @@ test('רשום במתנ״ס ומשובץ בקבוצה — העברה בין קב
   });
 });
 
+test('אח מהעבר בארכיון אינו הופך «נרשמנו» לשאלה על מי מדובר', async () => {
+  // אפרת כתבה „נרשמתי גם במתנס וגם מילאתי כבר הכל”. בכרטיס שני ילדים — אחד
+  // בארכיון משנה שעברה — והדיווח נפל על „יש כמה ילדים מתאימים”, כך שהיא קיבלה
+  // העברה לצוות במקום אישור.
+  await withSeed({
+    parents: [PARENT],
+    students: [
+      childYotam({ id: 's-open', name: 'איתמר כהן', status: 'awaiting_centre_confirmation', groupId: GROUP_GD.id }),
+      childYotam({ id: 's-gone', name: 'יערה כהן', status: 'archived', groupId: null }),
+    ],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-open')],
+    participation_waivers: [waiverFor('s-open')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({});
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.נרשם_לבדיקה, 'איתמר כהן');
+  });
+});
+
 test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב זה — הדיווח נרשם בכל זאת', async () => {
   // אביבית כתבה פעמיים שהיא השלימה הרשמה, ופעמיים קיבלה „אני לא רואה
   // שהפעולה נקלטה במערכת”. היא לא שאלה על פעולה — היא דיווחה על אחת.
