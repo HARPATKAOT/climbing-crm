@@ -82,15 +82,10 @@ export function rebuildLedger(store, { now = new Date().toISOString() } = {}) {
     from: '2010-01-01',
     to: now.slice(0, 10),
   });
-  // מסמך iCount שטרם נפרע במלואו — היתרה הפתוחה אינה מזומן שנכנס.
-  const remainingByDocnum = new Map(store.get('finance_documents')
-    .filter((doc) => doc.docnum && Number(doc.remaining_sum) > 0)
-    .map((doc) => [String(doc.docnum), toAgorot(Number(doc.remaining_sum) || 0)]));
+  // buildPaymentsReport כבר מנכה יתרה פתוחה של מסמך iCount מ-gross_collected —
+  // אין ניכוי שני כאן.
   for (const row of paymentsReport.rows) {
-    let collected = toAgorot(Number(row.gross_collected) || 0);
-    if (row.accounting_only && row.document_number) {
-      collected = Math.max(0, collected - (remainingByDocnum.get(String(row.document_number)) || 0));
-    }
+    const collected = toAgorot(Number(row.gross_collected) || 0);
     const refunded = toAgorot(Number(row.refund_amount) || 0);
     if ((!collected && !refunded) || !row.date) continue;
     let costCenterId = null;

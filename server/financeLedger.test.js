@@ -258,6 +258,22 @@ test('forecast rebuild is idempotent and projects enrollments income', () => {
   assert.equal(income.amount_agorot, 38000);
 });
 
+test('an unpaid iCount invoice books only the collected part as cash income — once', () => {
+  const seed = baseSeed();
+  seed.payments = [];
+  seed.finance_documents = [{
+    id: 'icount:invoice:501', doctype: 'invoice', docnum: '501', document_date: '2026-08-03',
+    total_gross: 500, total_net: 423.73, remaining_sum: 200,
+  }];
+  const store = makeStore(seed);
+  rebuildLedger(store, { now: NOW });
+  const income = store.get('finance_ledger_entries')
+    .filter((row) => !row.voided_at && row.basis === 'cash' && row.source_type === 'payment');
+  assert.equal(income.length, 1);
+  // 500 פחות 200 יתרה = 300 שנגבו; הניכוי קורה פעם אחת בלבד (בדוח, לא שוב בספר)
+  assert.equal(income[0].amount_agorot, 30000);
+});
+
 test('nightly due-check: once a day, only after 04:00 Israel time', () => {
   const at = (iso) => new Date(iso);
   // 02:00 בלילה בישראל (23:00 UTC) — לפני החלון
