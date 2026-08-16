@@ -871,6 +871,49 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
   });
 });
 
+test('רשום במתנ״ס בלי קבוצה — הבוט משבץ, ולא מעביר לצוות', async () => {
+  // אריי כבר נרשם ושילם במתנ״ס, ואז אמו בחרה יום. הבוט ענה ש„כבר רשום
+  // לחוג ולכן שיבוץ נעשה מול הצוות” — ולילד לא נשמר מקום באף קבוצה.
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'registered', groupId: null })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: 'יותם', studentId: 's-yotam', groupId: GROUP_GD.id, frequency: 'פעם בשבוע',
+    });
+
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.מקום_שמור, true);
+    assert.equal(result.רשום_כבר_במתנס, true);
+    // ההרשמה במתנ״ס היא עובדה — היא לא יורדת בחזרה ל„ממתין לאישור הורה”.
+    assert.equal(student('s-yotam').status, 'registered');
+    // ואין לשלוח אותו להירשם שוב, ולא לתת לו מועד אחרון.
+    assert.match(result.הערה, /אין לבקש להירשם שוב/);
+    assert.doesNotMatch(result.הערה, /בתוך 3 ימים/);
+  });
+});
+
+test('רשום במתנ״ס ומשובץ בקבוצה — העברה בין קבוצות נשארת של הצוות', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'registered', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD, GROUP_HV],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: 'יותם', studentId: 's-yotam', groupId: GROUP_HV.id, frequency: 'פעם בשבוע',
+    });
+    assert.match(result.error || '', /כבר רשום לחוג ומשובץ בקבוצה/);
+    assert.equal(student('s-yotam').groupId, GROUP_GD.id);
+  });
+});
+
 test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב זה — הדיווח נרשם בכל זאת', async () => {
   // אביבית כתבה פעמיים שהיא השלימה הרשמה, ופעמיים קיבלה „אני לא רואה
   // שהפעולה נקלטה במערכת”. היא לא שאלה על פעולה — היא דיווחה על אחת.

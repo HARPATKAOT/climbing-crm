@@ -25,7 +25,7 @@ import {
   requestProgramApproval,
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
-import { studentGroupIds } from './studentGroups.js';
+import { activeEnrollmentGroupIds, studentGroupIds } from './studentGroups.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
@@ -44,6 +44,7 @@ import {
   createIntroBooking,
   createPlacementHold,
   joinGroupWaitlist,
+  markPlacementRegistered,
   releasePlacementHold,
   resolveOtherWaitlists,
   rescheduleIntroAfterNoShow,
@@ -1045,6 +1046,20 @@ export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }
 
+/**
+ * Does this trainee actually sit somewhere — a group on the card, a live
+ * enrollment, or a place already being held?
+ *
+ * The status alone does not answer it. „רשום” is written the moment the
+ * מתנ״ס confirms, which is routinely before anybody has chosen a group.
+ */
+export function hasLiveGroup(student) {
+  if (!student?.id) return false;
+  if (studentGroupIds(student).length) return true;
+  if (activeEnrollmentGroupIds(db.get('enrollments') || [], student.id).length) return true;
+  return Boolean(activeHoldForStudent(db, student.id)?.group_ids?.length);
+}
+
 /** A pending placement only exists when it points at a real group. */
 export function botVisibleStudentStatus(student, group = null) {
   const status = String(student?.status || '');
@@ -1204,12 +1219,19 @@ function requireDeclaredChild(parent, childName, studentId = '') {
   if (known.error) return known;
   const { student } = known;
   // A placement overwrites the child's status and group. Before registration
-  // that is the point; on a registered trainee it would silently corrupt a live
-  // registration — moving groups is the team's call. Checked before the
-  // declaration so a registered child always gets this answer.
-  if (isRegisteredTrainee(student)) {
+  // that is the point; on a registered trainee sitting in a group it would
+  // silently corrupt a live registration — moving groups is the team's call.
+  // Checked before the declaration so such a child always gets this answer.
+  //
+  // A registered trainee with no group is the opposite case, and it is one the
+  // bot creates itself: a registration reported by the מתנ״ס is recorded
+  // before any group is chosen, and the tool that records it says in so many
+  // words to carry on to the group. Refusing there left a mother who had paid
+  // and registered being told her son "כבר רשום" — with no place held for him
+  // anywhere.
+  if (isRegisteredTrainee(student) && hasLiveGroup(student)) {
     return {
-      error: `${student.name || 'המתאמן'} כבר רשום לחוג — הוספה או העברה בין קבוצות נעשית מול הצוות`,
+      error: `${student.name || 'המתאמן'} כבר רשום לחוג ומשובץ בקבוצה — הוספה או העברה בין קבוצות נעשית מול הצוות`,
     };
   }
   // Which document is missing decides what the customer is asked to do: a
@@ -2460,23 +2482,38 @@ export function buildCustomerTools({
           סיבה: placement.reason || 'placement_failed',
         };
       }
-      const row = placement.student || db.getOne('students', student.id);
+      // Holding a place puts the trainee back into "waiting for the parent to
+      // register", with a three-day clock. For somebody the מתנ״ס has already
+      // registered that is a step backwards on a fact we hold: the group was
+      // the only thing missing, so the placement closes as registered.
+      const alreadyRegistered = isRegisteredTrainee(student);
+      if (alreadyRegistered) {
+        await markPlacementRegistered({ db, persist: persistCore, student, source: 'centre' })
+          .catch((err) => console.error('keeping a registered trainee registered failed:', err.message));
+      }
+      const row = db.getOne('students', student.id) || placement.student || student;
       try {
-        await onPlacement?.({ student: row, group, kind: REGISTRATION_STATUS.AWAITING_PARENT });
+        await onPlacement?.({
+          student: row,
+          group,
+          kind: alreadyRegistered ? REGISTRATION_STATUS.REGISTERED : REGISTRATION_STATUS.AWAITING_PARENT,
+        });
       } catch (err) {
         console.error('placement notice failed:', err.message);
       }
 
       journal(
         'placement',
-        `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — המקום שמור עד ${placement.hold.expires_at}`,
+        alreadyRegistered
+          ? `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — כבר רשום במתנ״ס`
+          : `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — המקום שמור עד ${placement.hold.expires_at}`,
         {
           group_id: group.id,
           group: describeGroup(group),
           hold_id: placement.hold.id,
-          hold_until: placement.hold.expires_at,
+          hold_until: alreadyRegistered ? null : placement.hold.expires_at,
           from_status: student.status,
-          to_status: REGISTRATION_STATUS.AWAITING_PARENT,
+          to_status: alreadyRegistered ? REGISTRATION_STATUS.REGISTERED : REGISTRATION_STATUS.AWAITING_PARENT,
         },
         row
       );
@@ -2491,16 +2528,26 @@ export function buildCustomerTools({
         time,
         frequency,
       });
+      // Somebody who already registered at the מתנ״ס was only ever missing the
+      // group. Sending them back to register again — with a three-day clock —
+      // is asking them to redo the thing they told us they had done.
       return {
         שובץ: student.name || '',
         קבוצה: placedGroups.map((g) => describeGroup(g)).join(' + '),
-        סטטוס_פנימי: REGISTRATION_STATUS.AWAITING_PARENT,
+        סטטוס_פנימי: alreadyRegistered
+          ? REGISTRATION_STATUS.REGISTERED
+          : REGISTRATION_STATUS.AWAITING_PARENT,
         מקום_שמור: true,
-        שמירת_מקום_עד: placement.hold.expires_at,
+        שמירת_מקום_עד: alreadyRegistered ? null : placement.hold.expires_at,
+        רשום_כבר_במתנס: alreadyRegistered,
         חבילת_הרשמה: registrationPack,
-        הערה: `המקום נשמר בפועל עד ${placement.hold.expires_at}. יש לומר בקצרה: `
-          + 'הילד משובץ לקבוצה. כדי לשמור על השיבוץ צריך להירשם במתנ״ס ולאשר לנו שנרשמתם בתוך 3 ימים. '
-          + 'יש לשלוח את קישורי ההרשמה והציוד; הקישור אינו אישור הרשמה סופי.',
+        הערה: alreadyRegistered
+          ? 'המקום נשמר והמתאמן משובץ לקבוצה. ההרשמה במתנ״ס כבר רשומה אצלנו — '
+            + 'אין לבקש להירשם שוב ואין לשלוח את קישור ההרשמה למתנ״ס ואין לנקוב במועד '
+            + 'אחרון. אם הציוד עדיין לא הוסדר — זה הדבר היחיד שנשאר, ויש לשלוח את הקישור שלו.'
+          : `המקום נשמר בפועל עד ${placement.hold.expires_at}. יש לומר בקצרה: `
+            + 'הילד משובץ לקבוצה. כדי לשמור על השיבוץ צריך להירשם במתנ״ס ולאשר לנו שנרשמתם בתוך 3 ימים. '
+            + 'יש לשלוח את קישורי ההרשמה והציוד; הקישור אינו אישור הרשמה סופי.',
       };
     },
 
