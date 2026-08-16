@@ -54,6 +54,7 @@ import {
   withStaffMark,
   isClosingAcknowledgement,
   hasOpenBotHandoff,
+  centreContactName,
   isCentrePhone,
   centrePhones,
   CUSTOMER_STATUSES,
@@ -87,7 +88,14 @@ import { replyOffersForm } from './formFollowUp.js';
 import { scheduleFormCheck } from './botTools.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
-import { buildCentreReport, findStudentsByName, formatReportDate } from './centreReport.js';
+import {
+  buildCentreReport,
+  centreNameTokens,
+  findStudentsByName,
+  formatReportDate,
+} from './centreReport.js';
+import { loadEquipmentInfo } from './botFacts.js';
+import { resolveSeasonHalves } from './equipmentService.js';
 import {
   buildDigestMessage,
   dueForDigest,
@@ -262,8 +270,23 @@ export function centreStudentName(text) {
       .replace(/\s+/g, ' ')
       .trim();
   }
-  if (/^(?:תודה|מעולה|קיבלתי|הבנתי|סבבה|בוקר טוב|ערב טוב)[!?. ]*$/u.test(typed)) return '';
-  return typed.split(/\s+/).length <= 4 && typed.length <= 40 ? typed.replace(/[?!.,:;]+$/g, '').trim() : '';
+  if (/^(?:תודה|מעולה|קיבלתי|הבנתי|סבבה|בוקר טוב|ערב טוב|היי|שלום|הי)[!?. ]*$/u.test(typed)) return '';
+  if (typed.split(/\s+/).length > 4 || typed.length > 40) return '';
+  // „אלימלך קרני נרשם” is a name and a verb. Looking the whole string up came
+  // back as a child we do not have, and the team was told so.
+  return centreNameTokens(typed).join(' ');
+}
+
+/** A greeting from the centre is answered by name, never with "מה שמך?". */
+export function isCentreGreeting(text) {
+  return /^(?:בוקר טוב|צהריים טובים|ערב טוב|היי|הי|שלום|אהלן)[!?. ]*$/u.test(String(text || '').trim());
+}
+
+/** Answer a greeting with the same one, so the hour of day stays right. */
+export function greetingFor(text) {
+  const typed = String(text || '').trim();
+  const match = /^(בוקר טוב|צהריים טובים|ערב טוב)/u.exec(typed);
+  return match ? match[1] : 'היי';
 }
 
 async function handleCentreMessage({ text, phone, isSimulator = false }) {
@@ -273,7 +296,21 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const studentName = centreStudentName(typed);
   // A bare name confirms registration. The centre may also ask the fixed
   // billing question "מתי … התחיל?"; ordinary acknowledgements are ignored.
-  if (!studentName) return null;
+  if (!studentName) {
+    // „בוקר טוב” from the centre used to fall through to the customer flow,
+    // which answered the secretary with "מה השם הפרטי שלך?". She is not a new
+    // customer, and we already know who she is.
+    if (isCentreGreeting(typed)) {
+      const contact = centreContactName(await loadBrandedBotSettings(), phone);
+      return {
+        ok: true,
+        reason: 'greeting',
+        reply: `${greetingFor(typed)}${contact ? ` ${contact}` : ''} 🙂\n`
+          + 'אפשר לכתוב שם של ילד/ה ואחזור עם התאריך לחיוב.',
+      };
+    }
+    return null;
+  }
 
   if (supa.isEnabled()) {
     const collections = ['students', 'groups', 'enrollments', 'attendance', 'group_placement_holds', INTRO_COLLECTION];
@@ -284,12 +321,21 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
   }
 
   const allStudents = db.withStudentRelations?.(db.get('students') || []) || (db.get('students') || []);
+  // Before the season opens there is no register to read, so the opening date
+  // itself is the answer. It comes from the same season the equipment screen
+  // is priced by, rather than from a date written into the code.
+  const equipmentSettings = await loadEquipmentInfo().catch(() => null);
+  const seasonStart = equipmentSettings
+    ? resolveSeasonHalves(equipmentSettings, new Date()).start.toISOString().slice(0, 10)
+    : '';
   let report = buildCentreReport({
     students: allStudents,
     attendance: db.get('attendance') || [],
     groups: db.get('groups') || [],
     introBookings: db.get(INTRO_COLLECTION) || [],
     name: studentName,
+    seasonStart,
+    today: israelDateStr(),
   });
 
   const registrationMatches = findStudentsByName(allStudents, studentName);

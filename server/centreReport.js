@@ -29,15 +29,48 @@ export function attendanceCounts(status) {
   return ARRIVED.has(normalized) && !isIntroAttStatus(normalized);
 }
 
-/** Loose match on a name the community centre typed, against the trainees. */
+/**
+ * Words the centre types around a name that are not part of it.
+ *
+ * „אלימלך קרני נרשם” was looked up whole, verb included, and came back as a
+ * child we do not have. „הוא נרשם במתנס” was looked up as though it were
+ * somebody's name.
+ */
+const REPORT_NOISE = new Set([
+  'נרשם', 'נרשמה', 'נרשמו', 'נרשמת', 'רשום', 'רשומה', 'רשומים', 'הרשמה',
+  'שילם', 'שילמה', 'שולם', 'אושר', 'אושרה', 'אישור', 'הושלמה', 'הושלם',
+  // «שלום» and «תודה» are missing on purpose: a child may be called שלום, and
+  // a message that is only a greeting is recognised as one before we get here.
+  'הוא', 'היא', 'הם', 'כבר', 'גם', 'אצלנו', 'אצלכם',
+  'במתנס', 'במתנ״ס', 'במתנ"ס', 'מתנס', 'מתנ״ס', 'מתנ"ס', 'לחוג', 'לקבוצה',
+]);
+
+/** The words of a name, with the reporting verbs around it removed. */
+export function centreNameTokens(text) {
+  return normalizedName(text)
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 1 && !REPORT_NOISE.has(word));
+}
+
+/**
+ * The trainees a typed name can mean.
+ *
+ * Order is not fixed — the centre writes „יאירי נטע” as readily as „נטע
+ * יאירי” — so the words are compared as a set. What is fixed is that every
+ * word typed has to appear in the trainee's name: matching on a fragment used
+ * to return four children called יאיר for a message about נטע יאירי, and the
+ * list offered to the team named none of them properly.
+ */
 export function findStudentsByName(students, name) {
-  const wanted = normalizedName(name);
-  if (wanted.length < 2) return [];
-  const exact = students.filter((s) => normalizedName(s.name) === wanted);
+  const wanted = centreNameTokens(name);
+  if (!wanted.length || wanted.join(' ').length < 2) return [];
+  const exact = students.filter((s) => normalizedName(s.name) === wanted.join(' '));
   if (exact.length) return exact;
   return students.filter((s) => {
-    const candidate = normalizedName(s.name);
-    return candidate.includes(wanted) || wanted.includes(candidate);
+    const candidate = new Set(centreNameTokens(s.name));
+    if (!candidate.size) return false;
+    return wanted.every((word) => candidate.has(word));
   });
 }
 
@@ -108,6 +141,36 @@ export function centreBillingFraction({ student, firstBillable, groups = [], int
 }
 
 /**
+ * The trainee's first training day of the season, when the season has not
+ * started yet. Null once it has: from then on the register is the only thing
+ * allowed to say when a child began, because it is the only thing that knows.
+ *
+ * @param {string} seasonStart ISO date the classes open on
+ * @param {string} today ISO date
+ */
+export function seasonOpeningSession(student, groups = [], { seasonStart = '', today = '' } = {}) {
+  const start = String(seasonStart || '').slice(0, 10);
+  const now = String(today || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(now)) return null;
+  if (now >= start) return null;
+
+  const wanted = new Set(studentGroupIds(student));
+  const weekdays = new Set((groups || [])
+    .filter((group) => wanted.has(String(group.id)))
+    .flatMap((group) => getSortedGroupDays(group))
+    .filter((day) => Number.isInteger(day)));
+  if (!weekdays.size) return null;
+
+  // The first of those weekdays on or after the day the season opens.
+  const opening = new Date(`${start}T12:00:00Z`);
+  for (let step = 0; step < 7; step += 1) {
+    if (weekdays.has(opening.getUTCDay())) return opening.toISOString().slice(0, 10);
+    opening.setUTCDate(opening.getUTCDate() + 1);
+  }
+  return null;
+}
+
+/**
  * The whole answer to one name, decided before anything is sent or changed.
  *
  * Separated from the sending so it can be tested against real data and read in
@@ -116,7 +179,15 @@ export function centreBillingFraction({ student, firstBillable, groups = [], int
  *
  * @returns {{ ok: boolean, reply: string, student?: object, date?: string, reason?: string }}
  */
-export function buildCentreReport({ students = [], attendance = [], groups = [], introBookings = [], name = '' } = {}) {
+export function buildCentreReport({
+  students = [],
+  attendance = [],
+  groups = [],
+  introBookings = [],
+  name = '',
+  seasonStart = '',
+  today = '',
+} = {}) {
   const typed = String(name || '').trim();
   if (typed.length < 2) {
     return { ok: false, reason: 'no_name', reply: 'אפשר לכתוב את שם הילד/ה ואבדוק ממתי הוא מתאמן 🙂' };
@@ -143,6 +214,23 @@ export function buildCentreReport({ students = [], attendance = [], groups = [],
   const student = matches[0];
   const { firstBillable, introDate, sessions } = firstBillableSession(attendance, student.id);
   if (!firstBillable) {
+    // Before the season opens nobody has attendance, and „אין לי תאריך חיוב”
+    // was the answer to every name the centre sent in August. The date is
+    // knowable without a register: it is the group's first training day of the
+    // season, and a child starting on it is charged the month in full.
+    const opening = seasonOpeningSession(student, groups, { seasonStart, today });
+    if (opening) {
+      const denominator = billingDenominator(student, groups);
+      return {
+        ok: true,
+        student,
+        date: opening,
+        beforeSeason: true,
+        billing: denominator ? { numerator: denominator, denominator, paidIntros: 0, label: 'חודש מלא' } : null,
+        reply: `${student.name} — האימונים טרם התחילו. האימון הראשון ${formatReportDate(opening)}, `
+          + 'ולכן החודש מחויב במלואו.',
+      };
+    }
     return {
       ok: false,
       reason: 'no_attendance',

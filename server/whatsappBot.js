@@ -732,16 +732,40 @@ export function isStaffPhone(settings, phone) {
  * the centre writes us a child's name and expects a billing date back, so
  * their messages take a different path entirely.
  */
-export function centrePhones(settings) {
+/**
+ * Each entry is a number, optionally followed by the name of the person who
+ * writes from it — «0526688649 כרמית». The name is what lets the bot open with
+ * „בוקר טוב כרמית” instead of asking the centre's secretary what her name is,
+ * and a list of bare numbers keeps working exactly as before.
+ */
+function centreEntries(settings) {
   return String(settings?.aiCentrePhones || '')
     .split(/[,|\n]+/)
-    .map((v) => String(v || '').trim())
-    .filter(Boolean);
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const match = /^([+\d][\d\s-]*)(.*)$/u.exec(entry);
+      return {
+        phone: String(match?.[1] || entry).replace(/[\s-]/g, '').trim(),
+        name: String(match?.[2] || '').trim(),
+      };
+    })
+    .filter((entry) => entry.phone);
+}
+
+export function centrePhones(settings) {
+  return centreEntries(settings).map((entry) => entry.phone);
 }
 
 export function isCentrePhone(settings, phone) {
   if (!phone) return false;
   return centrePhones(settings).some((centre) => phonesMatch(centre, phone));
+}
+
+/** The name of the person writing from this centre number, if one was given. */
+export function centreContactName(settings, phone) {
+  if (!phone) return '';
+  return centreEntries(settings).find((entry) => phonesMatch(entry.phone, phone))?.name || '';
 }
 
 /** Recent turns of this conversation in the shape the CRM agent expects. */
