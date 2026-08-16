@@ -13,6 +13,8 @@
  * `bot_actions` ב-kv_collections — אותו דפוס של שאר האוספים התפעוליים.
  */
 
+import { openBotReviewTask } from './botReviewTasks.js';
+
 export const BOT_ACTIONS_COLLECTION = 'bot_actions';
 
 export const ACTION_KIND = 'action';
@@ -83,6 +85,10 @@ export function recordBotAction(db, persist, entry = {}) {
       Promise.resolve(persist(BOT_ACTIONS_COLLECTION, saved)).catch((err) =>
         console.error('bot action log persist failed:', err?.message || err));
     }
+    // Reading the journal is somebody's decision; a task is somebody's queue.
+    // Every change the bot makes opens one, until it has been watched working
+    // — see botReviewTasks. It never throws, so this cannot break the action.
+    if (meta.kind === ACTION_KIND) openBotReviewTask(db, persist, entry);
     return saved;
   } catch (err) {
     console.error('bot action log failed:', err?.message || err);
