@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, History, Bot, CheckCircle, RefreshCw, Sparkles, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive, CalendarClock, AlertTriangle, X } from 'lucide-react';
+import { Send, History, Bot, CheckCircle, RefreshCw, Sparkles, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox, Search, FilterX, Archive, CalendarClock, AlertTriangle, X, PauseCircle, PlayCircle } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
@@ -382,9 +382,14 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   useEffect(() => {
     if (activeTab === 'history') {
       fetchBroadcasts();
-    } else if (activeTab === 'templates') {
+      // דיוור פעיל מתקדם בזמן שמסתכלים עליו — הטבלה מתרעננת לבד.
+      const timer = setInterval(fetchBroadcasts, 5000);
+      return () => clearInterval(timer);
+    }
+    if (activeTab === 'templates') {
       fetchApprovedTemplates();
     }
+    return undefined;
   }, [activeTab]);
 
   useEffect(() => {
@@ -1138,7 +1143,40 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                         <td style={{ color: 'var(--green)' }}>{b.sent_count ?? '—'}</td>
                         <td style={{ color: (b.failed_count || 0) > 0 ? 'var(--red)' : 'inherit' }}>{b.failed_count ?? '—'}</td>
                         <td>{b.suppressed_count ?? '—'}</td>
-                        <td><span className={`badge ${statusBadge[0]}`}>{statusBadge[1]}</span></td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span className={`badge ${statusBadge[0]}`}>{statusBadge[1]}</span>
+                            {/* השהיה/המשכה ישר מהטבלה — בלי לפתוח את הדוח. */}
+                            {b.status === 'sending' && !b.legacy && (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-ghost"
+                                title="השהיית השליחה"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await fetch(`/api/broadcast/jobs/${b.id}/pause`, { method: 'POST' }).catch(() => {});
+                                  fetchBroadcasts();
+                                }}
+                              >
+                                <PauseCircle size={12} /> השהה
+                              </button>
+                            )}
+                            {b.status === 'paused' && !b.legacy && (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-ghost"
+                                title="המשך השליחה"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await fetch(`/api/broadcast/jobs/${b.id}/resume`, { method: 'POST' }).catch(() => {});
+                                  fetchBroadcasts();
+                                }}
+                              >
+                                <PlayCircle size={12} /> המשך
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td style={{ fontSize: 11, color: 'var(--text-3)' }}>{b.created_by?.name || '—'}</td>
                       </tr>
                     );

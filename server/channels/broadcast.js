@@ -424,14 +424,28 @@ export async function broadcastRunnerTick(now = Date.now()) {
   }
 }
 
-/** A restart mid-send leaves the job paused, never silently half-finished. */
+/**
+ * A restart mid-send continues by itself: recipients already marked sent are
+ * skipped, the pending ones go out as soon as the runner starts ticking. Only
+ * a restart that lands inside quiet hours (a late-night deploy) defers the
+ * remainder to the next allowed slot instead of firing at 23:00.
+ */
 export function recoverInterruptedBroadcasts() {
   for (const job of db.get('broadcast_jobs') || []) {
     if (job.status === 'sending') {
-      db.update('broadcast_jobs', job.id, {
-        status: 'paused',
-        notes: 'השרת הופעל מחדש באמצע השליחה — אפשר להמשיך מהמסך',
-      });
+      const quiet = quietStatus(new Date(), getBroadcastDefaults().quiet);
+      if (quiet.quiet) {
+        db.update('broadcast_jobs', job.id, {
+          status: 'scheduled',
+          scheduled_at: quiet.nextAllowed,
+          notes: `השרת הופעל מחדש באמצע השליחה בשעות שקטות (${quiet.reason}) — ההמשך תוזמן אוטומטית`,
+        });
+      } else {
+        // Status stays 'sending' — the runner tick re-attaches within seconds.
+        db.update('broadcast_jobs', job.id, {
+          notes: 'השרת הופעל מחדש באמצע השליחה — ההמשך נשלח אוטומטית',
+        });
+      }
     } else if (job.status === 'stopping') {
       // The user asked to stop before the restart; a stopped job must not
       // come back resumable.
