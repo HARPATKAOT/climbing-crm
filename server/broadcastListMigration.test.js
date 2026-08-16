@@ -47,12 +47,17 @@ const listOf = (db, parentId) => Object.fromEntries(
     .map((row) => [row.listName, row.subscribed])
 );
 
-test('four topic lists become תפעולי and שיווקי', async () => {
+test('four legacy lists become the five canonical lists', async () => {
   const db = testDb();
   const result = await migrateToTwoBroadcastLists({ database: db });
-  assert.deepEqual(db.store.broadcast_list_defs.map((row) => row.key), ['operational', 'marketing']);
+  assert.deepEqual(
+    db.store.broadcast_list_defs.map((row) => row.key),
+    ['operational', 'clubs', 'field_trips', 'camps', 'marketing']
+  );
   assert.equal(db.store.broadcast_list_defs[0].label, 'תפעולי');
-  assert.equal(db.store.broadcast_list_defs[1].label, 'שיווקי');
+  assert.equal(db.store.broadcast_list_defs[4].label, 'מבצעים ואירועים');
+  // כל רשימה נושאת אייקון משלה.
+  assert.ok(db.store.broadcast_list_defs.every((row) => row.icon));
   assert.equal(result.retired, 4);
 });
 
@@ -81,7 +86,7 @@ test('running twice changes nothing the second time', async () => {
   const first = await migrateToTwoBroadcastLists({ database: db });
   const snapshot = JSON.stringify(db.store);
   const second = await migrateToTwoBroadcastLists({ database: db });
-  assert.equal(first.defs, 2);
+  assert.equal(first.defs, 5);
   assert.deepEqual(second, { defs: 0, parents: 0 });
   assert.equal(JSON.stringify(db.store), snapshot);
 });

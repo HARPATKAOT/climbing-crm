@@ -1,20 +1,21 @@
 /**
- * From four topic lists to two: תפעולי and שיווקי.
+ * רשימות התפוצה הקנוניות. ההיסטוריה בקצרה:
  *
- * The old lists — כללי, חוגים, טיולים, אירועים — asked a parent to sort our
- * content into topics, and none of them answered the only question that matters
- * in practice: may we advertise to this person. The two that replace them are
- * the same distinction the law draws, so a subscription now means something.
+ * ארבע רשימות נושא ישנות (כללי, חוגים, טיולים, אירועים) קופלו לשתיים —
+ * תפעולי ושיווקי — כי אף אחת מהן לא ענתה על השאלה המשפטית «מותר לפרסם לאדם
+ * הזה». ב-2026-08 הבעלים ביקש לפרק את «שיווקי» חזרה לנושאים: לקוח שרוצה
+ * לשמוע על טיולים אבל לא על קייטנות צריך דרך להגיד את זה. הפעם ההסכמה
+ * נשמרת נכונה: מפתח marketing (עם ההסרות שנרשמו בו) נשאר, רק בשם חדש,
+ * ורשימות הנושא החדשות מתחילות עם כולם רשומים — מסירים את עצמם מי שרוצה.
  *
- * Existing answers are carried across rather than reset: anyone who had said
- * yes to any of the marketing-shaped lists keeps saying yes, and the operational
- * list is on for everyone because it is part of being served at all.
+ * ההגדרות כאן הן מקור האמת: אתחול שרת מיישר את השורות השמורות לנוסח הזה.
+ * מפתחות חדשים אסור שיתנגשו עם LEGACY_LIST_MAP — מפתח שמופיע שם נמחק בבוט.
  */
 
 export const OPERATIONAL_LIST = 'operational';
 export const MARKETING_LIST = 'marketing';
 
-/** Which of the two new lists an old key belongs to. */
+/** Which canonical list an old (pre-2026) key belongs to. */
 export const LEGACY_LIST_MAP = Object.freeze({
   classes: OPERATIONAL_LIST,
   general: MARKETING_LIST,
@@ -22,22 +23,53 @@ export const LEGACY_LIST_MAP = Object.freeze({
   events: MARKETING_LIST,
 });
 
-export const TWO_LIST_DEFS = Object.freeze([
+export const CANONICAL_LIST_DEFS = Object.freeze([
   {
     key: OPERATIONAL_LIST,
     label: 'תפעולי',
     description: 'שינויי שעות, ביטולים ותזכורות',
     color: 'var(--green)',
+    icon: 'bell',
     sortOrder: 0,
   },
   {
-    key: MARKETING_LIST,
-    label: 'שיווקי',
-    description: 'טיולים חדשים, מבצעים ועדכונים כלליים',
-    color: 'var(--amber)',
+    key: 'clubs',
+    label: 'חוגי טיפוס',
+    description: 'פתיחת הרשמה, מקומות אחרונים ועונה חדשה',
+    color: 'var(--blue)',
+    icon: 'mountain',
     sortOrder: 1,
   },
+  {
+    key: 'field_trips',
+    label: 'טיולים וימי שטח',
+    description: 'טיולי טיפוס, ימי סלע ופעילות בשטח',
+    color: 'var(--cyan)',
+    icon: 'compass',
+    sortOrder: 2,
+  },
+  {
+    key: 'camps',
+    label: 'קייטנות ומחנות',
+    description: 'קייטנות בחופשות ומחנות טיפוס',
+    color: 'var(--amber)',
+    icon: 'tent',
+    sortOrder: 3,
+  },
+  {
+    // המפתח נשאר marketing בכוונה: ההסרות שנרשמו ברשימת «שיווקי» ממשיכות
+    // לחול על הרשימה הזאת, וגם דגל marketing_opt_in נגזר ממנה.
+    key: MARKETING_LIST,
+    label: 'מבצעים ואירועים',
+    description: 'מבצעים, ימי הולדת, ערבי טיפוס ועדכונים כלליים',
+    color: 'var(--purple)',
+    icon: 'party',
+    sortOrder: 4,
+  },
 ]);
+
+/** Kept for older imports/tests. */
+export const TWO_LIST_DEFS = CANONICAL_LIST_DEFS;
 
 /**
  * Runs while a legacy list is still defined, and is a no-op afterwards — so a
@@ -46,21 +78,24 @@ export const TWO_LIST_DEFS = Object.freeze([
 export async function migrateToTwoBroadcastLists({ database, persist = null } = {}) {
   const defs = database.get('broadcast_list_defs') || [];
   const legacyDefs = defs.filter((row) => Object.hasOwn(LEGACY_LIST_MAP, String(row?.key || '')));
-  // Also runs when the wording of the two lists has changed: the descriptions
-  // live in a row a customer reads, and a row written by an earlier deploy would
-  // otherwise keep serving the old text forever.
-  const staleText = TWO_LIST_DEFS.filter((wanted) => {
+  // Also runs when the wording/colour/icon of a canonical list has changed:
+  // these rows are what a customer reads, and a row written by an earlier
+  // deploy would otherwise keep serving the old text forever.
+  const staleText = CANONICAL_LIST_DEFS.filter((wanted) => {
     const existing = defs.find((row) => String(row?.key || '') === wanted.key);
     return !existing
       || existing.label !== wanted.label
-      || (existing.description || '') !== wanted.description;
+      || (existing.description || '') !== wanted.description
+      || (existing.color || '') !== wanted.color
+      || (existing.icon || '') !== wanted.icon
+      || Number(existing.sortOrder ?? -1) !== wanted.sortOrder;
   });
   if (!legacyDefs.length && !staleText.length) return { defs: 0, parents: 0 };
 
   // Definitions are keyed by `key`, not `id`, so they go through their own
   // helpers — the generic update/delete match on an id these rows do not have.
   let defsWritten = 0;
-  for (const wanted of TWO_LIST_DEFS) {
+  for (const wanted of CANONICAL_LIST_DEFS) {
     // `some`, not `find`, because a second instance running this may already
     // have written the row: inserting again is what put each list on the screen
     // twice.

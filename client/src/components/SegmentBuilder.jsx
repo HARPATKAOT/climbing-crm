@@ -8,6 +8,7 @@ import { STATUSES, STATUS_PROGRESS_ORDER } from '../mockData.js';
 import { getGroupDays } from '../scheduleUtils.js';
 import { EMPTY_FILTERS } from './segmentFilters.js';
 import AppSelect from './AppSelect.jsx';
+import { ListIcon } from './broadcastListIcons.jsx';
 
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
@@ -92,7 +93,7 @@ const FILTER_ACCENTS = {
   delivery: '#A5B4FC',   // אינדיגו
 };
 
-function PickerOption({ selected, label, description, color, onClick, disabled = false }) {
+function PickerOption({ selected, label, description, color, icon = null, onClick, disabled = false }) {
   return (
     <button
       type="button"
@@ -101,14 +102,16 @@ function PickerOption({ selected, label, description, color, onClick, disabled =
       aria-pressed={selected}
       disabled={disabled}
     >
-      {color
-        ? <span className="segment-picker-color" style={{ background: color }} aria-hidden="true" />
-        : <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
+      {icon
+        ? <span aria-hidden="true" style={{ display: 'grid', placeItems: 'center' }}>{icon}</span>
+        : color
+          ? <span className="segment-picker-color" style={{ background: color }} aria-hidden="true" />
+          : <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
       <span className="segment-picker-option-copy">
         <span>{label}</span>
         {description && <small>{description}</small>}
       </span>
-      {color && <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
+      {(color || icon) && <span className="segment-picker-check" aria-hidden="true">{selected && <Check size={13} />}</span>}
     </button>
   );
 }
@@ -418,7 +421,15 @@ export default function SegmentBuilder({
           {groupsSelected && <div className="alert alert-info">כבר נבחרו קבוצות, ולכן סינון לפי רשימת תפוצה מושבת. איפוס הקבוצות יאפשר לבחור רשימה.</div>}
           <PickerOption selected={!draft.listKey} label="כל הרשימות" description="ללא סינון לפי רשימת תפוצה" onClick={() => setDraft({ listKey: '' })} />
           {lists.map((list) => (
-            <PickerOption key={list.key} selected={draft.listKey === list.key} label={list.label} description={list.description} disabled={groupsSelected} onClick={() => setDraft({ listKey: list.key })} />
+            <PickerOption
+              key={list.key}
+              selected={draft.listKey === list.key}
+              label={list.label}
+              description={list.description}
+              icon={<ListIcon icon={list.icon} size={16} color={list.color} />}
+              disabled={groupsSelected}
+              onClick={() => setDraft({ listKey: list.key })}
+            />
           ))}
           {onManageLists && (
             <button type="button" className="btn btn-ghost btn-sm segment-picker-manage" onClick={() => { closePicker(); onManageLists(); }}>

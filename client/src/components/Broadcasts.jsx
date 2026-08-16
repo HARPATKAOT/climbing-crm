@@ -21,6 +21,7 @@ import BroadcastQuotaCard from './BroadcastQuotaCard.jsx';
 import BroadcastSuppressionPanel from './BroadcastSuppressionPanel.jsx';
 import BroadcastPreviewPager from './BroadcastPreviewPager.jsx';
 import BroadcastSendFlow from './BroadcastSendFlow.jsx';
+import { ListIcon, LIST_ICONS } from './broadcastListIcons.jsx';
 
 // Only downloaded when the campaigns tab is opened.
 const Campaigns = lazy(() => import('./Campaigns.jsx'));
@@ -35,8 +36,8 @@ function toLocalDatetimeValue(date) {
 }
 
 const DEFAULT_LISTS = [
-  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)' },
-  { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', color: 'var(--amber)' },
+  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)', icon: 'bell' },
+  { key: 'marketing', label: 'מבצעים ואירועים', description: 'מבצעים, ימי הולדת, ערבי טיפוס ועדכונים כלליים', color: 'var(--purple)', icon: 'party' },
 ];
 
 const LIST_COLORS = [
@@ -192,7 +193,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         if (
           label !== original.label ||
           (list.description || '') !== (original.description || '') ||
-          list.color !== original.color
+          list.color !== original.color ||
+          (list.icon || '') !== (original.icon || '')
         ) {
           const res = await fetch(`/api/broadcast-list-defs/${list.key}`, {
             method: 'PUT',
@@ -201,6 +203,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               label,
               description: list.description || '',
               color: list.color,
+              icon: list.icon || 'megaphone',
             }),
           });
           const data = await res.json().catch(() => ({}));
@@ -232,7 +235,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         if (
           list.label !== original.label ||
           (list.description || '') !== (original.description || '') ||
-          list.color !== original.color
+          list.color !== original.color ||
+          (list.icon || '') !== (original.icon || '')
         ) {
           await fetch(`/api/broadcast-list-defs/${list.key}`, {
             method: 'PUT',
@@ -241,6 +245,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               label: String(list.label || '').trim(),
               description: list.description || '',
               color: list.color,
+              icon: list.icon || 'megaphone',
             }),
           });
         }
@@ -1189,7 +1194,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   key={list.key}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 1.2fr auto auto',
+                    gridTemplateColumns: 'auto 1fr 1.2fr auto auto auto',
                     gap: 8,
                     alignItems: 'center',
                     padding: 10,
@@ -1198,6 +1203,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                     background: 'rgba(255,255,255,0.02)',
                   }}
                 >
+                  <ListIcon icon={list.icon} size={17} color={list.color} />
                   <input
                     className="input input-sm"
                     value={list.label}
@@ -1230,6 +1236,20 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   >
                     {LIST_COLORS.map((c) => (
                       <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </AppSelect>
+                  <AppSelect
+                    className="input input-sm"
+                    style={{ minWidth: 88 }}
+                    value={list.icon || 'megaphone'}
+                    onChange={(e) => {
+                      const next = [...editingLists];
+                      next[idx] = { ...next[idx], icon: e.target.value };
+                      setEditingLists(next);
+                    }}
+                  >
+                    {Object.entries(LIST_ICONS).map(([value, meta]) => (
+                      <option key={value} value={value}>{meta.label}</option>
                     ))}
                   </AppSelect>
                   <button

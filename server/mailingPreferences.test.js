@@ -110,6 +110,39 @@ test('bot asks for lists, accepts several numbers and leaves the bot enabled', a
   assert.equal(parent.bot_opted_out, undefined);
 });
 
+test('leaving one topic keeps global marketing consent; leaving all topics ends it', async () => {
+  const database = fakeDb();
+  database.store.lists = [
+    { key: 'operational', label: 'תפעולי', icon: 'bell', sortOrder: 0 },
+    { key: 'clubs', label: 'חוגי טיפוס', icon: 'mountain', sortOrder: 1 },
+    { key: 'field_trips', label: 'טיולים וימי שטח', icon: 'compass', sortOrder: 2 },
+    { key: 'marketing', label: 'מבצעים ואירועים', icon: 'party', sortOrder: 3 },
+  ];
+  database.store.subscriptions = { operational: true, clubs: true, field_trips: true, marketing: true };
+  const parent = database.store.parents[0];
+
+  // ירד מ«מבצעים» אבל נשאר ב«טיולים» — עדיין מסכים לדיוור, רק לא לנושא הזה.
+  await updateMailingPreferences(database, parent, { marketing: false });
+  assert.equal(parent.marketing_opt_in, true);
+
+  // ירד גם משאר הנושאים — עכשיו זה opt-out מלא.
+  await updateMailingPreferences(database, parent, { clubs: false, field_trips: false });
+  assert.equal(parent.marketing_opt_in, false);
+});
+
+test('the bot menu carries each list\'s emoji icon', async () => {
+  const database = fakeDb();
+  database.store.lists = [
+    { key: 'operational', label: 'תפעולי', icon: 'bell', sortOrder: 0 },
+    { key: 'field_trips', label: 'טיולים וימי שטח', icon: 'compass', sortOrder: 1 },
+  ];
+  const result = await handleMailingPreferenceConversation({
+    database, parent: database.store.parents[0], text: 'הסר אותי', now: new Date('2026-08-14T10:00:00Z'),
+  });
+  assert.match(result.reply, /1\. 🔔 תפעולי/);
+  assert.match(result.reply, /2\. 🧭 טיולים וימי שטח/);
+});
+
 test('explicit all removes every mailing list immediately', async () => {
   const database = fakeDb();
   const parent = database.store.parents[0];

@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BellRing, Check, Loader2, MailX, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { ListIcon } from './broadcastListIcons.jsx';
 import './PublicMailingPreferences.css';
 
 const LOCAL_PREVIEW_LISTS = [
-  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', subscribed: true },
-  { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', subscribed: true },
+  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', icon: 'bell', subscribed: true },
+  { key: 'marketing', label: 'מבצעים ואירועים', description: 'מבצעים, ימי הולדת וערבי טיפוס', icon: 'party', subscribed: true },
 ];
 
 export default function PublicMailingPreferences() {
@@ -159,7 +160,10 @@ export default function PublicMailingPreferences() {
                   {checked ? <Check /> : null}
                 </span>
                 <span className="mailing-preferences-option-copy">
-                  <strong>{list.label}</strong>
+                  <strong style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <ListIcon icon={list.icon} size={15} color={list.color} />
+                    {list.label}
+                  </strong>
                   <span>{list.description || 'עדכונים מרשימה זו'}</span>
                 </span>
               </label>

@@ -1609,7 +1609,7 @@ export const db = {
     return [...byKey.values()].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   },
 
-  createBroadcastListDef: ({ label, description = '', color = 'var(--blue)' }) => {
+  createBroadcastListDef: ({ label, description = '', color = 'var(--blue)', icon = 'megaphone' }) => {
     const name = String(label || '').trim();
     if (!name) return { error: 'שם הרשימה חובה' };
 
@@ -1625,6 +1625,7 @@ export const db = {
       label: name,
       description: String(description || '').trim(),
       color: color || 'var(--blue)',
+      icon: icon || 'megaphone',
       sortOrder,
     };
     data.broadcast_list_defs.push(created);
@@ -1650,6 +1651,7 @@ export const db = {
       label: nextLabel,
       description: updates.description !== undefined ? String(updates.description || '').trim() : (current.description || ''),
       color: updates.color !== undefined ? (updates.color || current.color) : current.color,
+      icon: updates.icon !== undefined ? (updates.icon || current.icon || 'megaphone') : (current.icon || 'megaphone'),
       sortOrder: updates.sortOrder !== undefined ? Number(updates.sortOrder) : current.sortOrder,
     };
     writeDb(data);

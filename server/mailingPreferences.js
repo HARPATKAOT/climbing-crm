@@ -103,6 +103,7 @@ export function mailingPreferencesSnapshot(database, parent) {
       label: list.label,
       description: list.description || '',
       color: list.color || '#60a5fa',
+      icon: list.icon || 'megaphone',
       subscribed: subscriptions[list.key] !== false,
     })),
     updatedAt: parent.updated_at || null,
@@ -130,9 +131,14 @@ export async function updateMailingPreferences(database, parent, subscriptions, 
     const durable = await persistList(row);
     if (durable?.ok === false) throw new Error('שמירת העדפות הדיוור במסד נכשלה');
   }
+  // מאז פירוק «שיווקי» לרשימות נושא: opt-out גלובלי רק כשהלקוח ירד מכל
+  // רשימות הנושא. מי שהסיר «קייטנות» אבל נשאר ב«טיולים» עדיין מסכים לדיוור —
+  // רק לא לנושא הזה (ומנוע החסימות אוכף את ההסרה הנושאית לפי הרשימה).
   const anySubscribed = defs.some((list) => updated[list.key] !== false);
-  const marketingList = defs.find((list) => list.key === 'marketing');
-  const marketingOptIn = marketingList ? updated[marketingList.key] !== false : anySubscribed;
+  const topicLists = defs.filter((list) => list.key !== 'operational');
+  const marketingOptIn = topicLists.length
+    ? topicLists.some((list) => updated[list.key] !== false)
+    : anySubscribed;
   const parentRow = database.update('parents', parent.id, {
     marketing_opt_in: marketingOptIn,
     ...(parent?.bot_intake?.kind === 'mailing_preferences' ? { bot_intake: null } : {}),
@@ -188,8 +194,21 @@ function selectedListKeys(text, defs) {
   return [...selected];
 }
 
+/** אימוג׳י לכל רשימה בתפריט הבוט — וואטסאפ הוא טקסט, וזה מה שהופך תפריט לסריק. */
+const LIST_ICON_EMOJI = {
+  bell: '🔔',
+  mountain: '🧗',
+  compass: '🧭',
+  tent: '⛺',
+  party: '🎉',
+  megaphone: '📣',
+};
+
 function selectionPrompt(defs, url, prefix = '') {
-  const choices = defs.map((list, index) => `${index + 1}. ${list.label}`).join('\n');
+  const choices = defs.map((list, index) => {
+    const emoji = LIST_ICON_EMOJI[list.icon] || '';
+    return `${index + 1}. ${emoji ? `${emoji} ` : ''}${list.label}`;
+  }).join('\n');
   return [
     prefix,
     'בשמחה. מאילו רשימות להפסיק לקבל הודעות?',
