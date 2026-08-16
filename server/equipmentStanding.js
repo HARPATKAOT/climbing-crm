@@ -90,12 +90,16 @@ export function familyEquipmentStanding(db, { students = [] } = {}) {
  *
  * בלי הקישור אין מה לומר: „הציוד לא שולם” בלי דרך לשלם הוא נזיפה, לא שירות.
  */
-export function equipmentOpenLine(standing, { link = '' } = {}) {
+export function equipmentOpenLine(standing, { link = '', selfTrainee = false } = {}) {
   const open = standing?.open || [];
   if (!open.length || !link) return '';
-  const who = open
-    .map((m) => `${m.first_name || m.name} (${labelItems(m.unpaid, m.shirt_size)})`)
-    .join(', ');
+  // Naming the customer to the customer ("הציוד לא הוסדר — פנינה (…)") reads
+  // as a message about a third party. An adult training on her own is "you".
+  const who = selfTrainee && open.length === 1
+    ? labelItems(open[0].unpaid, open[0].shirt_size)
+    : open
+      .map((m) => `${m.first_name || m.name} (${labelItems(m.unpaid, m.shirt_size)})`)
+      .join(', ');
   return [
     `אגב, אני רואה שהציוד עדיין לא הוסדר — ${who}.`,
     `כאן משלימים, וגם מסמנים פריט שכבר יש מהבית: ${link}`,

@@ -388,6 +388,7 @@ export function followUpMessage(row, {
   awaitingRegistration = [],
   equipmentLine = '',
   formLine = '',
+  selfTrainee = false,
 } = {}) {
   const hello = firstName ? `היי ${firstName},` : 'היי,';
   const note = clean(row?.note);
@@ -409,7 +410,12 @@ export function followUpMessage(row, {
     if (!asksRegistration && !equipment) return '';
     const lines = [`${hello} רק בודק מה קורה 🙂`];
     if (asksRegistration) {
-      lines.push(`הספקתם להשלים את ההרשמה של ${joinNames(waiting)} במתנ״ס?`);
+      // An adult who signed herself up is one person, not a parent with a
+      // child of the same name. "הספקתם להשלים את ההרשמה של פנינה" made the
+      // message read as though it were written about somebody else.
+      lines.push(selfTrainee && waiting.length === 1
+        ? 'הספקת להירשם במתנ״ס?'
+        : `הספקתם להשלים את ההרשמה של ${joinNames(waiting)} במתנ״ס?`);
     }
     if (equipment) lines.push(equipment);
     lines.push('אם נתקלתם במשהו — כתבו לי ואשמח לעזור.');

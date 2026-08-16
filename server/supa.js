@@ -203,6 +203,8 @@ export const OPERATIONAL_TABLES = [
   'activity_price_rules',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
+  // עד מתי לא פונים ללקוח מיוזמתנו („אני בחו״ל”, „נירשם רק באוקטובר”).
+  'bot_outreach_pauses',
   // Everything the bot did, in one journal.
   'bot_actions',
   // Bot-domain records live in kv_collections so rollout does not depend on a
