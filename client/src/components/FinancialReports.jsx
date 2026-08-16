@@ -13,6 +13,7 @@ import { icountClientUrl } from '../utils/icountLinks.js';
 import MatchingCentre from './finance/MatchingCentre.jsx';
 import ProfitDashboard from './finance/ProfitDashboard.jsx';
 import ExpenseCenter from './finance/ExpenseCenter.jsx';
+import { PaymentMethodTag, paymentMethodBadge, INCOME_SOURCE_ICONS } from '../utils/financeBadges.jsx';
 
 // ארבעה טאבים לפי הלוגיקה העסקית: מה קורה (סקירה), מה נכנס (הכנסות),
 // מה יוצא (הוצאות), ומה דורש טיפול (תיבה אחת עם מונה).
@@ -49,8 +50,13 @@ async function fetchJson(url, options) {
   return body;
 }
 
-function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false }) {
-  return <article className="finance-metric" style={{ '--metric': color }}>
+function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false, onClick }) {
+  return <article
+    className={`finance-metric ${onClick ? 'is-clickable' : ''}`}
+    style={{ '--metric': color }}
+    onClick={onClick}
+    role={onClick ? 'button' : undefined}
+    title={onClick ? 'לחיצה מציגה את העסקאות שמאחורי המספר' : undefined}>
     <span className="finance-metric-icon"><Icon size={18} /></span><span className="finance-metric-label">{label}</span>
     <strong>{plain ? number.format(value || 0) : money.format(value || 0)}</strong>{note && <small>{note}</small>}
   </article>;
@@ -166,6 +172,19 @@ const PAYMENT_STATUS_FILTERS = [
 
 const paymentStatus = (value) => PAYMENT_STATUS[value] || { label: value || 'לא ידוע', cls: 'badge badge-gray' };
 
+// אייקונים לפילטר הסטטוס — גם בתפריט וגם בטריגר (optionIcon של AppSelect).
+const STATUS_FILTER_ICONS = {
+  debt: { Icon: AlertTriangle, color: '#FBBF24' },
+  paid: { Icon: CheckCircle2, color: '#34D399' },
+  pending: { Icon: Clock3, color: '#FBBF24' },
+  open: { Icon: Clock3, color: '#FBBF24' },
+  quoted: { Icon: ReceiptText, color: '#60A5FA' },
+  partial_refund: { Icon: RotateCcw, color: '#A78BFA' },
+  refunded: { Icon: RotateCcw, color: '#F87171' },
+  cancelled: { Icon: XCircle, color: '#94A3B8' },
+  failed: { Icon: XCircle, color: '#F87171' },
+};
+
 async function downloadPaymentDocument(row, kind = 'charge') {
   const url = row.payment_id
     ? `/api/payments/${encodeURIComponent(row.payment_id)}/invoice?kind=${encodeURIComponent(kind)}`
@@ -220,14 +239,22 @@ function printPaymentDocument(row, kind = 'charge') {
   document.body.appendChild(frame);
 }
 
-function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to, onReload }) {
+// תוויות סוג מסמך (row.document_type) — הצעת מחיר איננה חשבונית.
+const DOC_TYPE_LABELS = {
+  invrec: 'חשבונית מס קבלה', invoice: 'חשבונית מס', receipt: 'קבלה',
+  offer: 'הצעת מחיר', proforma: 'חשבון עסקה', payment: 'תשלום ללא מסמך',
+  refund: 'זיכוי', credit: 'זיכוי',
+};
+
+function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to, onReload, initialStatus = 'all' }) {
   const rows = data?.rows || [];
   const summary = data?.summary || {};
   const filters = data?.filters || {};
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');
+  const [status, setStatus] = useState(initialStatus);
   const [method, setMethod] = useState('all');
   const [source, setSource] = useState('all');
+  const [docType, setDocType] = useState('all');
   const [product, setProduct] = useState('all');
   const [activity, setActivity] = useState('all');
   const [sort, setSort] = useState('newest');
@@ -242,6 +269,7 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       if (status !== 'all' && status !== 'debt' && row.status !== status) return false;
       if (method !== 'all' && row.payment_method_label !== method) return false;
       if (source !== 'all' && row.source !== source) return false;
+      if (docType !== 'all' && String(row.document_type || '') !== docType) return false;
       if (product !== 'all' && !row.product_names?.includes(product)) return false;
       if (activity !== 'all' && !row.activities?.includes(activity)) return false;
       if (!needle) return true;
@@ -259,13 +287,13 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       if (sort === 'open-high') return Number(b.open_amount || 0) - Number(a.open_amount || 0);
       return String(b.created_at || b.date).localeCompare(String(a.created_at || a.date));
     });
-  }, [rows, query, status, method, source, product, activity, sort]);
+  }, [rows, query, status, method, source, docType, product, activity, sort]);
 
   const clear = () => {
-    setQuery(''); setStatus('all'); setMethod('all'); setSource('all');
+    setQuery(''); setStatus('all'); setMethod('all'); setSource('all'); setDocType('all');
     setProduct('all'); setActivity('all'); setSort('newest'); setExpanded('');
   };
-  const hasFilters = query || status !== 'all' || method !== 'all' || source !== 'all' || product !== 'all' || activity !== 'all' || sort !== 'newest';
+  const hasFilters = query || status !== 'all' || method !== 'all' || source !== 'all' || docType !== 'all' || product !== 'all' || activity !== 'all' || sort !== 'newest';
 
   const act = async (key, action, success) => {
     setBusyKey(key); setMessage({ type: '', text: '' });
@@ -408,18 +436,29 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
       </header>
 
       <div className="finance-payment-filters">
-        <label className="finance-payment-search"><span>חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
-        <label><span>סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">כל הסטטוסים</option>{PAYMENT_STATUS_FILTERS.map(([key, label]) => {
+        <label className="finance-payment-search"><span><Search size={12} /> חיפוש חופשי</span><div className="input-icon-wrap"><Search size={15} className="input-icon" /><input className="input input-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="לקוח, טלפון, מוצר, אירוע או מסמך" /></div></label>
+        <label><span><CheckCircle2 size={12} /> סטטוס</span><AppSelect className="input select input-sm" value={status} onChange={(event) => setStatus(event.target.value)}
+          optionIcon={(value) => STATUS_FILTER_ICONS[value] || null}>
+          <option value="all">כל הסטטוסים</option>{PAYMENT_STATUS_FILTERS.map(([key, label]) => {
           const count = key === 'debt'
             ? Number(filters.statuses?.pending || 0) + Number(filters.statuses?.open || 0)
             : Number(filters.statuses?.[key] || 0);
           return <option key={key} value={key}>{label}{count ? ` (${count})` : ''}</option>;
         })}</AppSelect></label>
-        <label><span>אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}><option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
-        <label><span>מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>אירוע</span><AppSelect className="input select input-sm" value={activity} onChange={(event) => setActivity(event.target.value)}><option value="all">כל האירועים</option>{(filters.events || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
-        <label><span>מיון</span><AppSelect className="input select input-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">החדש ביותר</option><option value="oldest">הישן ביותר</option><option value="amount-high">סכום גבוה</option><option value="amount-low">סכום נמוך</option><option value="open-high">חוב פתוח גבוה</option><option value="customer">שם לקוח</option></AppSelect></label>
+        <label><span><CreditCard size={12} /> אמצעי תשלום</span><AppSelect className="input select input-sm" value={method} onChange={(event) => setMethod(event.target.value)}
+          optionIcon={(value) => (value === 'all' ? null : { Icon: paymentMethodBadge(value).Icon, color: paymentMethodBadge(value).color })}>
+          <option value="all">כל האמצעים</option>{Object.keys(filters.payment_methods || {}).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><Building2 size={12} /> מקור</span><AppSelect className="input select input-sm" value={source} onChange={(event) => setSource(event.target.value)}
+          optionIcon={(value) => INCOME_SOURCE_ICONS[value] || null}>
+          <option value="all">כל המקורות</option>{Object.keys(filters.sources || {}).map((name) => <option key={name} value={name}>{PAYMENT_SOURCE[name] || name}</option>)}</AppSelect></label>
+        <label><span><ReceiptText size={12} /> סוג מסמך</span><AppSelect className="input select input-sm" value={docType} onChange={(event) => setDocType(event.target.value)}>
+          <option value="all">כל המסמכים</option>
+          {[...new Set(rows.map((row) => String(row.document_type || '')))].filter(Boolean).sort()
+            .map((type) => <option key={type} value={type}>{DOC_TYPE_LABELS[type] || type}</option>)}
+        </AppSelect></label>
+        <label><span><ShoppingBag size={12} /> מוצר</span><AppSelect className="input select input-sm" value={product} onChange={(event) => setProduct(event.target.value)}><option value="all">כל המוצרים</option>{(filters.products || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><CalendarRange size={12} /> אירוע</span><AppSelect className="input select input-sm" value={activity} onChange={(event) => setActivity(event.target.value)}><option value="all">כל האירועים</option>{(filters.events || []).map((name) => <option key={name} value={name}>{name}</option>)}</AppSelect></label>
+        <label><span><LayoutList size={12} /> מיון</span><AppSelect className="input select input-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">החדש ביותר</option><option value="oldest">הישן ביותר</option><option value="amount-high">סכום גבוה</option><option value="amount-low">סכום נמוך</option><option value="open-high">חוב פתוח גבוה</option><option value="customer">שם לקוח</option></AppSelect></label>
       </div>
       <div className="finance-payment-filter-meta"><span>מוצגות {number.format(visibleRows.length)} מתוך {number.format(rows.length)} רשומות</span>{hasFilters && <button className="btn btn-ghost btn-sm" onClick={clear}><XCircle size={14} />ניקוי סינון</button>}</div>
       {message.text && <div className={`alert alert-${message.type}`} style={{ margin: '0 18px 14px' }}>{message.text}</div>}
@@ -440,7 +479,7 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
               <td>{customerLink ? <a href={customerLink} onClick={(event) => event.stopPropagation()}><strong>{row.customer_name}</strong></a> : <strong>{row.customer_name}</strong>}<small>{row.customer_phone || row.customer_email || ''}</small></td>
               <td><strong>{row.description}</strong><small>{row.activities?.join(', ') || row.product_names?.slice(0, 2).join(', ')}</small></td>
               <td><span className="finance-payment-source">{PAYMENT_SOURCE[row.source] || row.source}</span><small>{row.sold_by || ''}</small></td>
-              <td>{row.payment_method_label}<small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
+              <td><PaymentMethodTag label={row.payment_method_label} /><small>{row.confirmation_code ? `אישור ${row.confirmation_code}` : ''}</small></td>
               <td><strong>{moneyPrecise.format(row.amount)}</strong>{row.open_amount > 0 && <small className="finance-open-amount">פתוח {moneyPrecise.format(row.open_amount)}</small>}{row.refund_amount > 0 && <small className="finance-refund-amount">זוכה {moneyPrecise.format(row.refund_amount)}</small>}</td>
               <td><span className={meta.cls}>{row.is_debt && ['pending', 'open'].includes(row.status) ? 'חוב פתוח' : meta.label}</span>{row.is_debt && row.debt_reason && <small>{row.debt_reason}</small>}</td>
               <td><button className="btn btn-ghost btn-icon btn-sm" aria-label="פתיחת פירוט" onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? '' : row.id); }}><ChevronDown size={16} style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }} /></button></td>
@@ -545,6 +584,19 @@ export default function FinancialReports() {
   const normalizedRequestedTab = LEGACY_TABS[requestedTab] || requestedTab;
   const [tab, setTab] = useState(TABS.some(([key]) => key === normalizedRequestedTab) ? normalizedRequestedTab : 'overview');
   const [inboxCount, setInboxCount] = useState(0);
+  const [incomePreset, setIncomePreset] = useState(() =>
+    new URLSearchParams(window.location.search).get('status') || 'all');
+
+  // קובייה לחיצה בסקירה פותחת את טאב ההכנסות מסונן מראש, עם כתובת ברת-שיתוף.
+  const openIncome = (presetStatus = 'all') => {
+    setIncomePreset(presetStatus);
+    setTab('income');
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'income');
+    if (presetStatus !== 'all') url.searchParams.set('status', presetStatus);
+    else url.searchParams.delete('status');
+    window.history.replaceState(window.history.state, '', url);
+  };
   const [from, setFrom] = useState(yearStart());
   const [to, setTo] = useState(today());
   const [dashboard, setDashboard] = useState(null);
@@ -733,12 +785,12 @@ export default function FinancialReports() {
       </button>)}</div>
     {loading ? <div className="finance-loading"><RefreshCw className="spin" /> טוען דוחות…</div> : <>
       {tab === 'overview' && <><section className="finance-metrics">
-        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" />
+        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" onClick={() => openIncome('all')} /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" onClick={() => openIncome('paid')} /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" onClick={() => openIncome('debt')} /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" onClick={() => openIncome('refunded')} /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" onClick={() => openIncome('all')} />
       </section>{featureFlags.dashboard_v2
         ? <ProfitDashboard from={from} to={to} />
         : <section className="finance-grid-two"><article className="card finance-panel"><header><div><h2>הכנסה מול גבייה והוצאות</h2><p>לפי חודש, ללא ספירה כפולה</p></div><div className="finance-legend"><span className="is-revenue">הכנסה</span><span className="is-collected">גבייה</span><span className="is-expense">הוצאות</span></div></header><TrendChart rows={dashboard?.monthly || []} /></article><article className="card finance-panel finance-quality"><header><div><h2>איכות הנתונים</h2><p>כל חוסר נשאר גלוי עד טיפול</p></div></header><div className="finance-quality-list"><span><CheckCircle2 /> {number.format(dashboard?.quality?.documents || 0)} מסמכים בתקופה</span><span><ReceiptText /> {number.format(dashboard?.quality?.expenses || 0)} הוצאות בתקופה</span><span><AlertTriangle /> {number.format(dashboard?.quality?.needs_review || 0)} התאמות לבדיקה</span><span><PackageSearch /> {number.format(dashboard?.quality?.unclassified || 0)} הוצאות לא מסווגות</span></div></article></section>}</>}
       {tab === 'income' && <>
-        <PaymentCentre data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />
+        <PaymentCentre key={incomePreset} initialStatus={incomePreset} data={paymentsReport} salesData={salesBreakdown} salesView={salesView} onSalesViewChange={setSalesView} from={from} to={to} onReload={load} />
         <article className="card finance-panel"><header><div><h2>מסמכי הכנסה</h2><p>הצעות וחשבונות עסקה אינם הכנסה</p></div></header><TransactionsTable rows={transactions} kind="document" /></article>
       </>}
       {tab === 'expenses' && <ExpenseCenter from={from} to={to} onAddExpense={() => { setShowExpenseForm(true); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />}

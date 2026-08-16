@@ -2183,6 +2183,11 @@ select option, select optgroup {
 .finance-matching-panes .is-matched-row { opacity: .5; }
 .finance-inbox-row.is-focused { background: color-mix(in srgb, var(--purple) 9%, transparent); box-shadow: inset 3px 0 0 var(--purple); }
 .finance-automation-hero p svg { vertical-align: -2px; margin-inline-end: 4px; color: var(--amber); }
+/* קוביית KPI לחיצה */
+.finance-metric.is-clickable { cursor: pointer; transition: transform .12s ease, border-color .12s ease; }
+.finance-metric.is-clickable:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--metric) 55%, var(--border)); }
+.finance-payment-filters label > span { display: inline-flex; align-items: center; gap: 4px; }
+.finance-payment-filters label > span svg { color: var(--text-3); }
 /* מרכז ההוצאות (משוב 2) */
 .finance-expense-stats { grid-template-columns: repeat(4, 1fr); }
 .finance-expense-actions { align-items: flex-end; }
