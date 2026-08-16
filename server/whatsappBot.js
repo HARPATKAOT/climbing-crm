@@ -740,6 +740,10 @@ export function isStaffPhone(settings, phone) {
  */
 function centreEntries(settings) {
   return String(settings?.aiCentrePhones || '')
+    // A number pasted into a right-to-left field arrives wrapped in invisible
+    // direction marks. They never mattered while the whole entry was a phone
+    // number; now they decide where the number ends and the name begins.
+    .replace(/[‎‏؜⁦-⁩]/gu, '')
     .split(/[,|\n]+/)
     .map((entry) => String(entry || '').trim())
     .filter(Boolean)

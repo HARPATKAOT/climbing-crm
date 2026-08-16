@@ -126,6 +126,13 @@ test('a centre number may carry the name of the person who writes from it', () =
   assert.equal(centreContactName(named, '972526688649'), 'כרמית');
   assert.equal(centreContactName(named, '972501234567'), '');
   assert.equal(centreContactName({ aiCentrePhones: '' }, '972526688649'), '');
+
+  // The live value was pasted into a right-to-left field, so it arrived
+  // wrapped in invisible direction marks. They used to be harmless; now they
+  // would have swallowed the name.
+  const pasted = { aiCentrePhones: '⁦+972526688649⁩ כרמית' };
+  assert.deepEqual(centrePhones(pasted), ['+972526688649']);
+  assert.equal(centreContactName(pasted, '972526688649'), 'כרמית');
 });
 
 test('every bot reply is marked, and the mark never stacks', () => {
