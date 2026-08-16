@@ -1042,9 +1042,13 @@ export const supa = {
       }
       return { ok: true, count: records.length };
     }
+    // אותו id פעמיים באצווה מפיל את כל הבקשה ("ON CONFLICT DO UPDATE command
+    // cannot affect row a second time") — זה מה ששבר את סנכרון iCount.
+    // האחרון מנצח, כמו בסמנטיקה של upsert-אחד-אחד.
+    const uniqueRecords = [...new Map(records.map((record) => [String(record.id ?? record.key), record])).values()];
     const chunkSize = 250;
-    for (let index = 0; index < records.length; index += chunkSize) {
-      const rows = records.slice(index, index + chunkSize).map((record) => ({
+    for (let index = 0; index < uniqueRecords.length; index += chunkSize) {
+      const rows = uniqueRecords.slice(index, index + chunkSize).map((record) => ({
         collection: table,
         id: String(record.id ?? record.key),
         data: record,
