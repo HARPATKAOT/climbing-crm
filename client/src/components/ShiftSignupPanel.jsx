@@ -8,11 +8,13 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, CalendarCheck, CalendarPlus, CalendarRange, Check, Copy, Link2, Loader2, Lock,
-  Unlock, Plus, Repeat, Send, Square, Trash2, UserPlus, Users, X,
+  AlertTriangle, CalendarCheck, CalendarPlus, CalendarRange, Check, Copy, GraduationCap, Link2,
+  Loader2, Lock, Unlock, Plus, Repeat, Send, Square, Trash2, UserPlus, Users, X,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { assignableLabelsOf, useRoleCatalog } from '../utils/staffRoles.js';
+import { activityFilterChips, useActivityTypes } from '../utils/activityTypes.js';
+import { activityTypeIcon } from '../utils/activityIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -49,6 +51,108 @@ async function callApi(url, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'הפעולה נכשלה');
   return body;
+}
+
+/**
+ * התגית של החוגים.
+ *
+ * החוגים אינם ביומן — הם מסך אחר, עם טבלה אחרת — ולכן הם תגית נוספת ולא חלק
+ * מהקטלוג. הם גם כבויים כברירת מחדל: שבעה-עשר חוגים על פני שבועיים הם ארבעים
+ * משמרות, והן קברו את החמש שבשבילן המנהל בא.
+ */
+const CLASS_CHIP = {
+  id: 'class',
+  label: 'חוגים',
+  color: '#FBBF24',
+  bg: 'rgba(251,191,36,0.18)',
+  match: ['class'],
+};
+
+/** „חופשה מאימונים” אינה משמרת שמישהו נרשם אליה — היא ביטול של אימונים. */
+const NOT_A_SHIFT_TYPE = 'training_vacation';
+
+/**
+ * אילו סוגי פעילות ייכנסו לטופס.
+ *
+ * אותן תגיות צבעוניות שביומן, מאותו קטלוג חי — כי „לבחור מהיומן” צריך להיראות
+ * כמו היומן. `null` פירושו „כל מה שביומן”, בדיוק כמו במסך היומן עצמו, כך שסוג
+ * שייווצר מחר ייכלל מעצמו בלי שאיש יזכור לסמן אותו.
+ *
+ * לצד כל תגית מופיע מה שהטווח מחזיק ממנה, ותגית שהתפקיד חוסם נראית חסומה
+ * במפורש — זה ההבדל בין „אין שעות פתיחה בשבועיים הקרובים” לבין „שעות פתיחה
+ * מאוישות על ידי הפעלת קיר, לא על ידי עוזר מדריך”.
+ */
+function TypeChips({ chips, selected, onChange, stats }) {
+  const statOf = (chip) => {
+    const rows = (stats || []).filter((s) => chip.match.includes(s.id));
+    return rows.reduce((acc, s) => ({
+      total: acc.total + s.total,
+      blocked: acc.blocked + s.blocked_by_role,
+      withoutHours: acc.withoutHours + s.without_hours,
+    }), { total: 0, blocked: 0, withoutHours: 0 });
+  };
+  const isOn = (id) => (selected === null ? id !== CLASS_CHIP.id : selected.includes(id));
+  const allIds = chips.map((c) => c.id);
+
+  const toggle = (id) => {
+    // מ„הכל” לרשימה מפורשת: קודם פורשים את מה שמסומן עכשיו, ורק אז מוסיפים או
+    // מורידים — אחרת לחיצה אחת הייתה מכבה בשקט את כל השאר.
+    const base = selected === null ? allIds.filter((x) => x !== CLASS_CHIP.id) : selected;
+    const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    onChange(next);
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>אילו סוגי פעילות</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => onChange(selected === null ? [] : null)}
+        >
+          {selected === null ? 'הסתרת הכל' : 'כל מה שביומן'}
+        </button>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {chips.map((chip) => {
+          const on = isOn(chip.id);
+          const stat = statOf(chip);
+          const blocked = stat.total > 0 && stat.blocked === stat.total;
+          const Icon = chip.id === CLASS_CHIP.id ? GraduationCap : activityTypeIcon(chip.id);
+          return (
+            <button
+              type="button"
+              key={chip.id}
+              onClick={() => toggle(chip.id)}
+              title={blocked
+                ? `${stat.total} משמרות מהסוג הזה בטווח, אבל „${chip.label}” לא מאויש על ידי התפקיד שנבחר`
+                : chip.id === CLASS_CHIP.id
+                  ? 'כל החוגים בטווח, בלי אפשרות לבחור קבוצות מסוימות'
+                  : on ? `להסתיר ${chip.label}` : `להציג ${chip.label}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                border: `1px solid ${on ? chip.color : `${chip.color}55`}`,
+                background: on ? chip.bg : `${chip.color}14`,
+                color: chip.color,
+                opacity: on ? 1 : 0.45,
+                transition: 'opacity 0.12s ease',
+              }}
+            >
+              <Icon size={13} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+              {chip.label}
+              {stat.total > 0 && (
+                <span style={{ fontWeight: 500, opacity: blocked ? 0.7 : 0.85 }}>
+                  {blocked ? '· חסום לתפקיד' : `· ${stat.total}`}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -135,6 +239,24 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   const [candidates, setCandidates] = useState(null);
   const [withoutHours, setWithoutHours] = useState(0);
   const [pickedIds, setPickedIds] = useState([]);
+  // null = כל מה שביומן, בלי חוגים — אותה מוסכמה שבמסך היומן, כדי שסוג חדש
+  // ייכלל מעצמו במקום להישאר כבוי עד שמישהו ישים לב אליו.
+  const [selectedTypes, setSelectedTypes] = useState(null);
+  const [byType, setByType] = useState([]);
+  const liveTypes = useActivityTypes();
+
+  const typeChips = useMemo(() => [
+    ...activityFilterChips().filter((chip) => chip.id !== NOT_A_SHIFT_TYPE),
+    CLASS_CHIP,
+  ], [liveTypes]);
+
+  /** מה שנשלח לשרת: הסוגים הגולמיים שמאחורי התגיות שנבחרו. */
+  const wantedTypes = useMemo(() => {
+    const on = selectedTypes === null
+      ? typeChips.filter((c) => c.id !== CLASS_CHIP.id)
+      : typeChips.filter((c) => selectedTypes.includes(c.id));
+    return [...new Set(on.flatMap((c) => c.match))];
+  }, [selectedTypes, typeChips]);
 
   useEffect(() => {
     if (!role && roleOptions.length) setRole(roleOptions[0]);
@@ -145,6 +267,9 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     setSlots([]);
     setCandidates(null);
     setPickedIds([]);
+    // הספירות נמדדו על הטווח והתפקיד הקודמים; להשאיר אותן פירושו להראות
+    // „11 שעות פתיחה” על טווח שכבר לא נשלף.
+    setByType([]);
   };
 
   const toggleWeekday = (day) => {
@@ -179,10 +304,13 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     setError('');
     setBusy(true);
     try {
-      const query = new URLSearchParams({ role, from, to, capacity: String(capacity) });
+      const query = new URLSearchParams({
+        role, from, to, capacity: String(capacity), types: wantedTypes.join(','),
+      });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
       setCandidates(body.candidates || []);
       setWithoutHours(body.withoutHours || 0);
+      setByType(body.byType || []);
       // ברירת המחדל היא רק מה שעוד לא מאויש — כדי שלא יישלח לצוות טופס שרובו
       // משמרות שכבר סגורות.
       setPickedIds((body.candidates || []).filter((c) => c.staffed < c.capacity).map((c) => c.id));
@@ -203,6 +331,25 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   const chosenSlots = source === 'calendar'
     ? (candidates || []).filter((c) => pickedIds.includes(c.id))
     : slots;
+
+  /**
+   * למה הרשימה ריקה.
+   *
+   * „אין משמרות” הוא כמעט תמיד שקר: יש משמרות, והתפקיד שנבחר פשוט לא מאייש
+   * אותן. זו בדיוק הטעות שגרמה למנהל לחשוב שהמסך קורא יומן אחר — הוא ביקש
+   * „עוזר מדריך”, ואחת-עשרה שעות פתיחה נעלמו בשקט כי הן מאוישות בהפעלת קיר.
+   */
+  const emptyReason = useMemo(() => {
+    const blocked = (byType || []).filter((s) => s.blocked_by_role > 0);
+    if (blocked.length) {
+      const names = blocked
+        .map((s) => typeChips.find((c) => c.match.includes(s.id))?.label || s.id)
+        .filter((v, i, all) => all.indexOf(v) === i);
+      const shifts = blocked.reduce((sum, s) => sum + s.blocked_by_role, 0);
+      return `יש בטווח ${shifts} משמרות (${names.join(', ')}), אבל התפקיד „${role}” לא מאייש אותן. אפשר לשנות תפקיד, או לקבוע מי מאייש כל סוג במסך „תפקידים וסוגי פעילות”.`;
+    }
+    return `אין ביומן משמרות בטווח הזה שמתאימות ל„${role}”.`;
+  }, [byType, typeChips, role]);
 
   const create = async () => {
     setError('');
@@ -277,6 +424,15 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         value={recipients}
         onChange={setRecipients}
       />
+
+      {source === 'calendar' && (
+        <TypeChips
+          chips={typeChips}
+          selected={selectedTypes}
+          stats={byType}
+          onChange={(next) => { setSelectedTypes(next); resetPreview(); }}
+        />
+      )}
 
       <div>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>מאיפה המשמרות</div>
@@ -367,7 +523,7 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
             {candidates.length === 0
-              ? `אין ביומן משמרות בטווח הזה שמתאימות ל„${role}”.`
+              ? emptyReason
               : `${candidates.length} משמרות ביומן מתאימות ל„${role}”. סמנו מה להציע:`}
             {withoutHours > 0 && ` (${withoutHours} רשומות ביומן בלי שעות — אי אפשר להציע אותן להרשמה)`}
           </div>
@@ -428,7 +584,14 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
           <X size={14} /> ביטול
         </button>
         {source === 'calendar' ? (
-          <button className="btn btn-ghost btn-sm" onClick={loadFromCalendar} disabled={busy}>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={loadFromCalendar}
+            // רשימת סוגים ריקה פירושה „הכל” בחוט, ולכן כיבוי כל התגיות חייב
+            // לחסום את השליפה במקום להחזיר בשקט את מה שהמנהל בדיוק כיבה.
+            disabled={busy || wantedTypes.length === 0}
+            title={wantedTypes.length === 0 ? 'בחרו לפחות סוג פעילות אחד' : ''}
+          >
             {busy ? <Loader2 size={14} className="spin" /> : <CalendarRange size={14} />} שליפה מהיומן
           </button>
         ) : (

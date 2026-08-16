@@ -234,6 +234,108 @@ test('calendar candidates only offer types the role is allowed to staff', () => 
   assert.deepEqual(row.slots.map((s) => s.id), candidates.map((c) => c.id));
 });
 
+// ─── סינון לפי סוג פעילות ────────────────────────────────────────────────────
+
+const CLASS_GRID = [
+  { id: 'g1', name: 'כיתות ג-ד', day: 2, time: '16:00', duration: 50 },
+  { id: 'g2', name: 'בוגרים', day: 2, time: '20:00', duration: 80 },
+];
+
+test('an empty type list still offers everything', () => {
+  const withNone = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+  });
+  const withEmpty = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14', types: [],
+  });
+  assert.deepEqual(withEmpty.candidates, withNone.candidates);
+  assert.ok(withNone.candidates.some((c) => c.source === 'group'));
+});
+
+test('picking one type drops every other source, classes included', () => {
+  const { candidates } = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['event'],
+  });
+  assert.deepEqual(candidates.map((c) => c.label), ['יום הולדת לנועם']);
+});
+
+test('classes come only when their own chip is on', () => {
+  const off = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['event', 'opening_hours'],
+  });
+  assert.equal(off.candidates.filter((c) => c.source === 'group').length, 0);
+
+  const on = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['class'],
+  });
+  assert.deepEqual(on.candidates.map((c) => c.label), ['כיתות ג-ד', 'בוגרים']);
+});
+
+test('a type the role cannot staff reports why it is empty', () => {
+  const { candidates, byType } = calendarSlotCandidates({
+    activities: CALENDAR, groups: [],
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['opening_hours'],
+  });
+  assert.equal(candidates.length, 0);
+  const opening = byType.find((s) => s.id === 'opening_hours');
+  // The shift is there and the range does hold it — the role is what removed it.
+  assert.equal(opening.total, 1);
+  assert.equal(opening.blocked_by_role, 1);
+});
+
+test('the counts describe the range, not the filtered result', () => {
+  const { byType } = calendarSlotCandidates({
+    activities: CALENDAR, groups: CLASS_GRID,
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['event'],
+  });
+  // Classes were filtered out of the list, but the picker still says how many
+  // turning them on would bring.
+  assert.equal(byType.find((s) => s.id === 'class').total, 2);
+  assert.equal(byType.find((s) => s.id === 'opening_hours').total, 1);
+});
+
+test('a filtered-out type does not inflate the without-hours line', () => {
+  // a6 is an event with no hours. Ask for opening hours only and it must not be
+  // reported — the manager is not being told about something they excluded.
+  const { withoutHours, byType } = calendarSlotCandidates({
+    activities: CALENDAR, groups: [],
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+    types: ['opening_hours'],
+  });
+  assert.equal(withoutHours, 0);
+  assert.equal(byType.find((s) => s.id === 'event').without_hours, 1);
+});
+
+test('an archived entry is not offered, the way a cancelled one is not', () => {
+  const { candidates } = calendarSlotCandidates({
+    activities: [
+      { id: 'c1', name: 'קייטנה שהסתיימה', type: 'event', date: '2026-08-11', end_date: '2026-08-13', start_time: '10:00', end_time: '12:00', status: 'archived' },
+      { id: 'c2', name: 'קייטנה בארכיון', type: 'event', date: '2026-08-11', start_time: '10:00', end_time: '12:00', archived: true },
+    ],
+    rolesByType: ROLES_BY_TYPE, classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך', from: '2026-08-10', to: '2026-08-14',
+  });
+  assert.deepEqual(candidates, []);
+});
+
 test('two classes at the same hour are two candidates, not one', () => {
   const { candidates } = calendarSlotCandidates({
     groups: [

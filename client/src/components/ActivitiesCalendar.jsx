@@ -29,7 +29,8 @@ import {
 } from '../utils/staffRoles.js';
 import { rateForRole, amountForWorkRow, workTypeRole, travelPerDay } from '../utils/wageRates.js';
 import {
-  DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
+  DEFAULT_ACTIVITY_TYPES, ACTIVITIES_GROUP_TYPES, activityTypes, activityTypeMeta,
+  activityFilterChips as filterChips, useActivityTypes,
   fetchActivityTypes, invalidateActivityTypes,
 } from '../utils/activityTypes.js';
 import {
@@ -88,26 +89,6 @@ const isPaidPerParticipant = (activity) => (
     activity?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
   )) === 'paid_per_participant'
 );
-
-/** סוגים שמוצגים יחד בתגית הסינון „פעילויות” — כולל הסוגים שקדמו לאיחוד. */
-const ACTIVITIES_GROUP_TYPES = ['event', 'personal_training', 'birthday', 'school', 'company'];
-
-/** תגיות סינון ביומן (מקובצות) — בטופס האירוע עדיין בוחרים סוג מדויק.
-    נבנות מהרשימה החיה, כך שסוג חדש מקבל תגית סינון משלו מיד. */
-function filterChips() {
-  return [
-    {
-      id: 'activities',
-      label: 'פעילויות',
-      color: '#FB923C',
-      bg: 'rgba(251,146,60,0.18)',
-      match: ACTIVITIES_GROUP_TYPES,
-    },
-    ...activityTypes()
-      .filter((t) => !ACTIVITIES_GROUP_TYPES.includes(t.id))
-      .map((t) => ({ id: t.id, label: t.label, color: t.color, bg: t.bg, match: [t.id] })),
-  ];
-}
 
 const LIST_EMPTY_COPY = {
   activities: { empty: 'אין עדיין פעילויות', add: 'הוספת פעילות' },

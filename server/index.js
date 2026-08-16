@@ -14719,7 +14719,7 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
   try {
     const [activities, groups, assignments] = await readTables('activities', 'groups', 'work_assignments');
     const catalog = await signupRoleCatalog();
-    const { candidates, withoutHours, error } = calendarSlotCandidates({
+    const { candidates, withoutHours, byType, error } = calendarSlotCandidates({
       activities,
       groups,
       assignments,
@@ -14729,9 +14729,12 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
       from: req.query.from,
       to: req.query.to,
       capacity: req.query.capacity,
+      // רשימת סוגים מופרדת בפסיקים, כפי שהמסך מסמן אותם. ריק פירושו „הכל”,
+      // כדי שקריאה ישנה בלי הפרמטר תמשיך להתנהג כמו קודם.
+      types: String(req.query.types || '').split(',').map((t) => t.trim()).filter(Boolean),
     });
     if (error) return res.status(400).json({ error });
-    res.json({ candidates, withoutHours });
+    res.json({ candidates, withoutHours, byType });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
