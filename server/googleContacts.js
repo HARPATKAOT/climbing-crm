@@ -290,13 +290,18 @@ export function buildDesiredContacts(parents = [], students = []) {
     if (!phone) continue;
 
     const children = childrenByParent.get(parentId) || [];
+    const parentName = fullName(parent.name, parent.lastName);
+    // An adult who trains has both a parent record and a trainee record under it.
+    // Listing that trainee would repeat the headline name, so drop the echo —
+    // the status still counts it, only the name list skips it.
     const listed = children
       .filter((c) => c.status !== 'archived' && collapseSpaces(c.name))
-      .map((c) => fullName(c.name, parent.lastName));
+      .map((c) => fullName(c.name, parent.lastName))
+      .filter((name) => name !== parentName);
 
     const parts = [
       statusLabel(headlineStatus(parent, children)),
-      fullName(parent.name, parent.lastName) || 'ללא שם',
+      parentName || 'ללא שם',
     ];
     if (listed.length) parts.push(listed.join(', '));
 

@@ -170,13 +170,22 @@ export function expandWeeklySlots({
   return { slots };
 }
 
-/** A calendar entry that was called off is not a shift anyone can be offered. */
+/**
+ * A calendar entry that was called off — or filed away — is not a shift anyone
+ * can be offered. `archived` belongs here for the same reason `cancelled` does:
+ * an entry the office has finished with should not turn up in a form asking the
+ * team who is free for it. Without this an archived five-day camp went on
+ * producing five candidates a fortnight after it ended.
+ */
 function isCancelledActivity(activity) {
   if (!activity) return true;
-  if (activity.cancelled) return true;
+  if (activity.cancelled || activity.archived) return true;
   const status = String(activity.status || '').toLowerCase();
-  return status === 'cancelled' || status === 'canceled';
+  return status === 'cancelled' || status === 'canceled' || status === 'archived';
 }
+
+/** The synthetic type id every weekly class carries in the candidate list. */
+export const CLASS_SOURCE_TYPE = 'class';
 
 /**
  * Roles a calendar type accepts. An empty (or missing) list means the type was
@@ -220,6 +229,22 @@ function addOneDay(dateStr) {
  * Anything already fully staffed for this role is still returned, marked with
  * how many it has, so "why is Tuesday missing from the list?" never has to be
  * asked.
+ *
+ * ## Why the counts come back alongside the candidates
+ *
+ * The two filters here — the role and the chosen types — both work by removing
+ * things, and a list that is empty because everything was removed looks exactly
+ * like a calendar with nothing in it. That is a real trap: the owner picked
+ * "עוזר מדריך", got a list with no opening hours in it, and concluded the
+ * screen was reading some other calendar. It was not — opening hours are staffed
+ * by "הפעלת קיר", so every one of them had been filtered out silently.
+ *
+ * So each type reports what happened to it: how many shifts it has in the range,
+ * how many the role blocked, and how many have no hours to offer. The screen can
+ * then say *why* a type is empty instead of just showing nothing.
+ *
+ * @param {string[]|null} types `source_type` ids to offer (`class` for the weekly
+ *   grid). Null or empty means every type — the behaviour before the picker.
  */
 export function calendarSlotCandidates({
   activities = [],
@@ -231,6 +256,7 @@ export function calendarSlotCandidates({
   from,
   to,
   capacity = 1,
+  types = null,
 } = {}) {
   const first = cleanDate(from);
   const last = cleanDate(to);
@@ -239,26 +265,52 @@ export function calendarSlotCandidates({
 
   const wantedRole = cleanText(role, 60);
   const defaultCapacity = Math.max(1, Math.min(20, Math.round(Number(capacity) || 1)));
+  const wanted = Array.isArray(types) && types.length
+    ? new Set(types.map((t) => cleanText(t, 60)).filter(Boolean))
+    : null;
   const candidates = [];
   // Entries the manager can see in the calendar but cannot offer, because a
   // shift without hours has nothing to sign up for. Reported rather than hidden.
   let withoutHours = 0;
 
+  const stats = new Map();
+  const count = (type, key, by = 1) => {
+    if (!stats.has(type)) {
+      stats.set(type, { id: type, total: 0, blocked_by_role: 0, without_hours: 0 });
+    }
+    stats.get(type)[key] += by;
+  };
+
   for (const activity of activities) {
     const type = String(activity?.type || '').toLowerCase();
     if (type === 'training_vacation') continue;
     if (isCancelledActivity(activity)) continue;
-    if (!typeAcceptsRole(rolesByType, type, wantedRole)) continue;
 
     const days = activityDateRange(activity).filter((day) => day >= first && day <= last);
     if (!days.length) continue;
 
-    const start = cleanTime(activity.start_time);
-    const end = cleanTime(activity.end_time);
-    if (!start || !end || end <= start) {
-      withoutHours += 1;
+    // Counted before either filter runs: this is what the range actually holds,
+    // and it is the number the picker shows next to the type.
+    count(type, 'total', days.length);
+
+    if (!typeAcceptsRole(rolesByType, type, wantedRole)) {
+      count(type, 'blocked_by_role', days.length);
       continue;
     }
+
+    const start = cleanTime(activity.start_time);
+    const end = cleanTime(activity.end_time);
+    // A type the manager turned off is still counted — the picker shows how much
+    // each type holds, so turning one on is an informed choice rather than a
+    // guess — but it must not inflate the "entries without hours" line the
+    // screen prints, which is about what was offered.
+    const offered = !wanted || wanted.has(type);
+    if (!start || !end || end <= start) {
+      count(type, 'without_hours', days.length);
+      if (offered) withoutHours += 1;
+      continue;
+    }
+    if (!offered) continue;
 
     for (const date of days) {
       candidates.push({
@@ -282,14 +334,35 @@ export function calendarSlotCandidates({
     }
   }
 
+  // The weekly class grid is not part of the calendar screen at all — it lives
+  // on its own screen — so it is one more entry in the type picker rather than
+  // something mixed in by default. Seventeen classes over a fortnight are forty
+  // shifts, and they buried the five the manager had actually come for.
   const classesAllowed = classRoles.length === 0 || classRoles.includes(wantedRole);
-  if (classesAllowed) {
+  {
     for (const group of groups) {
       const weekdays = getGroupDays(group);
       const start = cleanTime(group?.time);
       if (!weekdays.length) continue;
+
+      const dates = [];
+      for (let date = first; date <= last; date = addOneDay(date)) {
+        if (!weekdays.includes(weekdayOf(date))) continue;
+        // A training vacation cancels the class, so there is no shift to offer.
+        if (isTrainingVacationDate(activities, date)) continue;
+        dates.push(date);
+      }
+      if (!dates.length) continue;
+      count(CLASS_SOURCE_TYPE, 'total', dates.length);
+
+      if (!classesAllowed) {
+        count(CLASS_SOURCE_TYPE, 'blocked_by_role', dates.length);
+        continue;
+      }
+      const offeredClass = !wanted || wanted.has(CLASS_SOURCE_TYPE);
       if (!start) {
-        withoutHours += 1;
+        count(CLASS_SOURCE_TYPE, 'without_hours', dates.length);
+        if (offeredClass) withoutHours += 1;
         continue;
       }
       const minutes = Math.max(15, Math.round(Number(group.duration) || 50));
@@ -297,16 +370,15 @@ export function calendarSlotCandidates({
       const endMinutes = h * 60 + m + minutes;
       // A class that would run past midnight is a data error, not a night shift.
       if (endMinutes >= 24 * 60) {
-        withoutHours += 1;
+        count(CLASS_SOURCE_TYPE, 'without_hours', dates.length);
+        if (offeredClass) withoutHours += 1;
         continue;
       }
       const end = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
 
-      for (let date = first; date <= last; date = addOneDay(date)) {
-        const weekday = weekdayOf(date);
-        if (!weekdays.includes(weekday)) continue;
-        // A training vacation cancels the class, so there is no shift to offer.
-        if (isTrainingVacationDate(activities, date)) continue;
+      if (!offeredClass) continue;
+
+      for (const date of dates) {
         candidates.push({
           id: slotId(date, start, group.id || ''),
           date,
@@ -318,7 +390,7 @@ export function calendarSlotCandidates({
           group_id: group.id || null,
           work_type: 'class_shift',
           source: 'group',
-          source_type: 'class',
+          source_type: CLASS_SOURCE_TYPE,
           staffed: staffedCount(assignments, {
             date, startTime: start, groupId: group.id, role: wantedRole,
           }),
@@ -332,7 +404,10 @@ export function calendarSlotCandidates({
       ? (a.start_time === b.start_time ? a.label.localeCompare(b.label, 'he') : a.start_time.localeCompare(b.start_time))
       : a.date.localeCompare(b.date)
   ));
-  return { candidates, withoutHours };
+  // Sorted by how much each type holds: the picker reads top-down, and the type
+  // with forty shifts in it is the one worth seeing first.
+  const byType = [...stats.values()].sort((a, b) => b.total - a.total);
+  return { candidates, withoutHours, byType };
 }
 
 /** Short, unguessable, and readable enough to be dictated over the phone. */

@@ -58,6 +58,34 @@ export function fetchActivityTypes() {
   return inFlight;
 }
 
+/** סוגים שמוצגים יחד בתגית הסינון „פעילויות” — כולל הסוגים שקדמו לאיחוד. */
+export const ACTIVITIES_GROUP_TYPES = ['event', 'personal_training', 'birthday', 'school', 'company'];
+
+/**
+ * תגיות הסינון לפי סוג — מקובצות, כפי שהן ביומן.
+ *
+ * ביומן בוחרים „פעילויות” ולא „אירוע” ו„אימון אישי” בנפרד, ולכן התגית הראשונה
+ * היא סינתטית ומכסה כמה סוגים גולמיים. `match` הוא מה שצריך לשלוח לשרת: שם
+ * הסינון עובד על הסוג השמור בשורה, לא על שם התגית.
+ *
+ * נבנות מהרשימה החיה, כך שסוג שהבעלים יוסיף מחר מקבל תגית משלו מיד — ומשותפות
+ * ליומן ולטופס ההרשמה למשמרות, כדי שאותו שם לא יסנן שני דברים שונים בשני מסכים.
+ */
+export function activityFilterChips() {
+  return [
+    {
+      id: 'activities',
+      label: 'פעילויות',
+      color: '#FB923C',
+      bg: 'rgba(251,146,60,0.18)',
+      match: ACTIVITIES_GROUP_TYPES,
+    },
+    ...current
+      .filter((t) => !ACTIVITIES_GROUP_TYPES.includes(t.id))
+      .map((t) => ({ id: t.id, label: t.label, color: t.color, bg: t.bg, match: [t.id] })),
+  ];
+}
+
 /**
  * הרשימה העדכנית, ומרנדרת מחדש את הרכיב כשהיא מגיעה. מוחזרת תמיד רשימה
  * מלאה — בהתחלה ברירת המחדל — כדי שאף מסך לא יצייר יומן בלי סוגים.

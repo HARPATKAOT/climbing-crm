@@ -72,6 +72,25 @@ test('a child full name already carrying a surname is left alone', () => {
   assert.equal(desired.get('parent:p1').name, 'חוג פעיל - דנה כהן - יובל מזרחי');
 });
 
+test('an adult who trains is not listed twice on their own contact', () => {
+  const desired = buildDesiredContacts(
+    [{ id: 'p1', name: 'מירית בזר', lastName: 'בזר', phone: '0544402660', status: 'past_registered' }],
+    [
+      { id: 's1', parentId: 'p1', name: 'מירית בזר', status: 'past_registered' },
+      { id: 's2', parentId: 'p1', name: 'עומר', status: 'registered' },
+    ]
+  );
+  assert.equal(desired.get('parent:p1').name, 'חוג פעיל - מירית בזר - עומר בזר');
+});
+
+test('an adult who trains alone keeps a two-part name', () => {
+  const desired = buildDesiredContacts(
+    [{ id: 'p1', name: 'רן שדמי', phone: '0501112222', status: 'lead_new' }],
+    [{ id: 's1', parentId: 'p1', name: 'רן שדמי', status: 'registered' }]
+  );
+  assert.equal(desired.get('parent:p1').name, 'חוג פעיל - רן שדמי');
+});
+
 test('trainees with their own line get a מטפס contact', () => {
   const desired = buildDesiredContacts(
     [{ id: 'p1', name: 'דנה', lastName: 'כהן', phone: '0521234567', status: 'registered' }],
