@@ -19,6 +19,7 @@ export const FINANCE_FLAGS = [
   'doc_ingestion',    // שלב 2 — קליטת חשבוניות מקבצים/מייל
   'matching_v2',      // שלב 3 — מנוע התאמה רבים-לרבים
   'rules_engine',     // שלב 4
+  'ai_tagging',       // תיוג הוצאות עם ג'מיני (משוב 2)
   'payroll_cost',     // שלב 5
   'ledger',           // שלב 6
   'dashboard_v2',     // שלב 7

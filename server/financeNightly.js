@@ -15,6 +15,7 @@ import { runIcountReconciliation } from './icountReconciliation.js';
 import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
 import { matchableDocuments, proposeMatches } from './matchingEngine.js';
 import { chooseExpenseRows } from './finance.js';
+import { tagUntaggedExpenses } from './financeAiTagging.js';
 import { rebuildLedger } from './financeLedger.js';
 import { rebuildCashFlowForecast } from './financeCashFlow.js';
 
@@ -86,6 +87,8 @@ export async function runFinanceNightly({ now = new Date() } = {}) {
       auto_confirmed: proposals.filter((row) => row.status === 'confirmed').length,
     });
   });
+  // תיוג AI אחרי מנוע ההתאמה והחוקים — חוק ואדם גוברים על המודל.
+  await part('ai_tagging', 'ai_tagging', () => tagUntaggedExpenses(store, { now }));
   await part('reconciliation', 'reconciliation', () =>
     Promise.resolve(runIcountReconciliation(store, { now: now.toISOString() })));
   await part('ledger', 'ledger', () => Promise.resolve(rebuildLedger(store, { now: now.toISOString() })));

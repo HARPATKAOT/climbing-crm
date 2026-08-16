@@ -28,10 +28,13 @@ export function isEmailConfigured() {
 }
 
 /**
- * @param {{ to: string, subject: string, text: string, html?: string }} opts
+ * @param {{ to: string, subject: string, text: string, html?: string,
+ *           attachments?: Array<{filename: string, content: string, contentType?: string}>,
+ *           fetchImpl?: typeof fetch }} opts
+ * attachments.content — base64 נקי, בלי קידומת data:.
  * @returns {Promise<{ sent: boolean, stub?: boolean, id?: string, error?: string }>}
  */
-export async function sendEmail({ to, subject, text, html } = {}) {
+export async function sendEmail({ to, subject, text, html, attachments, fetchImpl = fetch } = {}) {
   const recipient = String(to || '').trim();
   if (!recipient) {
     return { sent: false, error: 'missing recipient' };
@@ -45,7 +48,7 @@ export async function sendEmail({ to, subject, text, html } = {}) {
   }
 
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await fetchImpl('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -57,6 +60,13 @@ export async function sendEmail({ to, subject, text, html } = {}) {
         subject: subject || `הודעה מ-${brandName}`,
         text: text || '',
         html: html || undefined,
+        attachments: attachments?.length
+          ? attachments.map((file) => ({
+            filename: file.filename || 'attachment.pdf',
+            content: file.content,
+            content_type: file.contentType || undefined,
+          }))
+          : undefined,
       }),
     });
     const data = await res.json().catch(() => ({}));

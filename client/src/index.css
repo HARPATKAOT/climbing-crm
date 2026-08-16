@@ -2183,6 +2183,18 @@ select option, select optgroup {
 .finance-matching-panes .is-matched-row { opacity: .5; }
 .finance-inbox-row.is-focused { background: color-mix(in srgb, var(--purple) 9%, transparent); box-shadow: inset 3px 0 0 var(--purple); }
 .finance-automation-hero p svg { vertical-align: -2px; margin-inline-end: 4px; color: var(--amber); }
+/* מרכז ההוצאות (משוב 2) */
+.finance-expense-stats { grid-template-columns: repeat(4, 1fr); }
+.finance-expense-actions { align-items: flex-end; }
+.finance-notice { padding: 10px 14px; border-radius: var(--radius-md, 12px); background: rgba(52,211,153,.1); color: var(--green); font-size: 12.5px; }
+.finance-tag-stack { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.finance-expense-table td { vertical-align: middle; }
+.finance-expense-table td > strong, .finance-expense-table td > small { display: block; }
+.finance-expense-table small { color: var(--text-3); font-size: 11px; }
+.finance-expense-table tr.is-missing-invoice td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+.finance-category-cell { display: flex; align-items: center; gap: 6px; min-width: 190px; }
+.finance-category-cell .app-select-wrap, .finance-category-cell .app-select-trigger { min-width: 140px; }
+.finance-category-source { display: inline-flex; align-items: center; gap: 3px; color: var(--text-3); font-size: 10px; white-space: nowrap; }
 /* מונה תיבת הטיפול על הטאב */
 .finance-tab-count { min-width: 18px; height: 18px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 999px; background: linear-gradient(135deg, #F87171, #FB7185); color: #fff; font-size: 10px; font-weight: 800; line-height: 1; }
 .tab-pill.active .finance-tab-count { background: #14172a; color: #FB7185; }

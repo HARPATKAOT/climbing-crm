@@ -30,6 +30,17 @@ import {
   unmatchedExpenseSummary,
 } from './matchingEngine.js';
 import { applyRules, learnRule, seedCategories, vatSummary } from './financeCategories.js';
+import { buildExpenseCenter, filterExpenseRows } from './financeExpenseCenter.js';
+import { tagUntaggedExpenses } from './financeAiTagging.js';
+import { sendEmail, isEmailConfigured } from './email.js';
+import {
+  MAX_EMAIL_BYTES,
+  bundleEmailBody,
+  bundleForEmail,
+  deliveryRow,
+  expenseAttachments,
+  expenseSummaryLine,
+} from './accountantDelivery.js';
 import {
   classProfitability,
   costByKey,
@@ -569,6 +580,74 @@ financeRouter.get('/payroll-cost', async (req, res) => {
 
 const monthOfDate = (value) => String(value || '').slice(0, 7);
 
+// ─── מרכז ההוצאות: שורה אחת לכל הוצאה כלכלית (משוב 2) ──────────────────────
+
+financeRouter.get('/expense-center', (req, res) => {
+  const { from, to } = period(req);
+  const center = buildExpenseCenter({
+    expenses: db.get('finance_expenses'),
+    transactions: db.get('finance_transactions'),
+    matches: db.get('finance_matches'),
+    ingested: db.get('finance_ingested_documents'),
+    deliveries: db.get('finance_accountant_deliveries'),
+    categories: db.get('finance_categories'),
+    suppliers: db.get('finance_suppliers'),
+    accounts: db.get('financial_accounts'),
+    from,
+    to,
+  });
+  const query = String(req.query.q || '');
+  res.json({
+    ...center,
+    rows: filterExpenseRows(center.rows, query).slice(0, 1000),
+    categories: db.get('finance_categories').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)),
+    email_configured: isEmailConfigured(),
+    accountant_email: db.get('finance_automation_settings')[0]?.accountant_email || '',
+  });
+});
+
+// עריכת קטגוריה של מסמך הוצאה (לתנועות יש /transactions/:id/classify).
+financeRouter.put('/expense-center/expenses/:id/category', async (req, res) => {
+  try {
+    const expense = db.getOne('finance_expenses', req.params.id);
+    if (!expense) return res.status(404).json({ error: 'ההוצאה לא נמצאה' });
+    const categoryId = String(req.body?.category_id || '');
+    if (!db.getOne('finance_categories', categoryId)) return res.status(400).json({ error: 'קטגוריה לא מוכרת' });
+    const store = durableRecordingStore();
+    store.update('finance_expenses', expense.id, {
+      ...expense,
+      category_id: categoryId,
+      category_source: 'manual',
+    });
+    let rule = null;
+    if (req.body?.create_rule === true) {
+      const learned = learnRule(store, {
+        merchantPattern: expense.supplier_name || expense.name,
+        categoryId,
+        createdBy: req.crmUser?.email || null,
+      });
+      rule = learned.rule;
+      applyRules(store);
+    }
+    await store.flush();
+    res.json({ ok: true, rule });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'עדכון הקטגוריה נכשל' });
+  }
+});
+
+financeRouter.post('/ai-tagging/run', async (_req, res) => {
+  try {
+    if (!financeFlag('ai_tagging')) return res.status(409).json({ error: 'תיוג AI כבוי (דגל ai_tagging)' });
+    const store = durableRecordingStore();
+    const summary = await tagUntaggedExpenses(store);
+    await store.flush();
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'התיוג נכשל' });
+  }
+});
+
 // ─── קטגוריות, מנוע חוקים, ספקים ומע״מ (שלב 4) ─────────────────────────────
 
 financeRouter.get('/categories', async (_req, res) => {
@@ -841,6 +920,7 @@ financeRouter.put('/automation/settings', async (req, res) => {
       id: 'default',
       accountant_name: String(req.body?.accountant_name || '').trim(),
       accountant_phone: String(req.body?.accountant_phone || '').replace(/\D/g, ''),
+      accountant_email: String(req.body?.accountant_email || '').trim(),
       email_address: String(req.body?.email_address || '').trim(),
       email_provider: ['gmail', 'outlook'].includes(req.body?.email_provider) ? req.body.email_provider : '',
       auto_send: req.body?.auto_send === true,
@@ -964,8 +1044,110 @@ financeRouter.get('/expenses/:id/attachments/:attachmentId/download', (req, res)
   return res.send(Buffer.from(match[2], 'base64'));
 });
 
-financeRouter.post('/expenses/:id/send-accountant', (_req, res) => {
-  res.status(501).json({ error: 'שליחה לרואה החשבון עדיין לא חוברה ל־WhatsApp. ניתן להוריד את הקובץ ולשלוח ידנית.' });
+// ─── שליחה לרואה החשבון במייל (משוב 2) ─────────────────────────────────────
+
+function accountantRecipient(req) {
+  const explicit = String(req.body?.to || '').trim();
+  if (explicit) return explicit;
+  return String(db.get('finance_automation_settings')[0]?.accountant_email || '').trim();
+}
+
+function matchedIngestedFor(expenseId) {
+  const match = db.get('finance_matches').find((row) =>
+    ['confirmed', 'proposed'].includes(row.status) && String(row.document_id) === String(expenseId));
+  if (!match) return null;
+  return null; // ההתאמה מצביעה מההוצאה לתנועה; קובץ מגיע מהמסמך שהועלה, אם קיים
+}
+
+financeRouter.post('/expenses/:id/send-accountant', async (req, res) => {
+  try {
+    const expense = db.getOne('finance_expenses', req.params.id);
+    if (!expense) return res.status(404).json({ error: 'ההוצאה לא נמצאה' });
+    const recipient = accountantRecipient(req);
+    if (!recipient) return res.status(400).json({ error: 'לא הוגדרה כתובת מייל של רואה החשבון (בהגדרות המסירה)' });
+    const attachments = expenseAttachments(expense, { matchedIngested: matchedIngestedFor(expense.id) });
+    if (!attachments.length && req.body?.force !== true) {
+      return res.status(409).json({ error: 'אין חשבונית מצורפת להוצאה הזו. צרף קובץ, או שלח עם force לסיכום בלבד.' });
+    }
+    const totalBytes = attachments.reduce((sum, file) => sum + file.bytes, 0);
+    if (totalBytes > MAX_EMAIL_BYTES) {
+      return res.status(413).json({ error: 'הקבצים גדולים מדי למייל אחד' });
+    }
+    const result = await sendEmail({
+      to: recipient,
+      subject: `חשבונית: ${expense.supplier_name || expense.name || expense.id}`,
+      text: `שלום,\n\nמצורפת חשבונית:\n• ${expenseSummaryLine(expense)}\n\nנשלח ממערכת קיר בועז.`,
+      attachments,
+    });
+    if (result.stub) {
+      // אין מפתח מייל — לא מסמנים "נשלח" לעולם.
+      return res.json({ sent: false, stub: true, error: 'המייל עדיין לא מחובר (חסר RESEND_API_KEY)' });
+    }
+    const previous = db.getOne('finance_accountant_deliveries', `fad:${expense.id}`);
+    const saved = await persistRow('finance_accountant_deliveries', deliveryRow(expense, {
+      sentTo: recipient,
+      emailId: result.id,
+      ok: result.sent,
+      error: result.error,
+      previous,
+    }));
+    return res.status(result.sent ? 200 : 502).json({ sent: result.sent, delivery: saved, error: result.error });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'השליחה נכשלה' });
+  }
+});
+
+// חבילה חודשית: כל חשבוניות החודש שטרם נשלחו, בצ'אנקים מתחת לתקרת הגודל.
+financeRouter.post('/accountant/send-bundle', async (req, res) => {
+  try {
+    const month = /^\d{4}-\d{2}$/.test(String(req.query.month || req.body?.month || ''))
+      ? String(req.query.month || req.body.month)
+      : new Date().toISOString().slice(0, 7);
+    const recipient = accountantRecipient(req);
+    if (!recipient) return res.status(400).json({ error: 'לא הוגדרה כתובת מייל של רואה החשבון' });
+    const sentAlready = new Set(db.get('finance_accountant_deliveries')
+      .filter((row) => row.status === 'sent').map((row) => String(row.expense_id)));
+    const monthExpenses = chooseExpenseRows(db.get('finance_expenses'))
+      .filter((expense) => String(expense.expense_date || '').slice(0, 7) === month)
+      .filter((expense) => !sentAlready.has(String(expense.id)));
+    const withFiles = [];
+    const skippedNoInvoice = [];
+    for (const expense of monthExpenses) {
+      const attachments = expenseAttachments(expense);
+      if (attachments.length) withFiles.push({ expense, attachments });
+      else skippedNoInvoice.push({ id: expense.id, summary: expenseSummaryLine(expense) });
+    }
+    if (!withFiles.length) {
+      return res.json({ sent: 0, skipped_no_invoice: skippedNoInvoice, note: 'אין חשבוניות חדשות לשליחה בחודש הזה' });
+    }
+    const bundles = bundleForEmail(withFiles);
+    let sent = 0;
+    let stub = false;
+    for (let index = 0; index < bundles.length; index += 1) {
+      const bundle = bundles[index];
+      const subjectSuffix = bundles.length > 1 ? ` (${index + 1}/${bundles.length})` : '';
+      const result = await sendEmail({
+        to: recipient,
+        subject: `חשבוניות ${month}${subjectSuffix}`,
+        text: bundleEmailBody(month, bundle.expenses),
+        attachments: bundle.attachments,
+      });
+      if (result.stub) { stub = true; break; }
+      if (!result.sent) {
+        return res.status(502).json({ sent, error: result.error || 'שליחת החבילה נכשלה', skipped_no_invoice: skippedNoInvoice });
+      }
+      for (const expense of bundle.expenses) {
+        const previous = db.getOne('finance_accountant_deliveries', `fad:${expense.id}`);
+        await persistRow('finance_accountant_deliveries', deliveryRow(expense, {
+          sentTo: recipient, emailId: result.id, ok: true, previous,
+        }));
+        sent += 1;
+      }
+    }
+    return res.json({ sent, bundles: bundles.length, stub, skipped_no_invoice: skippedNoInvoice });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'שליחת החבילה נכשלה' });
+  }
 });
 
 financeRouter.get('/export.csv', (req, res) => {
