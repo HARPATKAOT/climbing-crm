@@ -117,6 +117,7 @@ import {
   planFollowUp,
 } from './botFollowUps.js';
 import { resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
+import { shortMailingPreferencesUrl } from './mailingShortLinks.js';
 import {
   loadEquipmentPrices,
   loadEquipmentInfo,
@@ -412,6 +413,15 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
       },
       required: ['eventId'],
     },
+  },
+  {
+    name: 'getMailingPreferencesLink',
+    description:
+      'מחזיר קישור אישי לעמוד העדפות הדיוור, שבו הלקוח מסיר את עצמו מרשימות '
+      + 'התפוצה או בוחר על אילו נושאים כן לשמוע. להשתמש בכל בקשה להסרה מדיוור, '
+      + 'מפרסומות או מהודעות («תסירו אותנו», «די להודעות», «לא רוצה לקבל '
+      + 'עדכונים») — שולחים את הקישור, לא מעבירים לצוות.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'scheduleFollowUp',
@@ -1993,6 +2003,20 @@ export function buildCustomerTools({
         הערה: 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
           + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
           + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.',
+      };
+    },
+
+    getMailingPreferencesLink: async () => {
+      if (!parent?.id) {
+        return { error: 'אין כרטיס לקוח מזוהה — יש להעביר לצוות' };
+      }
+      const link = shortMailingPreferencesUrl(parent);
+      if (!link) return { error: 'לא הצלחתי להכין קישור אישי — יש להעביר לצוות' };
+      journal('mailing_preferences_link', 'נשלח קישור להעדפות דיוור');
+      return {
+        קישור: link,
+        הערה: 'שלח את הקישור ללקוח עם משפט קצר: בעמוד בוחרים מאילו רשימות להסיר '
+          + 'או מה להשאיר, והשינוי נשמר מיידית. אל תבטיח שהצוות יסיר ידנית.',
       };
     },
 

@@ -67,7 +67,14 @@ test('common Hebrew removal wording is detected without matching liability waive
   assert.equal(isMailingPreferenceRequest('הסר אותי', 'עצור,הסר,stop'), true);
   assert.equal(isMailingPreferenceRequest('אל תשלחו לי יותר הודעות'), true);
   assert.equal(isMailingPreferenceRequest('אני רוצה לעדכן העדפות דיוור'), true);
+  // הניסוח האמיתי שהבוט פספס בשידור החי (2026-08-16).
+  assert.equal(isMailingPreferenceRequest('הי הי. בבקשה תסירו אותנו מרשימת התפוצה 🌞'), true);
+  assert.equal(isMailingPreferenceRequest('תורידו אותי מהרשימה'), true);
+  assert.equal(isMailingPreferenceRequest('תפסיקו לשלוח לנו פרסומים'), true);
+  assert.equal(isMailingPreferenceRequest('בבקשה להסיר אותנו מהתפוצה'), true);
   assert.equal(isMailingPreferenceRequest('איפה טופס הסרת אחריות?', 'עצור,הסר,stop'), false);
+  // «הורדנו את המזרן» — פועל דומה בהקשר אחר לא מפעיל את הזרימה.
+  assert.equal(isMailingPreferenceRequest('אפשר להוריד את הילד מהקבוצה של יום שני?'), false);
 });
 
 test('page updates only known lists and keeps global marketing consent aligned', async () => {

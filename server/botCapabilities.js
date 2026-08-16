@@ -104,6 +104,14 @@ export const BOT_CAPABILITIES = [
     tools: ['updateCustomerDetails'],
   },
   {
+    key: 'mailing_preferences',
+    label: 'הסרה מדיוור',
+    hint: 'לקוח שמבקש להסיר את עצמו מקבל קישור אישי לעמוד העדפות הדיוור — '
+      + 'בלי הבטחות ש«הצוות יסיר»',
+    source: 'קישור מקוצר אישי לכל לקוח',
+    tools: ['getMailingPreferencesLink'],
+  },
+  {
     key: 'family_card',
     label: 'קריאת כרטיס המשפחה',
     hint: 'רואה את הילדים כדי לשאול «בשביל מי מהם?»',

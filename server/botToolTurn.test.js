@@ -556,6 +556,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getEvents',
     'getFamilyCard',
     'getHealthDeclarations',
+    'getMailingPreferencesLink',
     'getOpeningHours',
     'getPlacementEligibility',
     'getPrices',
