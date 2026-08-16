@@ -56,6 +56,8 @@ const PUBLIC_API_ROUTES = [
   /^\/health$/,
   /^\/public\//,
   /^\/r\/[^/]+$/,
+  // קישור מקוצר להעדפות דיוור — נלחץ מתוך וואטסאפ, בלי התחברות.
+  /^\/mp\/[^/]+$/,
   /^\/whatsapp\/webhook$/,
   /^\/instagram\/webhook$/,
   /^\/icount\/webhook$/,

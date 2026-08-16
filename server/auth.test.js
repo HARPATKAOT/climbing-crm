@@ -13,6 +13,7 @@ test('public API contains forms and signed webhook entrypoints only', () => {
   assert.equal(isPublicApiPath('/api/public/activities/abc123'), true);
   assert.equal(isPublicApiPath('/api/public/host-payments/private-token'), true);
   assert.equal(isPublicApiPath('/api/public/equipment/demo-token'), true);
+  assert.equal(isPublicApiPath('/api/mp/gOBl7XFQ'), true);
   assert.equal(isPublicApiPath('/api/whatsapp/webhook'), true);
   assert.equal(isPublicApiPath('/api/attendance/ensure-today'), true);
   assert.equal(isPublicApiPath('/api/automations/run-scheduled'), true);
