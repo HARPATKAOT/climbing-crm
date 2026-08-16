@@ -713,7 +713,7 @@ import {
   updateMailingPreferences,
   createMailingPreferenceToken,
 } from './mailingPreferences.js';
-import { resolveMailingShortCode } from './mailingShortLinks.js';
+import { resolveMailingShortCode, shortMailingPreferencesUrl } from './mailingShortLinks.js';
 import { appPublicBase } from './publicLinks.js';
 
 const app = express();
@@ -3048,6 +3048,34 @@ app.post('/api/broadcast/test-send', requireOwner, async (req, res) => {
 // היסטוריית הדיוורים של לקוח — לכרטיס הלקוח.
 app.get('/api/parents/:id/broadcasts', (req, res) => {
   res.json(parentBroadcastHistory(req.params.id));
+});
+
+// שליחת הקישור האישי להעדפות דיוור מכרטיס הלקוח — בלחיצה אחת, כשלקוח
+// מבקש הסרה בטלפון או בדלפק. הודעה חופשית, ולכן דורשת חלון 24 שעות פתוח.
+app.post('/api/parents/:id/send-mailing-link', requireOwner, async (req, res) => {
+  const parent = (db.get('parents') || []).find((p) => p.id === req.params.id);
+  if (!parent) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  if (!parent.phone) return res.status(400).json({ error: 'אין מספר טלפון בכרטיס' });
+  const link = shortMailingPreferencesUrl(parent);
+  if (!link) return res.status(500).json({ error: 'יצירת הקישור נכשלה' });
+  const firstName = String(parent.name || '').trim().split(/\s+/)[0];
+  const message = [
+    `היי${firstName ? ` ${firstName}` : ''},`,
+    'בקישור האישי הזה אפשר לבחור אילו עדכונים לקבל מאיתנו — או להסיר הכל:',
+    link,
+    'השינוי נשמר מיידית, ואפשר לחזור ולעדכן בכל זמן.',
+  ].join('\n');
+  const result = await whatsappService.sendTextMessage(parent.phone, message, false, {
+    parentId: parent.id,
+    source: 'mailing_preferences',
+    clip: false,
+  });
+  if (!result.success) {
+    return res.status(400).json({
+      error: `${result.error || 'השליחה נכשלה'} — הודעה חופשית עוברת רק כשחלון 24 השעות פתוח`,
+    });
+  }
+  res.json({ success: true, link });
 });
 
 app.get('/api/channels/status', (_req, res) => {

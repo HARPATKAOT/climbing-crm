@@ -623,6 +623,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [broadcastLists, setBroadcastLists] = useState({});
   const [loadingLists, setLoadingLists] = useState(false);
   const [editingBroadcastLists, setEditingBroadcastLists] = useState(false);
+  // שליחת הקישור האישי להעדפות דיוור מהכרטיס — כשלקוח מבקש הסרה בטלפון.
+  const [sendingPrefLink, setSendingPrefLink] = useState(false);
+  const [prefLinkNotice, setPrefLinkNotice] = useState(null); // {ok, text}
   const [isEditing, setIsEditing] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
   const [emailCopied, setEmailCopied] = useState(false);
@@ -4039,15 +4042,44 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
                     {!loadingLists && (
-                      <button
-                        type="button"
-                        className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
-                        onClick={() => setEditingBroadcastLists((v) => !v)}
-                      >
-                        {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
-                      </button>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          disabled={sendingPrefLink || !parent?.phone}
+                          title="שולח ללקוח בוואטסאפ קישור אישי שבו הוא בוחר בעצמו מה לקבל וממה להסיר את עצמו"
+                          onClick={async () => {
+                            setSendingPrefLink(true);
+                            setPrefLinkNotice(null);
+                            try {
+                              const res = await fetch(`/api/parents/${parent.id}/send-mailing-link`, { method: 'POST' });
+                              const data = await res.json().catch(() => ({}));
+                              if (!res.ok) throw new Error(data.error || 'השליחה נכשלה');
+                              setPrefLinkNotice({ ok: true, text: 'הקישור האישי נשלח בוואטסאפ ✔' });
+                            } catch (err) {
+                              setPrefLinkNotice({ ok: false, text: err.message });
+                            } finally {
+                              setSendingPrefLink(false);
+                            }
+                          }}
+                        >
+                          <Send size={11} /> {sendingPrefLink ? 'שולח…' : 'שלח קישור לעריכה'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
+                          onClick={() => setEditingBroadcastLists((v) => !v)}
+                        >
+                          {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
+                        </button>
+                      </div>
                     )}
                   </div>
+                  {prefLinkNotice && (
+                    <div style={{ fontSize: 11, marginBottom: 6, color: prefLinkNotice.ok ? 'var(--green)' : 'var(--red)' }}>
+                      {prefLinkNotice.text}
+                    </div>
+                  )}
                   {loadingLists ? (
                     <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
                   ) : (
