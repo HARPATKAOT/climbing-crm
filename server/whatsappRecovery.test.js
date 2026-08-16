@@ -110,6 +110,9 @@ test('what the centre types is read as a name, and a greeting is read as a greet
   assert.equal(centreStudentName('נטע יאירי'), 'נטע יאירי');
   assert.equal(centreStudentName('הוא נרשם במתנס'), '');
   assert.equal(centreStudentName('מתי איתמר גיגי התחיל?'), 'איתמר גיגי');
+  // The length limit counts the name, not the sentence around it.
+  assert.equal(centreStudentName('נטע יאירי נרשמה אצלכם במתנ״ס'), 'נטע יאירי');
+  assert.equal(centreStudentName('נטע יאירי ביטל את ההרשמה'), 'נטע יאירי');
 
   // "בוקר טוב" fell through to the ordinary customer flow, which asked the
   // מתנ״ס secretary what her first name was.
