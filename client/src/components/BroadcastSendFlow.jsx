@@ -221,14 +221,47 @@ export default function BroadcastSendFlow({ jobId, onExit }) {
                 ['נשלחו', (stats.sent || 0) + (stats.delivered || 0) + (stats.read || 0), 'var(--blue)'],
                 ['נמסרו', (stats.delivered || 0) + (stats.read || 0), 'var(--green)'],
                 ['נקראו', stats.read || 0, 'var(--purple)'],
+                ['הגיבו', stats.replied || 0, 'var(--cyan)'],
+                // לחיצה על כפתור התבנית («מעוניינים…») — אות העניין החיובי המדיד.
+                ...((job.buttonLabels || []).length
+                  ? [[`השיבו «${String(job.buttonLabels[0]).slice(0, 14)}»`, stats.buttonReplies || 0, 'var(--green)']]
+                  : []),
                 ['נכשלו', stats.failed || 0, (stats.failed || 0) > 0 ? 'var(--red)' : 'var(--text-3)'],
                 ...(stats.cancelled ? [['בוטלו', stats.cancelled, 'var(--text-3)']] : []),
               ].map(([label, value, color]) => (
                 <div key={label} style={{ textAlign: 'center', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 6px' }}>
                   <div style={{ fontSize: 20, fontWeight: 800, color }}>{value}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{label}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.3 }}>{label}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {job.status !== 'cancelled' && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 12, display: 'grid', gap: 5 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ color: 'var(--text-3)' }}>רשימת תפוצה</span>
+                <strong>{job.list_label || job.list_name || '—'}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ color: 'var(--text-3)' }}>נחסמו לפני שליחה</span>
+                <strong>{job.suppressed_count ?? 0}</strong>
+              </div>
+              {job.cost_estimate && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ color: 'var(--text-3)' }}>עלות משוערת</span>
+                  <strong>
+                    {job.cost_estimate.perMessage > 0
+                      ? `כ-${Math.round((job.cost_estimate.perMessage * (job.sent_count || 0)) * 100) / 100} דולר (${job.cost_estimate.perMessage}$ להודעה שנשלחה)`
+                      : 'ללא עלות (הודעת שירות)'}
+                  </strong>
+                </div>
+              )}
+              {(stats.replied || 0) > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                  «הגיבו» = כל הודעה נכנסת מהנמען עד 72 שעות אחרי השליחה. התשובות עצמן — בשיחות שבכרטיסי הלקוח.
+                </div>
+              )}
             </div>
           )}
 

@@ -526,6 +526,48 @@ export function resumeBroadcastJob(jobId) {
   return { success: true, status: 'sending' };
 }
 
+const REPLY_WINDOW_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * מי הגיב לדיוור: כל הודעה נכנסת מנמען אחרי שעת השליחה (עד 72 שעות) נחשבת
+ * תגובה, ולחיצה על כפתור מענה-מהיר של התבנית («מעוניינים, תנו לנו פרטים»)
+ * נספרת בנפרד — זה אות העניין החיובי המדיד. Pure and injectable for tests.
+ */
+export function computeReplyStats(recipients, inboundLogs, buttonLabels = [], windowMs = REPLY_WINDOW_MS) {
+  const inboundByBucket = new Map();
+  for (const log of inboundLogs) {
+    const bucket = phoneBucket(log.phone);
+    if (!bucket) continue;
+    if (!inboundByBucket.has(bucket)) inboundByBucket.set(bucket, []);
+    inboundByBucket.get(bucket).push(log);
+  }
+  const labels = buttonLabels.map((label) => String(label).trim()).filter(Boolean);
+
+  let replied = 0;
+  let buttonReplies = 0;
+  const enriched = recipients.map((r) => {
+    if (!r.sent_at) return r;
+    const sentMs = new Date(r.sent_at).getTime();
+    const replies = (inboundByBucket.get(phoneBucket(r.phone)) || []).filter((log) => {
+      const ts = new Date(log.created_at || 0).getTime();
+      return Number.isFinite(ts) && ts > sentMs && ts <= sentMs + windowMs;
+    });
+    if (!replies.length) return r;
+    replied += 1;
+    const buttonReply = replies.some((log) => labels.includes(String(log.message || '').trim()));
+    if (buttonReply) buttonReplies += 1;
+    const first = replies.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
+    return {
+      ...r,
+      replied: true,
+      button_reply: buttonReply,
+      reply_text: String(first.message || '').slice(0, 120),
+    };
+  });
+
+  return { recipients: enriched, replied, buttonReplies };
+}
+
 /**
  * Job report with live delivery data: the webhook updates message rows by
  * Meta id, so delivered/read are read from the journal at request time.
@@ -533,12 +575,11 @@ export function resumeBroadcastJob(jobId) {
 export function getBroadcastJob(jobId) {
   const job = jobRow(jobId);
   if (!job) return null;
+  const logs = db.get('whatsapp_logs') || [];
   const logsByMetaId = new Map(
-    (db.get('whatsapp_logs') || [])
-      .filter((l) => l.meta_message_id)
-      .map((l) => [l.meta_message_id, l])
+    logs.filter((l) => l.meta_message_id).map((l) => [l.meta_message_id, l])
   );
-  const recipients = (db.get('broadcast_recipients') || [])
+  const baseRecipients = (db.get('broadcast_recipients') || [])
     .filter((r) => r.job_id === jobId)
     .map((r) => {
       const log = r.meta_message_id ? logsByMetaId.get(r.meta_message_id) : null;
@@ -546,7 +587,24 @@ export function getBroadcastJob(jobId) {
       return { ...r, delivery_status: delivery || (r.status === 'sent' ? 'sent' : r.status) };
     });
 
-  const stats = { pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, cancelled: 0 };
+  // כפתורי מענה-מהיר של התבנית — כפתור בלי כתובת אתר הוא כפתור תשובה.
+  const template = job.is_template ? findLocalTemplate(job.template_name) : null;
+  const buttonLabels = (template?.buttons || [])
+    .filter((b) => !b?.url && String(b?.text || '').trim())
+    .map((b) => String(b.text).trim());
+
+  const replyStats = computeReplyStats(
+    baseRecipients,
+    logs.filter((l) => l.direction === 'inbound'),
+    buttonLabels
+  );
+  const recipients = replyStats.recipients;
+
+  const stats = {
+    pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, cancelled: 0,
+    replied: replyStats.replied,
+    buttonReplies: replyStats.buttonReplies,
+  };
   const failureReasons = {};
   for (const r of recipients) {
     if (r.status === 'failed') {
@@ -560,7 +618,11 @@ export function getBroadcastJob(jobId) {
     else stats.sent += 1;
   }
 
-  return { ...job, recipients, stats, failureReasons };
+  // המסך מציג את שם הרשימה, לא את המפתח הפנימי שלה.
+  const listLabel = (db.getBroadcastListDefs?.() || [])
+    .find((l) => l.key === job.list_name)?.label || job.list_name || '';
+
+  return { ...job, recipients, stats, failureReasons, buttonLabels, list_label: listLabel };
 }
 
 export function listBroadcastJobs() {
