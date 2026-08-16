@@ -19641,6 +19641,14 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       }
     }
     savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
+    // דגל ההסכמה הכללי נגזר מרשימות הנושא, באותו כלל כמו עמוד ההעדפות:
+    // תיבת האישור בטופס סומנה — כל הנושאים פעילים; הוסרה — כולם כבויים.
+    const topicOn = Object.entries(savedLists)
+      .some(([key, value]) => key !== REQUIRED_BROADCAST_LIST && value !== false);
+    const consentPatch = db.update('parents', parent.id, { marketing_opt_in: topicOn });
+    if (consentPatch) {
+      persistCore('parents', consentPatch).catch(() => {});
+    }
     touchGoogleContacts();
   }
 

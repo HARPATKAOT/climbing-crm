@@ -682,12 +682,6 @@ const ACTIVITY_NATURE = {
   ].join('\n\n'),
 };
 
-/** The two mailing lists: one that is part of the service, one that is not. */
-const LIST_ICONS = {
-  operational: [BellRing, '#6EE7B7'],
-  marketing: [Megaphone, '#FCD34D'],
-};
-
 const SUB_HEALTH = 1;
 const SUB_ACTIVITY = 2;
 const SUB_WAIVER = 3;
@@ -1280,10 +1274,11 @@ export default function PublicOnboardingForm() {
         const reqKey = typeof data.requiredListKey === 'string' ? data.requiredListKey : 'operational';
         setRequiredListKey(reqKey);
         const subs = { ...(data.subscriptions || {}) };
-        // Ensure every known list has a boolean; only classes forced on
+        // Ensure every known list has a boolean. ברירת המחדל היא רשום — כמו
+        // בכל המערכת: מי שלא הסיר את עצמו מקבל, ותיבת האישור בטופס מסומנת.
         defs.forEach((l) => {
           if (l.key === reqKey) subs[l.key] = true;
-          else if (subs[l.key] === undefined) subs[l.key] = false;
+          else if (subs[l.key] === undefined) subs[l.key] = true;
         });
         if (reqKey) subs[reqKey] = true;
         setSubscriptions(subs);
@@ -3060,8 +3055,9 @@ export default function PublicOnboardingForm() {
               </div>
             )}
 
-            {/* אוויר וקו מפריד: מכאן ואילך זה כבר לא מילוי פרטים אלא בחירה
-                שאפשר גם לא לעשות. */}
+            {/* אישור דיוור אחד לכל המשפחה (בקשת הבעלים): תיבה אחת במקום תיבה
+                לכל רשימה. סימון = הצטרפות לכל רשימות הנושא; התאמה עדינה נעשית
+                אחר-כך בקישור האישי שמצורף לכל דיוור. */}
             <div
               className="section-title"
               style={{
@@ -3069,59 +3065,52 @@ export default function PublicOnboardingForm() {
                 borderTop: '1px solid rgba(255,255,255,0.1)',
               }}
             >
-              הזדמנות לערוך את העדפות הדיוור שלך
+              עדכונים ומידע
             </div>
-            <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
-              ההרשמה לדיוור היא פר משפחה
-            </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-              {listDefs.map((list) => {
-                const isRequired = !!effectiveRequiredListKey && list.key === effectiveRequiredListKey;
-                const checked = isRequired ? true : subscriptions[list.key] === true;
+              {(() => {
+                const topicKeys = listDefs
+                  .map((list) => list.key)
+                  .filter((key) => key !== (effectiveRequiredListKey || 'operational'));
+                // undefined = ברירת המחדל של המערכת (רשום) — לכן רק false מכבה.
+                const consentChecked = topicKeys.length
+                  ? topicKeys.some((key) => subscriptions[key] !== false)
+                  : true;
+                const setConsent = (next) => {
+                  setSubscriptions((prev) => ({
+                    ...prev,
+                    ...Object.fromEntries(topicKeys.map((key) => [key, next])),
+                    ...(effectiveRequiredListKey ? { [effectiveRequiredListKey]: true } : null),
+                  }));
+                };
                 return (
                   <label
-                    key={list.key}
                     className="event-check"
                     style={{
-                      cursor: isRequired ? 'default' : 'pointer',
-                      borderColor: checked ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
-                      background: checked ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
+                      cursor: 'pointer',
+                      borderColor: consentChecked ? 'var(--form-accent-border, rgba(56,189,248,0.45))' : 'rgba(255,255,255,0.08)',
+                      background: consentChecked ? 'var(--form-accent-soft, rgba(56,189,248,0.08))' : 'rgba(255,255,255,0.03)',
                     }}
                   >
                     <input
                       type="checkbox"
-                      checked={checked}
-                      disabled={isRequired}
-                      onChange={() => {
-                        if (isRequired) return;
-                        setSubscriptions((prev) => ({
-                          ...prev,
-                          [list.key]: !prev[list.key],
-                          ...(effectiveRequiredListKey ? { [effectiveRequiredListKey]: true } : null),
-                        }));
-                      }}
+                      checked={consentChecked}
+                      onChange={() => setConsent(!consentChecked)}
                     />
                     <span style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                      {(() => {
-                        const [Icon, color] = LIST_ICONS[list.key] || [];
-                        return Icon
-                          ? <Icon size={17} color={color} style={{ flexShrink: 0, marginTop: 3 }} />
-                          : null;
-                      })()}
+                      <Megaphone size={17} color="var(--form-accent-solid, #38bdf8)" style={{ flexShrink: 0, marginTop: 3 }} />
                       <span>
-                        <strong>{list.label || list.key}</strong>
-                        {list.description ? ` — ${list.description}` : ''}
-                        {isRequired ? ' (חובה — חלק מהשירות)' : ''}
+                        <strong>מאשרים קבלת עדכונים ומידע</strong>
+                        {' — '}חוגים, טיולים, קייטנות ומבצעים.
+                        <span style={{ display: 'block', fontSize: 12, color: 'var(--text-3)', marginTop: 3, lineHeight: 1.5 }}>
+                          אפשר לבחור נושאים מסוימים או להסיר את עצמכם בכל זמן, דרך קישור אישי
+                          שמצורף לכל דיוור. הודעות תפעוליות על הפעילות נשלחות בכל מקרה.
+                        </span>
                       </span>
                     </span>
                   </label>
                 );
-              })}
-              {!listDefs.length && (
-                <div style={{ fontSize: 13, color: '#FCA5A5' }}>
-                  לא נטענו רשימות דיוור — רעננו את הדף
-                </div>
-              )}
+              })()}
             </div>
 
             <KnownFamilyPrompt
