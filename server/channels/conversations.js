@@ -182,9 +182,9 @@ export function isAwaitingHandling(parent) {
 const MAX_HANDOFF_WAIT_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
- * „ממתין לטיפול” — the bot handed this customer to the team and nobody has
- * answered. `bot_handoff_at` clears itself the moment a person replies, from
- * the CRM or from the phone; „לקוח טופל” closes it by hand.
+ * „ממתין לטיפול” — the bot handed this customer to the team and the treatment
+ * has not been closed. Only „סיום הטיפול” / „לקוח טופל” closes it: a reply on
+ * its own is usually the middle of the handling, not its end.
  */
 export function isHandedToStaff(parent, now = Date.now()) {
   const handedAt = Date.parse(parent?.bot_handoff_at || '');

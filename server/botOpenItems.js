@@ -86,11 +86,13 @@ function answeredByHumanSince(thread = [], sinceTs) {
 }
 
 /**
- * Customers the bot handed to the team and nobody has answered.
+ * Customers the bot handed to the team and nobody has closed.
  *
- * A handoff closes in one of two ways: a human writes to the customer, or
- * somebody clears the card from the awaiting queue (`communication_handled_at`).
- * Anything else is still a person waiting, however politely the bot phrased it.
+ * A handoff closes one way only: somebody presses „סיום הטיפול” on the card
+ * (`communication_handled_at`). A staff reply used to close it too, and that
+ * was wrong — the reply is often "אני בודק ואחזור אליך", which is the middle
+ * of the treatment, not its end. Anything else is still a person waiting,
+ * however politely the bot phrased it.
  *
  * Several cards can share one phone — a parent card and a child's card — so the
  * queue is per line, holding the earliest handoff on it.
@@ -109,7 +111,6 @@ export function waitingForStaff(db, { now = new Date(), maxWaitDays = MAX_WAIT_D
 
     const key = lineKey(parent.phone);
     const thread = key ? (threads.get(key) || []) : [];
-    if (answeredByHumanSince(thread, handedTs)) continue;
     const handledTs = Date.parse(parent.communication_handled_at || '');
     if (Number.isFinite(handledTs) && handledTs >= handedTs) continue;
 
@@ -122,6 +123,9 @@ export function waitingForStaff(db, { now = new Date(), maxWaitDays = MAX_WAIT_D
       waiting_minutes: Math.max(0, Math.round((nowMs - handedTs) / MINUTE_MS)),
       last_message: String(inbound?.message || '').slice(0, 160),
       last_message_at: inbound?.created_at || null,
+      // Somebody wrote back but never closed the card. Still open, but not the
+      // same kind of open as total silence.
+      answered: answeredByHumanSince(thread, handedTs),
       opted_out: !!parent.bot_opted_out,
     };
     const existing = byLine.get(key || `card:${parent.id}`);
