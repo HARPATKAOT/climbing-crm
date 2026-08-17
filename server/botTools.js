@@ -477,11 +477,12 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'pauseOutreach',
     description:
-      'עוצר את כל הפניות היזומות ללקוח הזה עד תאריך — תזכורות מעקב, בקשות '
-      + 'להשלים טופס, ציוד או הרשמה. להשתמש כשהלקוח אומר שאינו יכול להתקדם '
-      + 'עכשיו («אני בחו״ל», «נירשם רק באוקטובר», «תחזרו אליי אחרי החגים»). '
-      + 'אם הלקוח לא נקב במועד — יש לשאול אותו מתי נוח שנחזור, ורק אז לקרוא '
-      + 'לכלי. הבוט ממשיך לענות כרגיל לכל הודעה שהלקוח יכתוב בינתיים.',
+      'עוצר פניות יזומות ללקוח — תזכורות מעקב ובקשות להשלים טופס, ציוד או '
+      + 'הרשמה. להשתמש בכל דחייה למועד אחר: גם כשאינו יכול («אני בחו״ל», '
+      + '«תחזרו אליי אחרי החגים») וגם כשטרם החליט («אני רוצה לחשוב על זה», '
+      + '«אחליט בשבוע הבא»). כשהדחייה היא על נושא אחד — יש להעביר topic, אחרת '
+      + 'נשתיק גם את מה שכן צריך ממנו. אם לא נקב במועד — קרא לכלי בכל זאת ושאל '
+      + 'אותו מתי נוח שנחזור. הבוט ממשיך לענות כרגיל לכל הודעה שהלקוח יכתוב בינתיים.',
     parameters: {
       type: 'object',
       properties: {
@@ -501,6 +502,14 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
           type: 'string',
           enum: ['customer_unavailable', 'customer_later', 'general'],
           description: 'customer_unavailable = בחו״ל/לא זמין; customer_later = רוצה להירשם מאוחר יותר',
+        },
+        topic: {
+          type: 'string',
+          enum: ['all', 'equipment', 'centre', 'form', 'group'],
+          description: 'על מה ההשהיה. equipment = ציוד, centre = ההרשמה במתנ״ס, '
+            + 'form = טופס ההשתתפות, group = בחירת קבוצה. all או ריק = כל הפניות. '
+            + 'כשהלקוח דחה נושא אחד («אני רוצה לחשוב על הציוד») יש לציין אותו, '
+            + 'כדי שלא נשתיק בטעות גם את מה שכן צריך ממנו',
         },
         note: {
           type: 'string',
@@ -2125,7 +2134,7 @@ export function buildCustomerTools({
      * תזכורת על אותו טופס ואותו ציוד. הבוט ענה נכון בכל פעם — פשוט לא היה לו
      * איפה לרשום שאסור לפנות עכשיו.
      */
-    pauseOutreach: async ({ days, targetMonth, untilDate, reason, note } = {}) => {
+    pauseOutreach: async ({ days, targetMonth, untilDate, reason, note, topic } = {}) => {
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const subject = String(note || '').trim();
       if (!subject) return { error: 'חסר מה הלקוח אמר' };
@@ -2134,11 +2143,13 @@ export function buildCustomerTools({
       // back is asked, and the answer moves the date.
       const dated = resolvePauseUntil({ days, targetMonth, untilDate });
       const plan = dated || openEndedPause();
+      const scope = String(topic || '').trim();
       const saved = await setOutreachPause(db, persistCore, {
         parentId: parent.id,
         until: plan.until,
         reason: dated ? (reason || 'general') : 'awaiting_customer_date',
         note: subject,
+        topics: scope && scope !== 'all' ? [scope] : [],
       });
       if (!saved) return { error: 'שמירת ההשהיה נכשלה' };
       journal(
@@ -2149,6 +2160,7 @@ export function buildCustomerTools({
       return {
         מושהה_עד: plan.date,
         סיבה: subject,
+        נושא: scope && scope !== 'all' ? scope : 'כל הפניות',
         נקב_במועד: Boolean(dated),
         הערה: dated
           ? 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '

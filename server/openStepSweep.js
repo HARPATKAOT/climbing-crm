@@ -23,6 +23,7 @@ import {
   newFollowUpId,
 } from './botFollowUps.js';
 import { registrationStep, STEP_FOLLOWUP_REASON } from './registrationSteps.js';
+import { outreachPausedUntil } from './botOutreachPause.js';
 import { isOptedOut } from './whatsappBot.js';
 
 /** הסטטוסים שבהם הכדור אצל הלקוח. */
@@ -79,6 +80,9 @@ export function openStepCandidates(db, { now = new Date() } = {}) {
       return { ...entry, step, reason: STEP_FOLLOWUP_REASON[step] };
     })
     .filter((entry) => entry.reason)
+    // A pause on this very subject — „אני רוצה לחשוב על הציוד עוד שבוע” — is
+    // the customer answering this sweep before it ran.
+    .filter((entry) => !outreachPausedUntil(db, entry.parent.id, now, { reason: entry.reason }))
     .filter((entry) => !sweptRecently(db, entry.parent.id, now))
     .filter((entry) => !hasOpenFollowUp(db, entry.parent.id));
 }

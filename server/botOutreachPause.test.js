@@ -125,6 +125,40 @@ test('no date given is silence, not a two-week guess', async () => {
   assert.equal(outreachPausedUntil(db, 'p1', NOW).slice(0, 10), '2026-09-05');
 });
 
+test('a week to think about the equipment does not silence the מתנ״ס too', async () => {
+  const db = makeDb();
+  const plan = resolvePauseUntil({ days: 7, now: NOW });
+  await setOutreachPause(db, null, {
+    parentId: 'p1',
+    until: plan.until,
+    reason: 'customer_later',
+    note: 'רוצה לחשוב על הציוד שבוע',
+    topics: ['equipment'],
+    now: NOW,
+  });
+
+  // The subject they deferred is quiet…
+  assert.equal(outreachPausedUntil(db, 'p1', NOW, { reason: 'equipment_unpaid' }).slice(0, 10), '2026-08-23');
+  // …and everything else they still owe us is not.
+  assert.equal(outreachPausedUntil(db, 'p1', NOW, { reason: 'pending_signup' }), '');
+  assert.equal(outreachPausedUntil(db, 'p1', NOW, { reason: 'form_not_filled' }), '');
+  // "Is this customer on hold?" — no. Only one errand is.
+  assert.equal(isOutreachPaused(db, 'p1', NOW), false);
+
+  // A whole-customer pause still covers every reason, as before.
+  await setOutreachPause(db, null, { parentId: 'p2', until: plan.until, note: 'בחו״ל', now: NOW });
+  assert.ok(outreachPausedUntil(db, 'p2', NOW, { reason: 'pending_signup' }));
+  assert.ok(isOutreachPaused(db, 'p2', NOW));
+
+  // Two separate subjects are two rows, and the later date wins per subject.
+  const october = resolvePauseUntil({ targetMonth: 'אוקטובר', now: NOW });
+  await setOutreachPause(db, null, {
+    parentId: 'p1', until: october.until, note: 'מתנ״ס באוקטובר', topics: ['centre'], now: NOW,
+  });
+  assert.equal(outreachPausedUntil(db, 'p1', NOW, { reason: 'equipment_unpaid' }).slice(0, 10), '2026-08-23');
+  assert.equal(outreachPausedUntil(db, 'p1', NOW, { reason: 'pending_signup' }).slice(0, 10), '2026-09-24');
+});
+
 test('clearing releases the pause immediately', async () => {
   const db = makeDb();
   const plan = resolvePauseUntil({ days: 30, now: NOW });
