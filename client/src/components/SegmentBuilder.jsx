@@ -46,7 +46,26 @@ const PICKER_FIELDS = {
   genders: ['genders'],
   interests: ['interests'],
   delivery: ['marketingOptIn', 'onlyOpenWindow'],
+  audienceType: ['audienceType'],
 };
+
+export const AUDIENCE_TYPE_OPTIONS = [
+  {
+    value: 'parents',
+    label: 'הורים בלבד',
+    description: 'רק כרטיסי הורים — בלי מספרים ששייכים למתאמנים עצמם',
+  },
+  {
+    value: 'parents_adults',
+    label: 'הורים ומתאמנים בוגרים',
+    description: 'ברירת המחדל: הורים, ומתאמנים מגיל 18 עם טלפון משלהם',
+  },
+  {
+    value: 'all',
+    label: 'כולל מתאמנים צעירים',
+    description: 'גם טלפונים של מתאמנים מתחת ל-18 — לשימוש תפעולי מודע בלבד',
+  },
+];
 
 function summaryList(values, emptyLabel) {
   if (!values?.length) return emptyLabel;
@@ -91,6 +110,7 @@ const FILTER_ACCENTS = {
   genders: '#F472B6',    // ורוד
   interests: '#F87171',  // אדום
   delivery: '#A5B4FC',   // אינדיגו
+  audienceType: '#7DD3FC', // תכלת
 };
 
 function PickerOption({ selected, label, description, color, icon = null, onClick, disabled = false }) {
@@ -341,7 +361,11 @@ export default function SegmentBuilder({
     f.marketingOptIn === true ? 'מאשרי דיוור' : f.marketingOptIn === false ? 'ללא אישור דיוור' : 'ללא סינון הסכמה',
     f.onlyOpenWindow ? 'חלון 24 שעות פתוח' : null,
   ].filter(Boolean).join(' · ');
+  const audienceTypeSummary = AUDIENCE_TYPE_OPTIONS
+    .find((option) => option.value === (f.audienceType || 'parents_adults'))?.label
+    || 'הורים ומתאמנים בוגרים';
   const activeFilterCount = [
+    (f.audienceType || 'parents_adults') !== 'parents_adults',
     f.ageMin !== '' || f.ageMax !== '',
     f.registered !== 'any',
     !!f.listKey,
@@ -363,6 +387,7 @@ export default function SegmentBuilder({
     genders: ['מגדר', 'אפשר לבחור ערך אחד או יותר.'],
     interests: ['תחומי עניין', 'בחרו את התחומים הרלוונטיים לקהל הדיוור.'],
     delivery: ['זכאות לקבלת ההודעה', 'סננו לפי הסכמה לדיוור וחלון השיחה בוואטסאפ.'],
+    audienceType: ['נמענים', 'למי ההודעה מיועדת: הורים, מתאמנים בוגרים, או גם טלפונים של מתאמנים צעירים.'],
     recipients: ['נמענים בתוצאה', 'תצוגה מקדימה של הקהל לפי הסינון הנוכחי.'],
   };
 
@@ -515,6 +540,22 @@ export default function SegmentBuilder({
       );
     }
 
+    if (activePicker === 'audienceType') {
+      return (
+        <div className="segment-picker-list">
+          {AUDIENCE_TYPE_OPTIONS.map((option) => (
+            <PickerOption
+              key={option.value}
+              selected={(draft.audienceType || 'parents_adults') === option.value}
+              label={option.label}
+              description={option.description}
+              onClick={() => setDraft({ audienceType: option.value })}
+            />
+          ))}
+        </div>
+      );
+    }
+
     if (activePicker === 'delivery') {
       return (
         <div className="segment-picker-stack">
@@ -644,6 +685,7 @@ export default function SegmentBuilder({
         <FilterCard icon={UserRound} accent={FILTER_ACCENTS.genders} title="מגדר" summary={summaryList(selectedGenderNames, 'כולם')} count={selectedGenderNames.length} active={selectedGenderNames.length > 0} onClick={() => openPicker('genders')} />
         <FilterCard icon={Tag} accent={FILTER_ACCENTS.interests} title="תחום עניין" summary={summaryList(f.interests || [], 'כל תחומי העניין')} count={(f.interests || []).length} active={(f.interests || []).length > 0} onClick={() => openPicker('interests')} />
         <FilterCard icon={MessageSquareText} accent={FILTER_ACCENTS.delivery} title="זכאות לשליחה" summary={deliverySummary} active={f.marketingOptIn !== EMPTY_FILTERS.marketingOptIn || !!f.onlyOpenWindow} onClick={() => openPicker('delivery')} />
+        <FilterCard icon={Users} accent={FILTER_ACCENTS.audienceType} title="נמענים" summary={audienceTypeSummary} active={(f.audienceType || 'parents_adults') !== 'parents_adults'} onClick={() => openPicker('audienceType')} />
       </div>
 
       <div className="segment-save-panel">

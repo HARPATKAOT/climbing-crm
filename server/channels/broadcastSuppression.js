@@ -45,6 +45,10 @@ export const REASON_META = {
     label: 'חלון 24 השעות סגור — הודעה חופשית לא תעבור',
     overridable: false,
   },
+  trainee_phone: {
+    label: 'טלפון של מתאמן — לפי מסנן «נמענים» הדיוור נשלח להורים',
+    overridable: false,
+  },
 };
 
 export const DEFAULT_RECENCY_DAYS = 7;

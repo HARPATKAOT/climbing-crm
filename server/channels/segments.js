@@ -88,6 +88,22 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
     siblingsByPhone.get(key).push(parent);
   }
 
+  // מספר שרשום גם על רשומת מתאמן שייך למתאמן עצמו — לא להורה. מתאמן צעיר
+  // שכתב פעם לעסק קיבל כרטיס לקוח משלו, ובלי הזיהוי הזה הוא נכנס לקהל דיוור
+  // שמיועד להורים (זה בדיוק מה שקרה עם ליד של נער, 2026-08-16).
+  const traineePhoneAges = new Map();
+  for (const student of allStudents) {
+    const key = normalizeWaPhone(student?.phone);
+    if (!key) continue;
+    const age = ageFromBirthDate(student.birthDate);
+    const existing = traineePhoneAges.get(key);
+    if (existing === undefined || (age != null && (existing == null || age > existing))) {
+      traineePhoneAges.set(key, age);
+    }
+  }
+  // 'parents' | 'parents_adults' (ברירת המחדל) | 'all'
+  const audienceType = filters.audienceType || 'parents_adults';
+
   const addCard = (parent) => {
     const key = phoneKeyOf(parent);
     let entry = byPhone.get(key);
@@ -139,6 +155,13 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
     const siblings = siblingsByPhone.get(entry.key) || cards;
     const optedOut = siblings.some((card) => card.marketing_opt_in === false);
     const listUnsubscribed = unsubscribedPhones.has(entry.key);
+    // סוג הנמען: המספר של מתאמן עצמו — בוגר (18+) או צעיר — לעומת הורה.
+    const traineeAge = traineePhoneAges.has(entry.key) ? traineePhoneAges.get(entry.key) : undefined;
+    const recipientKind = traineeAge === undefined
+      ? 'parent'
+      : (traineeAge != null && traineeAge >= 18 ? 'adult_trainee' : 'trainee_phone');
+    const excludedByAudienceType = (audienceType === 'parents' && recipientKind !== 'parent')
+      || (audienceType === 'parents_adults' && recipientKind === 'trainee_phone');
     const recipient = {
       id: entry.key,
       phone: entry.key.startsWith('invalid:') ? String(primary.phone || '') : entry.key,
@@ -149,6 +172,8 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
       city: primary.city || cards.find((card) => card.city)?.city || '',
       marketingOptOut: optedOut,
       listUnsubscribed,
+      recipientKind,
+      excludedByAudienceType,
       windowOpen: siblings.some((card) => canSendFreeform(card, 'whatsapp')),
       students: kids,
       // Legacy fields for existing consumers (recipients viewer, old jobs).
@@ -156,10 +181,10 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
       studentStatus: kids[0]?.status || '',
       age: kids[0]?.age ?? null,
     };
-    // The people the filters would once drop silently — the list unsubscribers
-    // and (under the default opt-in filter) the opted-out — go to `removed`,
-    // where the suppression panel can show them by name.
-    if (listUnsubscribed || (optedOut && filters.marketingOptIn === true)) {
+    // The people the filters would once drop silently — the list unsubscribers,
+    // the opted-out (under the default opt-in filter) and trainee-owned phones
+    // — go to `removed`, where the suppression panel can show them by name.
+    if (listUnsubscribed || excludedByAudienceType || (optedOut && filters.marketingOptIn === true)) {
       removed.push(recipient);
       continue;
     }

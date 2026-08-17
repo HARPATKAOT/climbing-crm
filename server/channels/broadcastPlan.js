@@ -192,7 +192,9 @@ export function buildBroadcastPlan({
   const summary = { ...evaluation.summary };
   const suppressed = [...evaluation.suppressed];
   for (const r of preview.removed || []) {
-    const code = r.listUnsubscribed ? 'list_unsubscribed' : 'opted_out';
+    const code = r.excludedByAudienceType
+      ? 'trainee_phone'
+      : r.listUnsubscribed ? 'list_unsubscribed' : 'opted_out';
     summary[code] = (summary[code] || 0) + 1;
     suppressed.push({
       id: r.id,

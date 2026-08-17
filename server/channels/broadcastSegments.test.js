@@ -78,6 +78,52 @@ test('an opted-out sibling card removes the phone into `removed`, visibly', () =
   assert.equal(preview.removed[0].marketingOptOut, true);
 });
 
+// מסנן «נמענים»: מספר שרשום גם על רשומת מתאמן שייך למתאמן, לא להורה.
+test('a minor trainee\'s own phone is excluded by default and shown in removed', () => {
+  const preview = previewAudience({}, {
+    parents: [
+      makeParent('p1', '0501234567'),
+      // הליד שהמתאמן הצעיר פתח לעצמו כשכתב לבוט מהטלפון שלו.
+      makeParent('p2', '0529999999', { name: 'יונתן ברזילי' }),
+    ],
+    students: [
+      makeStudent('s1', 'p1'),
+      makeStudent('s2', 'p2', { name: 'יונתן ברזילי', phone: '0529999999', birthDate: '2011-05-01' }),
+    ],
+    groups: GROUPS,
+  });
+  assert.equal(preview.count, 1);
+  assert.equal(preview.recipients[0].phone, '972501234567');
+  const removedTrainee = preview.removed.find((r) => r.phone === '972529999999');
+  assert.equal(removedTrainee.excludedByAudienceType, true);
+  assert.equal(removedTrainee.recipientKind, 'trainee_phone');
+});
+
+test('an adult trainee with their own phone stays in by default, out under parents-only', () => {
+  const data = {
+    parents: [makeParent('p1', '0508888888', { name: 'עידן בוגר' })],
+    students: [makeStudent('s1', 'p1', { name: 'עידן בוגר', phone: '0508888888', birthDate: '1998-04-01' })],
+    groups: GROUPS,
+  };
+  const byDefault = previewAudience({}, data);
+  assert.equal(byDefault.count, 1);
+  assert.equal(byDefault.recipients[0].recipientKind, 'adult_trainee');
+
+  const parentsOnly = previewAudience({ audienceType: 'parents' }, data);
+  assert.equal(parentsOnly.count, 0);
+  assert.equal(parentsOnly.removed[0].excludedByAudienceType, true);
+});
+
+test('audienceType all includes minor trainee phones on purpose', () => {
+  const preview = previewAudience({ audienceType: 'all' }, {
+    parents: [makeParent('p2', '0529999999')],
+    students: [makeStudent('s2', 'p2', { phone: '0529999999', birthDate: '2011-05-01' })],
+    groups: GROUPS,
+  });
+  assert.equal(preview.count, 1);
+  assert.equal(preview.recipients[0].recipientKind, 'trainee_phone');
+});
+
 test('a parent with a broken phone surfaces as invalid instead of vanishing', () => {
   const preview = previewAudience({}, {
     parents: [makeParent('p1', 'אין')],

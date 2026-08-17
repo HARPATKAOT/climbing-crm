@@ -10,6 +10,7 @@ const REASON_LABELS = {
   repeated_failures: 'שליחות קודמות נכשלו שוב ושוב',
   missing_variables: 'חסר נתון שהתבנית צריכה',
   window_closed: 'חלון 24 השעות סגור',
+  trainee_phone: 'טלפון של מתאמן (הדיוור מוגדר להורים)',
 };
 
 /**
