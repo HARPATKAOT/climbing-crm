@@ -107,6 +107,31 @@ test('a send that WhatsApp reported as failed comes back on the next tick', () =
   );
 });
 
+test('an event deleted from the calendar stops reminding, a hand-entered shift does not', () => {
+  // The placement survives the event it pointed at, and the reminder used to
+  // name the role instead — indistinguishable from a real shift.
+  const orphan = fakeStore({
+    employees: [subscriber()],
+    automation_sends: [],
+    activities: [],
+    work_assignments: [
+      { id: 'wo1', employee_id: 'e1', activity_id: 'ac-deleted', date: EVENT_DAY, start_time: '16:00', role: 'הדרכת סנפלינג' },
+    ],
+  });
+  assert.equal(dueShiftReminders({ now: hoursBefore(5), store: orphan }).length, 0);
+
+  // No activity at all is somebody typed in by hand — still their shift.
+  const manual = fakeStore({
+    employees: [subscriber()],
+    automation_sends: [],
+    activities: [],
+    work_assignments: [
+      { id: 'wo2', employee_id: 'e1', date: EVENT_DAY, start_time: '16:00', role: 'הפעלת קיר' },
+    ],
+  });
+  assert.equal(dueShiftReminders({ now: hoursBefore(5), store: manual }).length, 1);
+});
+
 test('nobody subscribed, nobody archived, nobody reminded', () => {
   assert.equal(
     dueShiftReminders({ now: hoursBefore(5), store: storeWith({ employees: [subscriber({ alerts: [] })] }) }).length,

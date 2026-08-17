@@ -75,6 +75,19 @@ function activityFor(store, assignment) {
   return (store.get('activities') || []).find((a) => a.id === assignment.activity_id) || null;
 }
 
+/**
+ * A placement left behind by an event that was deleted from the calendar.
+ *
+ * Deleting an activity does not delete the placements pointing at it, and the
+ * reminder used to go out anyway — falling back to the role for a name, which
+ * reads exactly like a real shift. Two instructors were told to come to an
+ * abseiling day that had been cancelled. A placement with no `activity_id` at
+ * all is a different thing: entered by hand, and still worth a reminder.
+ */
+function eventWasDeleted(store, assignment) {
+  return !!assignment?.activity_id && !activityFor(store, assignment);
+}
+
 function eventName(activity, assignment) {
   return activity?.name || assignment?.role || 'משמרת';
 }
@@ -146,6 +159,7 @@ export function dueShiftReminders({ now = new Date(), store = db } = {}) {
   for (const assignment of store.get('work_assignments') || []) {
     const employee = byEmployee.get(String(assignment?.employee_id || ''));
     if (!employee || !assignment.date) continue;
+    if (eventWasDeleted(store, assignment)) continue;
 
     const activity = activityFor(store, assignment);
     const startTime = assignment.start_time || activity?.start_time || '09:00';
