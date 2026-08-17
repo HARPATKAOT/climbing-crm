@@ -186,13 +186,45 @@ function TypeChips({ chips, selected, onChange, stats }) {
  */
 function RecipientPicker({ employees, value, onChange, cleared, onCleared }) {
   const [open, setOpen] = useState(false);
+  // שני סינונים שמצטלבים: היכן העובד מועסק, ואילו תפקידים הוא מחזיק. „עובד קיר”
+  // אינו תפקיד ולכן אינו שייך לאותה שורה — עוזר מדריך יכול להיות מהקיר או מבחוץ.
+  const [scope, setScope] = useState('all');
+  const [roleFilter, setRoleFilter] = useState([]);
   const explicit = value.length > 0;
   const isOn = (id) => (cleared ? false : (explicit ? value.includes(id) : true));
 
-  const pick = (ids) => {
+  const idsWhere = (predicate) => employees.filter(predicate).map((e) => e.id);
+  const roleOptions = [...new Set(employees.flatMap((e) => rolesOf(e)))].sort((a, b) => a.localeCompare(b, 'he'));
+
+  /** התוצאה של הצטלבות שני הסינונים. שניהם ריקים = כל הצוות, וזו רשימה ריקה. */
+  const applyFilters = (nextScope, nextRoles) => {
     onCleared(false);
-    onChange(ids);
+    setScope(nextScope);
+    setRoleFilter(nextRoles);
+    if (nextScope === 'all' && nextRoles.length === 0) {
+      onChange([]);
+      return;
+    }
+    onChange(idsWhere((employee) => {
+      if (nextScope === 'wall' && !isWallStaff(employee)) return false;
+      if (nextScope === 'external' && isWallStaff(employee)) return false;
+      if (nextRoles.length === 0) return true;
+      // די בתפקיד אחד מהמסומנים — „עוזר מדריך או בונה מסלולים”, לא „גם וגם”.
+      return rolesOf(employee).some((role) => nextRoles.includes(role));
+    }));
     setOpen(true);
+  };
+
+  const toggleRole = (role) => applyFilters(
+    scope,
+    roleFilter.includes(role) ? roleFilter.filter((r) => r !== role) : [...roleFilter, role]
+  );
+
+  const resetAll = () => {
+    setScope('all');
+    setRoleFilter([]);
+    onCleared(false);
+    onChange([]);
   };
 
   const toggle = (id) => {
@@ -206,9 +238,6 @@ function RecipientPicker({ employees, value, onChange, cleared, onCleared }) {
     onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
   };
 
-  const idsWhere = (predicate) => employees.filter(predicate).map((e) => e.id);
-  const roleOptions = [...new Set(employees.flatMap((e) => rolesOf(e)))].sort((a, b) => a.localeCompare(b, 'he'));
-
   return (
     <div>
       <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -220,52 +249,55 @@ function RecipientPicker({ employees, value, onChange, cleared, onCleared }) {
           {open ? 'סגירה' : 'בחירת שמות'}
         </button>
         {(explicit || cleared) && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => { onCleared(false); onChange([]); }}
-          >
+          <button type="button" className="btn btn-ghost btn-sm" onClick={resetAll}>
             <Users size={12} /> חזרה לכולם
           </button>
         )}
       </div>
 
+      {/* שורה ראשונה: היכן העובד מועסק. בחירה יחידה, ולחיצה שנייה מבטלת. */}
       <div className="choice-row" style={{ marginTop: 8 }}>
-        <button
-          type="button"
-          className="choice-pill"
-          style={{ '--choice-accent': '#34D399' }}
-          onClick={() => pick(idsWhere((e) => isWallStaff(e)))}
-        >
-          <Users size={14} /> עובדי קיר
-        </button>
-        <button
-          type="button"
-          className="choice-pill"
-          style={{ '--choice-accent': '#FBBF24' }}
-          onClick={() => pick(idsWhere((e) => !isWallStaff(e)))}
-        >
-          <Users size={14} /> עובדי חוץ
-        </button>
-        {roleOptions.map((role) => (
+        {[
+          { key: 'wall', label: 'עובדי קיר', accent: '#34D399' },
+          { key: 'external', label: 'עובדי חוץ', accent: '#FBBF24' },
+        ].map(({ key, label, accent }) => (
           <button
             type="button"
-            key={role}
-            className="choice-pill"
-            style={{ '--choice-accent': roleColor(role) }}
-            onClick={() => pick(idsWhere((e) => rolesOf(e).includes(role)))}
+            key={key}
+            className={`choice-pill ${scope === key ? 'active' : ''}`}
+            style={{ '--choice-accent': accent }}
+            onClick={() => applyFilters(scope === key ? 'all' : key, roleFilter)}
           >
-            {role}
+            <Users size={14} /> {label}
           </button>
         ))}
         <button
           type="button"
           className="choice-pill"
           style={{ '--choice-accent': '#F87171' }}
-          onClick={() => { onCleared(true); onChange([]); setOpen(true); }}
+          onClick={() => { setScope('all'); setRoleFilter([]); onCleared(true); onChange([]); setOpen(true); }}
         >
           <X size={14} /> ניקוי הכל
         </button>
+      </div>
+
+      {/* שורה שנייה: תפקידים. אפשר לסמן כמה, ומספיק אחד מהם כדי להיכלל. */}
+      <div className="choice-row" style={{ marginTop: 6 }}>
+        {roleOptions.map((role) => {
+          const RoleIcon = roleIcon(role);
+          const on = roleFilter.includes(role);
+          return (
+            <button
+              type="button"
+              key={role}
+              className={`choice-pill ${on ? 'active' : ''}`}
+              style={{ '--choice-accent': roleColor(role) }}
+              onClick={() => toggleRole(role)}
+            >
+              <RoleIcon size={14} /> {role}
+            </button>
+          );
+        })}
       </div>
 
       {open && (
