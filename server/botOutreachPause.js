@@ -38,24 +38,57 @@ export function outreachPauseRows(db) {
   return Array.isArray(rows) ? rows : [];
 }
 
-export function pauseRowId(parentId) {
-  return `bop-${clean(parentId)}`;
+/**
+ * הנושאים שאפשר להשהות בנפרד, וסיבת המעקב שכל אחד מהם עוצר.
+ *
+ * „אני רוצה לחשוב על הציוד עוד שבוע” אינו „אל תפנו אליי”: ההרשמה במתנ״ס עדיין
+ * צריכה להגיע ממנו. השהיה בלי נושא היא על הכול, כמו קודם.
+ */
+export const PAUSE_TOPICS = Object.freeze({
+  equipment: 'equipment_unpaid',
+  centre: 'pending_signup',
+  form: 'form_not_filled',
+  group: 'no_group_yet',
+});
+
+export function pauseRowId(parentId, topic = '') {
+  const scope = clean(topic);
+  return scope ? `bop-${clean(parentId)}-${scope}` : `bop-${clean(parentId)}`;
+}
+
+/** Does this pause hold back a follow-up sent for `reason`? */
+export function pauseCovers(row, reason = '') {
+  const topics = (Array.isArray(row?.topics) ? row.topics : []).map(clean).filter(Boolean);
+  if (!topics.length) return true;
+  if (!clean(reason)) return false;
+  return topics.some((topic) => PAUSE_TOPICS[topic] === reason || topic === reason);
 }
 
 /**
  * The moment proactive contact may resume, or '' when nothing is holding it.
  * An expired row is simply ignored — it stays as a record of what was asked.
+ *
+ * `reason` is the follow-up the caller is about to send. Without it only a
+ * whole-customer pause answers, which is what „is this customer on hold?”
+ * means; a topic pause is an answer about that topic alone.
  */
-export function outreachPausedUntil(db, parentId, now = new Date()) {
-  const id = pauseRowId(parentId);
-  const row = outreachPauseRows(db).find((item) => String(item.id) === id);
-  const until = Date.parse(row?.until || '');
-  if (!Number.isFinite(until)) return '';
-  return until > new Date(now).getTime() ? new Date(until).toISOString() : '';
+export function outreachPausedUntil(db, parentId, now = new Date(), { reason = '' } = {}) {
+  const nowMs = new Date(now).getTime();
+  const mine = outreachPauseRows(db).filter((row) => (
+    String(row.parent_id || '') === String(parentId)
+    || String(row.id || '').startsWith(`${pauseRowId(parentId)}-`)
+    || String(row.id || '') === pauseRowId(parentId)
+  ));
+  const live = mine
+    .filter((row) => pauseCovers(row, reason))
+    .map((row) => Date.parse(row.until || ''))
+    .filter((until) => Number.isFinite(until) && until > nowMs);
+  if (!live.length) return '';
+  return new Date(Math.max(...live)).toISOString();
 }
 
-export function isOutreachPaused(db, parentId, now = new Date()) {
-  return Boolean(outreachPausedUntil(db, parentId, now));
+export function isOutreachPaused(db, parentId, now = new Date(), options = {}) {
+  return Boolean(outreachPausedUntil(db, parentId, now, options));
 }
 
 /**
@@ -154,9 +187,13 @@ export async function setOutreachPause(db, persist, {
   until,
   reason = 'general',
   note = '',
+  topics = [],
   now = new Date(),
 } = {}) {
-  const id = pauseRowId(parentId);
+  const scope = (Array.isArray(topics) ? topics : [topics])
+    .map(clean)
+    .filter((topic) => Object.prototype.hasOwnProperty.call(PAUSE_TOPICS, topic));
+  const id = pauseRowId(parentId, scope.join('-'));
   if (!clean(parentId) || !clean(until)) return null;
   const stamp = new Date(now).toISOString();
   const existing = db?.getOne?.(OUTREACH_PAUSE_COLLECTION, id);
@@ -165,6 +202,7 @@ export async function setOutreachPause(db, persist, {
     parent_id: String(parentId),
     until: new Date(until).toISOString(),
     reason: PAUSE_REASONS.has(String(reason)) ? String(reason) : 'general',
+    topics: scope,
     note: clean(note),
     created_at: existing?.created_at || stamp,
     updated_at: stamp,

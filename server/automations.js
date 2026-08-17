@@ -773,7 +773,10 @@ export const automationsService = {
       // „אני בחו״ל”, „נירשם רק באוקטובר”. The errand is still open and the
       // follow-up is still wanted — just not today. Postponing keeps the
       // promise; cancelling here is how a family is forgotten instead.
-      const quietUntil = outreachPausedUntil(db, parent.id, now);
+      // The reason decides: somebody who asked for a week to think about the
+      // equipment still owes us the מתנ״ס registration, and silencing that too
+      // is not what they asked for.
+      const quietUntil = outreachPausedUntil(db, parent.id, now, { reason: row.reason });
       if (quietUntil) {
         for (const item of rowGroup) await postponeFollowUp(item, quietUntil);
         postponed += 1;
