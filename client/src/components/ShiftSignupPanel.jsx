@@ -849,6 +849,11 @@ function SignupBoard({ windowId, onChanged }) {
     <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
         סמנו מי לוקח כל משמרת, ואז „אישור ושליחה”. כל עובד יקבל הודעה אחת עם כל המשמרות שלו.
+        <div style={{ marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11 }}>
+          <span><Square size={11} style={{ verticalAlign: '-1px' }} /> פנוי — הודיע שהוא יכול</span>
+          <span><UserPlus size={11} style={{ verticalAlign: '-1px' }} /> לשיבוץ — ייכנס באישור</span>
+          <span><Check size={11} style={{ verticalAlign: '-1px' }} /> משובץ — כבר ביומן העבודה</span>
+        </div>
       </div>
 
       {error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>}
@@ -924,8 +929,19 @@ function SignupBoard({ windowId, onChanged }) {
                                   ? <Loader2 size={13} className="spin" />
                                   : person.assigned ? <Check size={13} /> : on ? <UserPlus size={13} /> : <Square size={13} />}
                                 {person.name}
-                                {!person.answered && (
-                                  <span style={{ fontSize: 10, opacity: 0.7 }}> · מהיומן</span>
+                                {/* המצב נכתב במילה ולא רק בצבע: „בר שניר” בכחול
+                                    לא אמר אם הוא כבר משובץ, מסומן לשיבוץ, או רק
+                                    הודיע שהוא פנוי. */}
+                                {person.assigned && (
+                                  <span style={{ fontSize: 10.5, opacity: 0.8 }}>
+                                    {' · משובץ'}{!person.answered ? ' מהיומן' : ''}
+                                  </span>
+                                )}
+                                {!person.assigned && on && (
+                                  <span style={{ fontSize: 10.5, opacity: 0.8 }}> · לשיבוץ</span>
+                                )}
+                                {!person.assigned && !on && (
+                                  <span style={{ fontSize: 10.5, opacity: 0.7 }}> · פנוי</span>
                                 )}
                                 {person.wanted_count > 0 && !person.assigned && (
                                   <span style={{ fontSize: 10.5, opacity: 0.7 }}> ({person.wanted_count})</span>
