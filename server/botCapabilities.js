@@ -120,6 +120,19 @@ export const BOT_CAPABILITIES = [
     tools: ['getFamilyCard', 'findExistingParticipant'],
   },
   {
+    key: 'open_step_sweep',
+    label: 'מעבר יומי על מתאמנים תקועים',
+    hint: 'פעם ביום עובר על כל המתאמנים ומאתר את מי שנתקע — טופס חתום בלי קבוצה, '
+      + 'מקום שנשמר בלי הרשמה במתנ״ס, ציוד שלא הוסדר — ופונה אליו. פנייה אחת '
+      + 'לשבוע לכל היותר, ורק למי שהכדור אצלו',
+    source: 'עובר על המתאמנים, לא על השיחות; נשלח דרך מנגנון המעקב הרגיל',
+    tools: [],
+    requires: 'follow_ups',
+    // Reaching out to people who never wrote to us is a change in what the bot
+    // is, not a bug fix. It starts off and the owner turns it on.
+    defaultOff: true,
+  },
+  {
     key: 'review_tasks',
     label: 'משימת בדיקה על כל פעולה',
     hint: 'כל שינוי שהבוט עושה — שיבוץ, סטטוס, דיווח מהמתנ״ס — פותח שורה '

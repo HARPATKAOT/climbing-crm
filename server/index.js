@@ -21323,6 +21323,26 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
 
 // Daily attendance ensure at 06:00 Asia/Jerusalem (in-process; also call POST /api/attendance/ensure-today)
 let lastAttendanceEnsureDate = null;
+let lastOpenStepSweepDate = null;
+
+/**
+ * The trainee sweep, once a day and never twice. The date marker is cleared on
+ * failure so a blip does not cost a whole day of the people it exists to find.
+ */
+async function runOpenStepSweepIfDue(hour = 10) {
+  try {
+    const today = israelDateStr();
+    if (lastOpenStepSweepDate === today) return null;
+    if (israelHour() < hour) return null;
+    lastOpenStepSweepDate = today;
+    return await automationsService.runOpenStepSweep();
+  } catch (err) {
+    console.error('open-step sweep failed:', err.message);
+    lastOpenStepSweepDate = null;
+    return null;
+  }
+}
+
 async function runDailyAttendanceEnsureIfDue() {
   try {
     const today = israelDateStr();
@@ -21643,6 +21663,12 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Once a day, over the trainees rather than the conversations: whoever is
+  // stuck mid-registration and is not in anybody's queue. Ten in the morning,
+  // so the follow-up it opens goes out during the day rather than at dawn.
+  setTimeout(() => { runOpenStepSweepIfDue(10); }, 90_000);
+  setInterval(() => { runOpenStepSweepIfDue(10); }, 15 * 60 * 1000);
 
   // Durable seat holds, waitlist offers and intro follow-ups. Every action has
   // its own event key, so restarts and multiple server instances cannot send it

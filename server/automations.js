@@ -21,6 +21,9 @@ import {
   withBotMark,
 } from './whatsappBot.js';
 import { outreachPausedUntil } from './botOutreachPause.js';
+import { registrationStep, STEP_GROUP } from './registrationSteps.js';
+import { runOpenStepSweep } from './openStepSweep.js';
+import { isCapabilityEnabled } from './botCapabilities.js';
 import {
   FOLLOWUP_COLLECTION,
   claimFollowUpSend,
@@ -64,6 +67,13 @@ function liveFollowUpState(row, parent) {
     .map((s) => String(s.name || '').trim().split(/\s+/)[0])
     .filter(Boolean);
 
+  // A signed form and no group at all — the sweep's own case, read live like
+  // everything else here so a family that chose a group overnight is not asked.
+  const awaitingGroup = students
+    .filter((s) => registrationStep(db, s).step === STEP_GROUP)
+    .map((s) => String(s.name || '').trim().split(/\s+/)[0])
+    .filter(Boolean);
+
   const selfTrainee = traineeIsTheCustomer(students, parent);
   const standing = familyEquipmentStanding(db, { students });
   // Reuse a link the family already has rather than minting one from a
@@ -85,6 +95,7 @@ function liveFollowUpState(row, parent) {
 
   return {
     awaitingRegistration,
+    awaitingGroup,
     equipmentLine: equipmentOpenLine(standing, { link, selfTrainee }),
     formLine,
     selfTrainee,
@@ -700,6 +711,28 @@ export const automationsService = {
       await markClaimReported(db, persistCore, claim.id, { now });
     }
     return { event: 'abandoned_replies', found: rows.length, notified };
+  },
+
+  /**
+   * Once a day, over the trainees rather than over the conversations.
+   *
+   * Everything else here answers something that happened in a chat. This one
+   * finds the family nobody is chasing because the chat ended: a signed form
+   * with no group, a place held and never registered at the מתנ״ס, a kit
+   * nobody settled. It only opens follow-up rows — `runBotFollowUps` sends
+   * them, and with them come the opt-out, the pause, the open handoff, the
+   * 24-hour window and the approved template.
+   */
+  runOpenStepSweep: async ({ now = new Date() } = {}) => {
+    const settings = db.getSettings ? db.getSettings() : {};
+    if (!isCapabilityEnabled(settings, 'open_step_sweep')) {
+      return { event: 'open_step_sweep', ran: false, reason: 'capability_off' };
+    }
+    const result = await runOpenStepSweep(db, persistCore, { now });
+    if (result.created) {
+      console.log(`🧭 Open-step sweep: ${result.created} follow-up(s) from ${result.candidates} candidate(s)`);
+    }
+    return { ...result, ran: true };
   },
 
   /**

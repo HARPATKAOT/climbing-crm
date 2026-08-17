@@ -25,7 +25,8 @@ import {
   requestProgramApproval,
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
-import { activeEnrollmentGroupIds, studentGroupIds } from './studentGroups.js';
+import { studentGroupIds } from './studentGroups.js';
+import { hasLiveGroup, registrationStep } from './registrationSteps.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
@@ -1070,48 +1071,13 @@ export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }
 
-/**
- * The five things a registration is made of, and which one is still open.
- *
- * The bot used to close a conversation at whichever step it had just finished:
- * a form was signed, so „הפרטים התקבלו”; a place was held, so „הילד משובץ”.
- * Nobody was carried to the end, and the gap surfaced weeks later as a child
- * with no group or a kit nobody paid for. Every turn now ends with whichever
- * of these is still missing.
- */
+/** The open registration step, in the shape the model reads. See registrationSteps. */
 function registrationProgress(student, group) {
-  const documents = participationEligibility(db, { studentId: student.id });
-  const equipment = unpaidEquipmentItems((db.get('student_equipment') || []).filter(
-    (row) => String(row.student_id || row.studentId || '') === String(student.id)
-  ));
-  const reported = ['awaiting_centre_confirmation', 'registered', 'active']
-    .includes(String(student.status || ''));
-
-  const steps = [
-    { done: documents.eligible, next: `להשלים את ${FORM_SHORT}` },
-    { done: Boolean(group) || hasLiveGroup(student), next: 'לבחור קבוצה ולשמור מקום' },
-    { done: reported, next: 'להירשם במתנ״ס ולעדכן אותנו שנרשמתם' },
-    { done: !equipment.length, next: 'להסדיר את הציוד, או לסמן בקישור מה כבר קיים מהבית' },
-  ];
-  const open = steps.find((step) => !step.done);
+  const progress = registrationStep(db, student, { group });
   return {
-    הרשמה_שלמה: !open,
-    ...(open ? { הצעד_הבא: open.next } : {}),
+    הרשמה_שלמה: progress.complete,
+    ...(progress.complete ? {} : { הצעד_הבא: progress.label }),
   };
-}
-
-/**
- * Does this trainee actually sit somewhere — a group on the card, a live
- * enrollment, or a place already being held?
- *
- * The status alone does not answer it. „רשום” is written the moment the
- * מתנ״ס confirms, which is routinely before anybody has chosen a group.
- */
-export function hasLiveGroup(student) {
-  if (!student?.id) return false;
-  if (studentGroupIds(student).length) return true;
-  if (activeEnrollmentGroupIds(db.get('enrollments') || [], student.id).length) return true;
-  return Boolean(activeHoldForStudent(db, student.id)?.group_ids?.length);
 }
 
 /** A pending placement only exists when it points at a real group. */
@@ -1305,7 +1271,7 @@ function requireDeclaredChild(parent, childName, studentId = '') {
   // words to carry on to the group. Refusing there left a mother who had paid
   // and registered being told her son "כבר רשום" — with no place held for him
   // anywhere.
-  if (isRegisteredTrainee(student) && hasLiveGroup(student)) {
+  if (isRegisteredTrainee(student) && hasLiveGroup(db, student)) {
     return {
       error: `${student.name || 'המתאמן'} כבר רשום לחוג ומשובץ בקבוצה — הוספה או העברה בין קבוצות נעשית מול הצוות`,
     };
