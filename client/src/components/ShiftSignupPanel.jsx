@@ -415,7 +415,11 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     setError('');
     setBusy(true);
     try {
-      const query = new URLSearchParams({ from, to, types: wantedTypes.join(',') });
+      const query = new URLSearchParams({
+        from,
+        to,
+        types: source === 'classes' ? CLASS_CHIP.id : wantedTypes.join(','),
+      });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
       setCandidates(body.candidates || []);
       setWithoutHours(body.withoutHours || 0);
@@ -439,7 +443,7 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
       : [...current, id]));
   };
 
-  const chosenSlots = source === 'calendar'
+  const chosenSlots = source !== 'pattern'
     ? (candidates || []).filter((c) => pickedIds.includes(c.id))
     : slots;
 
@@ -552,11 +556,11 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
           </button>
           <button
             type="button"
-            className={`choice-pill ${source === 'pattern' ? 'active' : ''}`}
-            style={{ '--choice-accent': '#38BDF8' }}
-            onClick={() => { setSource('pattern'); resetPreview(); }}
+            className={`choice-pill ${source === 'classes' ? 'active' : ''}`}
+            style={{ '--choice-accent': '#FBBF24' }}
+            onClick={() => { setSource('classes'); resetPreview(); }}
           >
-            <Repeat size={15} /> משמרת קבועה
+            <GraduationCap size={15} /> מלוח החוגים
           </button>
         </div>
       </div>
@@ -601,17 +605,6 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
             </label>
           </>
         )}
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
-          כמה אנשים צריך בכל משמרת
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={20}
-            value={capacity}
-            onChange={(e) => { setCapacity(Number(e.target.value) || 1); resetPreview(); }}
-          />
-        </label>
       </div>
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
@@ -624,12 +617,12 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         />
       </label>
 
-      {source === 'calendar' && candidates !== null && (
+      {source !== 'pattern' && candidates !== null && (
         <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
             {candidates.length === 0
               ? emptyReason
-              : `${candidates.length} משמרות ביומן. סמנו מה להציע לצוות:`}
+              : `${candidates.length} משמרות ${source === 'classes' ? 'מלוח החוגים' : 'ביומן'}. סמנו מה להציע לצוות:`}
             {withoutHours > 0 && ` (${withoutHours} רשומות ביומן בלי שעות — אי אפשר להציע אותן להרשמה)`}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
@@ -659,21 +652,27 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
                   <span style={{ fontSize: 12, color: 'var(--text-3)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {slot.label}
                   </span>
-                  {/* מה המשמרת צריכה — זה מה שהצוות יראה, ולכן זה מה שכדאי
-                      לראות לפני שמחליטים להציע אותה. */}
-                  {(slot.needs || []).filter((n) => n.role).map((need) => {
+                  {/* מה המשמרת צריכה ומה כבר מאויש, תפקיד תפקיד. „כבר 1” על
+                      משמרת שצריכה מפעיל קיר ושני עוזרים לא אמר מי מהם כבר יש. */}
+                  {(slot.staffing || slot.needs || []).filter((n) => n.role).map((need) => {
                     const NeedIcon = roleIcon(need.role);
+                    const done = (need.staffed || 0) >= need.count;
                     return (
-                      <span key={need.role} className="badge badge-gray">
+                      <span
+                        key={need.role}
+                        className={`badge ${done ? 'badge-green' : 'badge-amber'}`}
+                        title={done
+                          ? `${need.role} — מאויש`
+                          : `${need.role} — שובצו ${need.staffed || 0} מתוך ${need.count}`}
+                      >
                         <NeedIcon size={11} style={{ color: roleColor(need.role), flexShrink: 0 }} aria-hidden="true" />
-                        {need.role}{need.count > 1 ? ` ×${need.count}` : ''}
+                        {need.role} {need.staffed || 0}/{need.count}
+                        {done && <Check size={11} aria-hidden="true" />}
                       </span>
                     );
                   })}
-                  {slot.staffed > 0 && (
-                    <span className={`badge ${full ? 'badge-green' : 'badge-amber'}`}>
-                      {full ? 'מאויש' : `כבר ${slot.staffed}`}
-                    </span>
+                  {full && (
+                    <span className="badge badge-green">מאויש</span>
                   )}
                 </button>
               );
@@ -703,22 +702,17 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         <button className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>
           <X size={14} /> ביטול
         </button>
-        {source === 'calendar' ? (
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={loadFromCalendar}
-            // רשימת סוגים ריקה פירושה „הכל” בחוט, ולכן כיבוי כל התגיות חייב
-            // לחסום את השליפה במקום להחזיר בשקט את מה שהמנהל בדיוק כיבה.
-            disabled={busy || wantedTypes.length === 0}
-            title={wantedTypes.length === 0 ? 'בחרו לפחות סוג פעילות אחד' : ''}
-          >
-            {busy ? <Loader2 size={14} className="spin" /> : <CalendarRange size={14} />} שליפה מהיומן
-          </button>
-        ) : (
-          <button className="btn btn-ghost btn-sm" onClick={preview} disabled={busy}>
-            {busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />} חישוב המשמרות
-          </button>
-        )}
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={loadFromCalendar}
+          // רשימת סוגים ריקה פירושה „הכל” בחוט, ולכן כיבוי כל התגיות חייב
+          // לחסום את השליפה במקום להחזיר בשקט את מה שהמנהל בדיוק כיבה.
+          disabled={busy || (source === 'calendar' && wantedTypes.length === 0)}
+          title={source === 'calendar' && wantedTypes.length === 0 ? 'בחרו לפחות סוג פעילות אחד' : ''}
+        >
+          {busy ? <Loader2 size={14} className="spin" /> : <CalendarRange size={14} />}
+          {source === 'classes' ? ' שליפה מלוח החוגים' : ' שליפה מהיומן'}
+        </button>
         <button
           className="btn btn-primary btn-sm"
           onClick={create}

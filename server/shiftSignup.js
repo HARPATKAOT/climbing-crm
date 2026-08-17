@@ -245,6 +245,24 @@ function needsForActivity(activity, rolesByType, type) {
   return [{ role: '', count: 1 }];
 }
 
+/**
+ * מה כבר מאויש בכל תפקיד בנפרד.
+ *
+ * „כבר 1” על משמרת שצריכה מפעיל קיר ושני עוזרים לא אומר דבר — לא ברור מי מהם
+ * כבר יש. הפירוט לכל תפקיד הוא מה שהמנהל שוקל כשהוא מחליט אם בכלל להציע את
+ * המשמרת, ולכן הוא נשלח לצדו של מה שהיא צריכה.
+ */
+function staffingOf(needs, assignments, where) {
+  return needs.map((need) => ({
+    role: need.role,
+    count: need.count,
+    staffed: Math.min(
+      need.count,
+      staffedCount(assignments, { ...where, role: need.role || null })
+    ),
+  }));
+}
+
 /** How many people already hold this exact calendar slot in the given role. */
 function staffedCount(assignments, { date, startTime, activityId, groupId, role }) {
   return (assignments || []).filter((row) => {
@@ -358,6 +376,7 @@ export function calendarSlotCandidates({
         start_time: start,
         end_time: end,
         needs,
+        staffing: staffingOf(needs, assignments, { date, startTime: start, activityId: activity.id }),
         label: cleanText(activity.name, 60),
         activity_id: activity.id || null,
         group_id: null,
@@ -423,6 +442,7 @@ export function calendarSlotCandidates({
           start_time: start,
           end_time: end,
           needs: classNeeds,
+          staffing: staffingOf(classNeeds, assignments, { date, startTime: start, groupId: group.id }),
           label: cleanText(group.name, 60),
           activity_id: null,
           group_id: group.id || null,
