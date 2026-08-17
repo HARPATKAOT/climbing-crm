@@ -370,6 +370,59 @@ test('לקוח חדש: שואלים שם פרטי, ורק אחר כך שם מש�
   });
 });
 
+// מתאמן שכותב מהטלפון האישי שלו, שעדיין לא מוזן במערכת: השם שנאסף תואם
+// לרשומת מתאמן קיימת — הבוט מאמת מול שם ההורה, מחבר את הטלפון לרשומה,
+// ולא פותח תיק לקוח כפול (הליד של יונתן ברזילי, 2026-08-16).
+test('מתאמן קיים שמזדהה בשם מחובר לתיק המשפחה במקום ליד חדש', async () => {
+  await withSeed({
+    parents: [
+      { ...NEW_CARD },
+      { id: 'p-mom', name: 'קרן ברזילי', phone: '0501112223' },
+    ],
+    students: [
+      { id: 's-yon', parentId: 'p-mom', name: 'יונתן ברזילי', status: 'registered', birthDate: '2011-03-03' },
+    ],
+  }, async () => {
+    const phone = NEW_CARD.phone;
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
+    const offered = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'יונתן ברזילי');
+    assert.equal(offered.done, false);
+    assert.match(offered.reply, /קרן/);
+    // השם עדיין לא נשמר על הליד — ההכרעה קודמת.
+    assert.equal(cardById('p-fresh').name, 'לקוח וואטסאפ');
+
+    const linked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'כן');
+    assert.equal(linked.done, false);
+    assert.match(linked.reply, /חיברתי/);
+    const student = db.get('students').find((s) => s.id === 's-yon');
+    assert.equal(student.phone, '972508862878');
+    // הליד הריק נמחק — אין תיק כפול.
+    assert.equal(db.get('parents').some((p) => p.id === 'p-fresh'), false);
+  });
+});
+
+test('«לא» על שאלת האימות משאיר ליד חדש עם השם שנאסף', async () => {
+  await withSeed({
+    parents: [
+      { ...NEW_CARD },
+      { id: 'p-mom', name: 'קרן ברזילי', phone: '0501112223' },
+    ],
+    students: [
+      { id: 's-yon', parentId: 'p-mom', name: 'יונתן ברזילי', status: 'registered', birthDate: '2011-03-03' },
+    ],
+  }, async () => {
+    const phone = NEW_CARD.phone;
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'שלום');
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'יונתן ברזילי');
+    const declined = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'לא');
+    assert.equal(declined.done, true);
+    assert.equal(declined.parent.name, 'יונתן ברזילי');
+    // הטלפון לא נכתב על המתאמן של המשפחה האחרת.
+    assert.equal(db.get('students').find((s) => s.id === 's-yon').phone, undefined);
+    assert.equal(db.get('parents').some((p) => p.id === 'p-fresh'), true);
+  });
+});
+
 test('מי שכתב שם מלא בתשובה אחת אינו מתבקש לחזור על עצמו', async () => {
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;

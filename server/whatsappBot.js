@@ -1046,11 +1046,121 @@ async function askAgainOrHandOff(phone, prior, question) {
 }
 
 /**
+ * מתאמן קיים שהשם שנאסף זהה לשמו והטלפון שלו טרם הוזן — מועמד לחיבור.
+ * רק התאמה יחידה וחד-משמעית מציעה חיבור; כל ספק משאיר את הזרימה הרגילה.
+ */
+function findLinkableTrainee(phone, leadParent, parsedName) {
+  const students = db.get('students') || [];
+  // רק ליד טרי בלי מתאמנים משלו — כרטיס עם ילדים הוא משפחה אמיתית.
+  if (students.some((s) => s.parentId === leadParent.id)) return null;
+  const wanted = `${parsedName.firstName} ${parsedName.lastName}`
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+  const bucket = normalizeWaPhone(phone);
+  const candidates = students.filter((s) => {
+    const name = String(s.name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!name || name !== wanted) return false;
+    if (s.parentId === leadParent.id) return false;
+    // מספר אחר שכבר רשום על המתאמן — כנראה מישהו אחר באותו שם.
+    const studentPhone = normalizeWaPhone(s.phone);
+    if (studentPhone && studentPhone !== bucket) return false;
+    return true;
+  });
+  if (candidates.length !== 1) return null;
+  const student = candidates[0];
+  const family = (db.get('parents') || []).find((p) => p.id === student.parentId);
+  if (!family || !String(family.name || '').trim()) return null;
+  return { student, family };
+}
+
+/**
+ * סיום איסוף השם: אם השם שייך למתאמן קיים — שואלים שאלת אימות («ההורה שלך
+ * זה קרן?») לפני שנפתח תיק חדש. השם לא נשמר על הליד עד ההכרעה, כדי ששער
+ * הזהות ימשיך לנתב את התשובה לכאן.
+ */
+async function completeOrOfferTraineeLink(phone, parent, parsedName, pendingMessage) {
+  const link = findLinkableTrainee(phone, parent, parsedName);
+  if (link) {
+    await setIntake(phone, {
+      step: 'trainee_link_confirm',
+      pendingFirstName: parsedName.firstName,
+      pendingLastName: parsedName.lastName,
+      linkStudentId: link.student.id,
+      linkFamilyId: link.family.id,
+      pendingMessage: pendingMessage || '',
+    });
+    const familyFirst = String(link.family.name).trim().split(/\s+/)[0];
+    return {
+      done: false,
+      reply: `נעים מאוד ${parsedName.firstName} 🙂 רגע — יש אצלנו מתאמן/ת בדיוק בשם הזה. ההורה שלך זה ${familyFirst}?`,
+    };
+  }
+  const saved = await updateCustomerFullName(parent, parsedName);
+  if (saved.error) return { done: false, reply: saved.error };
+  await setIntake(phone, { step: 'done', name_capture: true });
+  return {
+    done: true,
+    parent: db.getOne('parents', saved.parent.id) || saved.parent,
+    pendingMessage: pendingMessage || '',
+  };
+}
+
+/** התשובה על «ההורה שלך זה …?» — חיבור לתיק הקיים, או המשך כרגיל. */
+async function handleTraineeLinkAnswer(phone, parent, incomingText, prior) {
+  const text = String(incomingText || '').trim();
+  const parsedName = {
+    firstName: String(prior.pendingFirstName || '').trim(),
+    lastName: String(prior.pendingLastName || '').trim(),
+  };
+  // ‎\b אינו מכיר אותיות עבריות — בודקים את המילה הראשונה במפורש.
+  const firstWord = (text.split(/\s+/)[0] || '').replace(/[.,!?]+$/u, '');
+  const yes = ['כן', 'נכון', 'בטח', 'כמובן', 'אכן', 'יס', 'חיובי'].includes(firstWord);
+  const no = ['לא', 'שלילי', 'טעות'].includes(firstWord);
+
+  if (yes) {
+    const student = db.getOne('students', prior.linkStudentId);
+    const family = db.getOne('parents', prior.linkFamilyId);
+    if (student && family) {
+      const updatedStudent = db.update('students', student.id, { phone: normalizeWaPhone(phone) });
+      if (updatedStudent) await persistCore('students', updatedStudent);
+      // הליד שנפתח אוטומטית מיותר עכשיו — ההודעות הבאות ינותבו לתיק המשפחה
+      // דרך הטלפון שעל רשומת המתאמן. מוחקים רק כרטיס ריק, ליתר ביטחון.
+      const stillEmpty = !(db.get('students') || []).some((s) => s.parentId === parent.id);
+      if (parent.id !== family.id && stillEmpty) {
+        await db.deleteDurable('parents', parent.id);
+      }
+      return {
+        done: false,
+        reply: `מעולה! חיברתי את המספר שלך לתיק של ${student.name} 🙂 מעכשיו אפשר פשוט לכתוב לי כרגיל.`,
+      };
+    }
+    // הרשומות נעלמו בינתיים — ממשיכים כליד רגיל עם השם שנאסף.
+  }
+
+  // «לא» (או «כן» שהחיבור שלו נכשל): נשארים ליד חדש, שומרים את השם וממשיכים.
+  if (yes || no) {
+    const saved = await updateCustomerFullName(parent, parsedName);
+    if (saved.error) return { done: false, reply: saved.error };
+    await setIntake(phone, { step: 'done', name_capture: true });
+    return {
+      done: true,
+      parent: db.getOne('parents', saved.parent.id) || saved.parent,
+      pendingMessage: prior.pendingMessage || '',
+    };
+  }
+
+  return askAgainOrHandOff(phone, prior, `רק כדי לוודא — ההורה שלך רשום אצלנו? (כן / לא)`);
+}
+
+/**
  * Every bot mode has the same deterministic identity gate. It collects only
  * the two name fields, then returns the first customer question so the bot can
  * answer it without making the customer repeat themselves.
  */
 export async function advanceCustomerNameCapture(phone, parent, incomingText) {
+  const linkPrior = { ...(getIntake(parent) || {}) };
+  if (linkPrior.step === 'trainee_link_confirm') {
+    return handleTraineeLinkAnswer(phone, parent, incomingText, linkPrior);
+  }
   if (hasCustomerFullName(parent)) return { done: true, parent, pendingMessage: '' };
 
   const text = String(incomingText || '').trim();
@@ -1061,14 +1171,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   if (!active) {
     const explicit = introducedName(text);
     if (explicit) {
-      const saved = await updateCustomerFullName(parent, explicit);
-      if (saved.error) return { done: false, reply: saved.error };
-      await setIntake(phone, { step: 'done', name_capture: true });
-      return {
-        done: true,
-        parent: db.getOne('parents', saved.parent.id) || saved.parent,
-        pendingMessage: '',
-      };
+      return completeOrOfferTraineeLink(phone, parent, explicit, '');
     }
 
     const step = existing.firstName ? 'tools_parent_last_name' : 'tools_parent_first_name';
@@ -1108,17 +1211,10 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
       return { done: false, reply: `נעים מאוד ${words[0]} 🙂 ומה שם המשפחה?` };
     }
     // Both names in one answer anyway — nobody is asked to repeat themselves.
-    const saved = await updateCustomerFullName(parent, {
+    return completeOrOfferTraineeLink(phone, parent, {
       firstName: words[0],
       lastName: words.slice(1).join(' '),
-    });
-    if (saved.error) return { done: false, reply: saved.error };
-    await setIntake(phone, { step: 'done', name_capture: true });
-    return {
-      done: true,
-      parent: db.getOne('parents', saved.parent.id) || saved.parent,
-      pendingMessage: prior.pendingMessage || '',
-    };
+    }, prior.pendingMessage || '');
   }
 
   const lastWords = customerNameWords(text);
@@ -1128,17 +1224,10 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
     await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
     return { done: false, reply: 'היי 🙂 מה השם הפרטי שלך?' };
   }
-  const saved = await updateCustomerFullName(parent, {
+  return completeOrOfferTraineeLink(phone, parent, {
     firstName,
     lastName: lastWords.join(' '),
-  });
-  if (saved.error) return { done: false, reply: saved.error };
-  await setIntake(phone, { step: 'done', name_capture: true });
-  return {
-    done: true,
-    parent: db.getOne('parents', saved.parent.id) || saved.parent,
-    pendingMessage: prior.pendingMessage || '',
-  };
+  }, prior.pendingMessage || '');
 }
 
 /** Clear intake, pause, opt-out and local conversation mirror for playground testing. */
