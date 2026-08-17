@@ -150,6 +150,26 @@ test('online sale does not change cash expected', () => {
   );
 });
 
+test('אשראי במסוף נרשם ביומן כמכירת סליקה ואינו נוגע במזומן', () => {
+  const store = makeStore();
+  openSession(store, {
+    denominations: { 100: 5 },
+    reqUser: { name: 'א' },
+    body: OPERATOR_BODY,
+  });
+  recordSaleInLedger(store, {
+    paymentMethod: 'emv',
+    total: 200,
+    saleId: 'emv-sale',
+    reqUser: { name: 'א' },
+  });
+  assert.equal(computeExpectedCash(store), 500);
+  const rows = store.get('cash_ledger').filter((r) => r.action_type === LEDGER_ACTIONS.SALE_ONLINE);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].amount, 200);
+  assert.equal(rows[0].expected_after, null);
+});
+
 test('cash refund reduces expected cash once; online refund is audit-only', () => {
   const store = makeStore();
   openSession(store, {

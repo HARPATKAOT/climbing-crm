@@ -68,9 +68,10 @@ const ACTION_STYLE = {
   empty: { Icon: ArrowUpCircle, color: '#FBBF24', label: 'ריקון' },
   reset: { Icon: RotateCcw, color: '#F472B6', label: 'איפוס' },
   sale_cash: { Icon: Banknote, color: '#34D399', label: 'מכירת מזומן' },
-  sale_online: { Icon: CreditCard, color: '#38BDF8', label: 'סליקה בקישור' },
+  // אותה שורה משמשת גם לסליקה בקישור וגם לאשראי במסוף, ולכן התווית כללית.
+  sale_online: { Icon: CreditCard, color: '#38BDF8', label: 'מכירה באשראי' },
   refund_cash: { Icon: Undo2, color: '#FB7185', label: 'זיכוי מזומן' },
-  refund_online: { Icon: Undo2, color: '#FB7185', label: 'זיכוי סליקה' },
+  refund_online: { Icon: Undo2, color: '#FB7185', label: 'זיכוי אשראי' },
 };
 
 function LedgerTypeBadge({ actionType, actionLabel }) {

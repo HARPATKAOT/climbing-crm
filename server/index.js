@@ -299,6 +299,11 @@ import {
   isDraftableField,
 } from './activityCopyDraft.js';
 import { executePartialRefund } from './partialRefund.js';
+import {
+  chargeEmvForSale,
+  emvFailureMessage,
+  listOrphanEmvCharges,
+} from './emvCharge.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
 import { equipmentPurchaseRows } from './equipmentPurchases.js';
 import { canClearPaidEquipmentStatus } from './equipmentPaymentSecurity.js';
@@ -17076,6 +17081,54 @@ function posSellerForRequest(req) {
   return { employee_id: employee.id, name: employee.name || 'עובד' };
 }
 
+/**
+ * האם אפשר להציע „אשראי במסוף” בקופה.
+ *
+ * התשובה מגיעה מהגדרות החשבון ב-iCount ולא ממשתנה סביבה, כדי שחיבור מכשיר או
+ * ניתוקו ישתקפו במסך בלי לגעת בשרת. התשובה נשמרת במטמון לכמה דקות.
+ */
+app.get('/api/pos/emv/status', async (req, res) => {
+  try {
+    const status = await icount.emvStatus({ force: req.query.refresh === '1' });
+    res.json({ ...status, timeoutMs: icount.emvTimeoutMs() });
+  } catch (err) {
+    res.json({ available: false, configured: icount.isConfigured(), reason: err.message, devices: [] });
+  }
+});
+
+/**
+ * חיובי אשראי של היום שלא הופק עליהם מסמך.
+ *
+ * זה המסך שמופיע אחרי חיוב שהתשובה עליו אבדה: במקום לחייב שוב, מאתרים כאן את
+ * החיוב שכבר קרה ומשלימים עליו את המכירה.
+ */
+app.get('/api/pos/emv/orphan-charges', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const amountRaw = String(req.query.amount || '').trim();
+    const amount = amountRaw ? Number(amountRaw) : null;
+    const charges = await listOrphanEmvCharges({
+      icount,
+      amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    });
+    res.json({
+      charges: charges.map((row) => ({
+        confirmationCode: row.confirmationCode,
+        amount: row.charged,
+        cardLast4: row.cardLast4,
+        cardType: row.cardType,
+        holderName: row.holderName,
+        chargeDate: row.chargeDate,
+      })),
+    });
+  } catch (err) {
+    console.error('POS emv orphan lookup error:', err.message);
+    res.status(502).json({ error: err.message || 'בדיקת החיובים נכשלה' });
+  }
+});
+
 app.post('/api/pos/sale', async (req, res) => {
   // ההדפסה בדלפק ממתינה לתשובה הזאת: מספר המסמך מודפס על הקבלה, ולכן אי אפשר
   // להדפיס לפני שהוא קיים. המשמעות היא שכל קריאה חיצונית שיושבת כאן נמדדת
@@ -17102,6 +17155,9 @@ app.post('/api/pos/sale', async (req, res) => {
       sendWhatsapp = false,
       couponCode,
       tenderedAmount,
+      // מספר אישור מחיוב שכבר בוצע במסוף — מסלול ההשלמה אחרי תשובה שאבדה.
+      // כשהוא קיים לא נשלח חיוב חדש למכשיר.
+      emvConfirmationCode = '',
     } = req.body || {};
 
     let lines = mapCartLines(cart);
@@ -17142,11 +17198,13 @@ app.post('/api/pos/sale', async (req, res) => {
     }
 
     const total = computeSaleTotal(lines);
-    const method = String(paymentMethod || 'cash').toLowerCase();
-    if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {
-      return res.status(400).json({
-        error:
-          'אשראי במסוף לא זמין כרגע — אין חיבור למסוף פיזי. השתמשו במזומן או בסליקה בקישור.',
+    const rawMethod = String(paymentMethod || 'cash').toLowerCase();
+    // „אשראי במסוף” הגיע בעבר בכמה שמות. כולם אותו דבר, ונשמרים כ-emv אחד
+    // כדי שסינון, דוחות וזיכוי לא יצטרכו להכיר ארבע מילים לאותו אמצעי תשלום.
+    const method = ['emv', 'credit', 'cc', 'card'].includes(rawMethod) ? 'emv' : rawMethod;
+    if (method === 'emv' && !icount.isConfigured()) {
+      return res.status(503).json({
+        error: 'סליקה במסוף דורשת חיבור ל-iCount, והוא לא מוגדר בשרת',
       });
     }
 
@@ -17177,28 +17235,106 @@ app.post('/api/pos/sale', async (req, res) => {
     }
     phase('icount:client');
 
+    const customerName = syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק';
+
+    // הכסף לפני המסמך. חשבונית אפשר להוציא שוב, חיוב שנכשל אחרי שהוצאה
+    // חשבונית הוא הכנסה רשומה שלא התקבלה.
+    let emvCharge = null;
+    if (method === 'emv') {
+      try {
+        emvCharge = await chargeEmvForSale({
+          icount,
+          total,
+          clientId,
+          clientName: customerName,
+          email: syncedParent?.email || walkInEmail || '',
+          confirmationCode: emvConfirmationCode,
+        });
+      } catch (chargeErr) {
+        console.error(
+          `💳 [POS] EMV charge failed (₪${total})`,
+          chargeErr.code || '',
+          chargeErr.message,
+          chargeErr.indeterminate ? '— תשובה לא ודאית' : ''
+        );
+        if (chargeErr.indeterminate) {
+          await recordFinanceAudit({
+            action: 'emv_charge_unknown',
+            amount: total,
+            reason: chargeErr.message,
+            actor: seller.name || req.crmUser?.email || null,
+            details: `לקוח=${customerName}`,
+          });
+        }
+        return res.status(chargeErr.status || 502).json({
+          error: emvFailureMessage(chargeErr),
+          code: chargeErr.code || 'emv_failed',
+          emvIndeterminate: !!chargeErr.indeterminate,
+        });
+      }
+      phase('icount:emv');
+    }
+
     let doc = null;
+    let docError = null;
     if (icount.isConfigured()) {
-      doc = await icount.createInvRec({
+      const createDoc = () => icount.createInvRec({
         clientId,
-        clientName: syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק',
+        clientName: customerName,
         items: lines.map((l) => ({
           description: l.description,
           unitprice: l.unitprice,
           quantity: l.quantity,
         })),
-        comment: `מכירה בדלפק · ${paymentMethod}${student?.name ? ` · עבור: ${student.name}` : ''}`,
+        comment: `מכירה בדלפק · ${method}${student?.name ? ` · עבור: ${student.name}` : ''}`,
         emailTo: sendEmail ? syncedParent?.email || walkInEmail : undefined,
-        paymentMethod,
+        paymentMethod: method,
         vattype: icountVatType(true),
+        cc: emvCharge
+          ? {
+            confirmationCode: emvCharge.confirmationCode,
+            last4: emvCharge.cardLast4,
+            cardType: emvCharge.cardType,
+            numOfPayments: emvCharge.numOfPayments || 1,
+          }
+          : null,
+        // מפתח ייחודי לחיוב הזה: ניסיון שני לא יוציא חשבונית שנייה על אותו כסף.
+        sanityString: emvCharge?.confirmationCode
+          ? `emv-${emvCharge.confirmationCode}`
+          : emvCharge?.ccBillLogId
+            ? `emv-bill-${emvCharge.ccBillLogId}`
+            : '',
       });
+
+      if (emvCharge) {
+        // הכסף כבר נגבה. כישלון בהפקת המסמך אינו מבטל את המכירה — הוא מדווח
+        // בגלוי כדי שיושלם, ולא בולע חיוב שקרה.
+        try {
+          doc = await createDoc();
+        } catch (err) {
+          docError = err.message || 'הפקת החשבונית נכשלה';
+          console.error('🧾 [POS] EMV charged but invoice failed:', docError);
+          await recordFinanceAudit({
+            action: 'emv_invoice_failed',
+            amount: total,
+            reason: docError,
+            actor: seller.name || req.crmUser?.email || null,
+            details: `אישור=${emvCharge.confirmationCode || '-'} כרטיס=${emvCharge.cardLast4 || '-'}`,
+          });
+        }
+      } else {
+        doc = await createDoc();
+      }
     }
     phase('icount:doc');
 
     let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
       total,
-      payment_method: paymentMethod,
+      payment_method: method,
+      cc_confirmation_code: emvCharge?.confirmationCode || null,
+      cc_last4: emvCharge?.cardLast4 || null,
+      cc_card_type: emvCharge?.cardType || null,
       status: 'paid',
       price_includes_vat: true,
       student_id: student?.id || null,
@@ -17254,16 +17390,39 @@ app.post('/api/pos/sale', async (req, res) => {
       console.log(`🎟️ [POS] coupon ${coupon.code} redeemed on sale ${sale.id} (₪${couponDiscount})`);
     }
 
-    const passes = await fulfillSalePasses({
-      sale,
-      lines,
-      studentId: student?.id,
-      parentId: syncedParent?.id || null,
-      docId: doc?.docId,
-      docNumber: doc?.docnum,
-    });
-    decrementInventory(lines);
-    await registerEntriesForSale({ lines, studentId: student?.id });
+    /**
+     * הנפקת הכרטיסיות והמלאי.
+     *
+     * בעסקת מסוף הכסף כבר עבר בשלב הזה, ולכן שגיאה כאן אינה מוחזרת כשגיאת
+     * מכירה: דלפקיסט שרואה „הפעולה נכשלה” אחרי שכרטיס חויב ינסה שוב, וזה
+     * חיוב כפול. הכשל מדווח כאזהרה לצד מכירה שהצליחה, כדי שיושלם ביד.
+     */
+    let passes = [];
+    let fulfillmentError = null;
+    try {
+      passes = await fulfillSalePasses({
+        sale,
+        lines,
+        studentId: student?.id,
+        parentId: syncedParent?.id || null,
+        docId: doc?.docId,
+        docNumber: doc?.docnum,
+      });
+      decrementInventory(lines);
+      await registerEntriesForSale({ lines, studentId: student?.id });
+    } catch (fulfillErr) {
+      if (method !== 'emv') throw fulfillErr;
+      fulfillmentError = fulfillErr.message || 'הנפקת הכרטיסייה נכשלה';
+      console.error(`🎫 [POS] EMV sale ${sale.id} charged but fulfilment failed:`, fulfillmentError);
+      await recordFinanceAudit({
+        action: 'emv_fulfilment_failed',
+        saleId: sale.id,
+        amount: total,
+        reason: fulfillmentError,
+        actor: seller.name || req.crmUser?.email || null,
+        details: `אישור=${emvCharge?.confirmationCode || '-'}`,
+      });
+    }
 
     db.insert('payments', {
       parent_id: syncedParent?.id || null,
@@ -17275,6 +17434,12 @@ app.post('/api/pos/sale', async (req, res) => {
       icount_client_id: clientId,
       icount_doc_id: doc?.docId || null,
       icount_doc_number: doc?.docnum || null,
+      // מזהה החיוב הוא מה שזיכוי חלקי דורש בהמשך, והוא אינו מופיע ב-doc/info.
+      // הרגע הזה הוא ההזדמנות היחידה לשמור אותו בלי חיפוש ביומן החיובים.
+      cc_bill_log_id: emvCharge?.ccBillLogId || null,
+      cc_confirmation_code: emvCharge?.confirmationCode || null,
+      cc_last4: emvCharge?.cardLast4 || null,
+      cc_card_type: emvCharge?.cardType || null,
       pos_sale_id: sale.id,
       paid_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -17361,11 +17526,13 @@ app.post('/api/pos/sale', async (req, res) => {
 
     phase('whatsapp');
 
-    const receipt = method === 'cash'
+    // גם עסקת אשראי במסוף מקבלת קבלה מודפסת — אבל בלי לפתוח את המגירה,
+    // שאין בה מה לעשות כשלא עבר מזומן.
+    const receipt = method === 'cash' || method === 'emv'
       ? buildSaleReceipt({
         sale,
         changeGiven,
-        openDrawer: true,
+        openDrawer: method === 'cash',
       })
       : null;
 
@@ -17377,6 +17544,17 @@ app.post('/api/pos/sale', async (req, res) => {
       sale,
       passes,
       doc,
+      // החיוב עבר אבל החשבונית לא יצאה — נאמר במפורש, כדי שיושלם ולא ייעלם.
+      documentError: docError,
+      fulfillmentError,
+      emv: emvCharge
+        ? {
+          confirmationCode: emvCharge.confirmationCode,
+          cardLast4: emvCharge.cardLast4,
+          cardType: emvCharge.cardType,
+          adopted: !!emvCharge.adopted,
+        }
+        : null,
       whatsappUrl,
       whatsappSent: invoiceWhatsappSent,
       whatsappError: invoiceWhatsappSent ? null : invoiceWhatsappError,
