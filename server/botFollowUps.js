@@ -35,6 +35,7 @@ export const FOLLOWUP_REASONS = new Set([
   'pending_signup',   // נשלח קישור הרשמה — לבדוק אם נרשמו
   'equipment_unpaid', // נשלח קישור ציוד — לבדוק אם הוסדר
   'form_not_filled',  // נשלח קישור לטופס — לבדוק אם מולא
+  'no_group_yet',     // הטופס חתום ואיש לא בחר קבוצה — ראו openStepSweep
   'general',
 ]);
 
@@ -386,6 +387,7 @@ export async function releaseFollowUpSend(db, claimId) {
 export function followUpMessage(row, {
   firstName = '',
   awaitingRegistration = [],
+  awaitingGroup = [],
   equipmentLine = '',
   formLine = '',
   selfTrainee = false,
@@ -400,6 +402,19 @@ export function followUpMessage(row, {
   // in overnight is asked about nothing at all.
   if (reason === 'form_not_filled') {
     return clean(formLine) ? `${hello} ${clean(formLine)}` : '';
+  }
+
+  // The form is signed and nobody ever chose a group. Nothing is wrong and
+  // nothing is owed — they simply stopped halfway, usually because the
+  // conversation ended on our side.
+  if (reason === 'no_group_yet') {
+    const waiting = (Array.isArray(awaitingGroup) ? awaitingGroup : []).map(clean).filter(Boolean);
+    if (!waiting.length) return '';
+    return [
+      `${hello} רק מוודא שלא נשכחתם 🙂`,
+      `${joinNames(waiting)} ${waiting.length > 1 ? 'רשומים' : 'רשום'} אצלנו עם טופס חתום, אבל עדיין לא נבחרה קבוצה.`,
+      'כתבו לי איזה יום נוח ואשלים את השיבוץ מכאן.',
+    ].join('\n');
   }
 
   if (reason === 'pending_signup' || reason === 'equipment_unpaid') {

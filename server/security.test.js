@@ -23,16 +23,35 @@ test('security log references are stable and do not reveal their input', () => {
   assert.equal(reference.length, 12);
 });
 
-test('employee onboarding invites are signed, expiring and purpose-bound', () => {
+test('legacy expiring employee onboarding invites stay signed and purpose-bound', () => {
   const secret = 'employee-test-secret';
   const now = 1_800_000_000_000;
-  const invite = issueEmployeeOnboardInvite({ secret, now, nonce: 'e'.repeat(24) });
+  const invite = issueEmployeeOnboardInvite({ secret, now, nonce: 'e'.repeat(24), permanent: false });
   const verified = verifyEmployeeOnboardInvite(invite.token, { secret, now });
   assert.equal(typeof verified?.inviteId, 'string');
   assert.equal(verified?.inviteId.length, 64);
   assert.equal(verified?.expiresAt, invite.expiresAt);
   assert.equal(verifyEmployeeOnboardInvite(`${invite.token}x`, { secret, now }), null);
   assert.equal(verifyEmployeeOnboardInvite(invite.token, { secret, now: invite.expiresAt + 1 }), null);
+});
+
+test('the permanent onboarding link is stable, never expires and dies on rotation', () => {
+  const secret = 'employee-test-secret';
+  const now = 1_800_000_000_000;
+  const nonce = 'e'.repeat(24);
+  const invite = issueEmployeeOnboardInvite({ secret, now, nonce });
+  // אותו nonce מייצר בדיוק את אותו קישור — זה מה שהופך אותו לקבוע.
+  assert.equal(issueEmployeeOnboardInvite({ secret, now: now + 999_999, nonce }).token, invite.token);
+  assert.equal(invite.expiresAt, 0);
+  const farFuture = now + 5 * 365 * 24 * 60 * 60 * 1000;
+  assert.equal(verifyEmployeeOnboardInvite(invite.token, { secret, now: farFuture })?.expiresAt, 0);
+  // החלפת ה-nonce היא הביטול: הקישור הישן כבר לא מזוהה כאותה הזמנה.
+  const rotated = issueEmployeeOnboardInvite({ secret, now, nonce: 'f'.repeat(24) });
+  assert.notEqual(
+    verifyEmployeeOnboardInvite(rotated.token, { secret, now })?.inviteId,
+    verifyEmployeeOnboardInvite(invite.token, { secret, now })?.inviteId
+  );
+  assert.equal(verifyEmployeeOnboardInvite(invite.token, { secret: 'other', now }), null);
 });
 
 test('OAuth state is provider-bound, expiring and tamper evident', () => {

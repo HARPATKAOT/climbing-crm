@@ -394,9 +394,12 @@ export function recordSaleInLedger(store, {
   reqUser,
 } = {}) {
   const method = String(paymentMethod || '').toLowerCase();
+  // אשראי במסוף אינו נוגע במגירה, ולכן הוא נרשם כמו סליקה בקישור: מופיע ביומן
+  // המשמרת לביקורת, ואינו משנה את המזומן הצפוי. עד כאן הוא לא נרשם כלל, ומכירה
+  // שלמה נעלמה מיומן הקופה.
   const action =
     method === 'cash' ? LEDGER_ACTIONS.SALE_CASH
-      : method === 'online' ? LEDGER_ACTIONS.SALE_ONLINE
+      : ['online', 'emv', 'credit', 'cc', 'card'].includes(method) ? LEDGER_ACTIONS.SALE_ONLINE
         : null;
   if (!action) return null;
 

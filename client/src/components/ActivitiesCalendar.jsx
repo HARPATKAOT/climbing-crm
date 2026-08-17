@@ -496,6 +496,115 @@ function hoursFromTimes(startHm, endHm) {
  * ולראות שעות ועלות משוערות לפי שעות האירוע והסכם השכר, והשורות עצמן נוצרות
  * ברגע שהאירוע נשמר. אחרי השמירה זו אותה רשימה, עם עריכה מלאה של כל שורה.
  */
+/**
+ * מה האירוע צריך, לפני שיודעים מי יבוא.
+ *
+ * „משמרת פתיחה צריכה מפעיל קיר ועוזר מדריך” הוא מידע שקיים הרבה לפני שיש שמות,
+ * והוא מה שהופך את טופס ההרשמה למשמרות לשימושי: הצוות רואה מקומות פנויים לפי
+ * תפקיד וכל אחד לוקח מה שהוא מוסמך אליו. בלי זה הטופס יכול היה לשאול רק על
+ * תפקיד אחד בכל פעם.
+ *
+ * נשמר בנפרד מהאירוע ובלחיצה, ולא כחלק משמירת הטופס, כי זו הגדרה תפעולית
+ * שמנהל משנה גם בלי לגעת בשאר פרטי האירוע.
+ */
+function StaffNeedsEditor({ activityId, roleOptions = [], draftNeeds = null, onDraftChange = null }) {
+  // אירוע שעוד לא נשמר אין לו מזהה לכתוב אליו, ולכן הוא עובד על הטיוטה שבטופס
+  // ונשמר יחד איתו. אחרת היה צריך לשמור, לפתוח מחדש, ורק אז להגיד מה צריך —
+  // וזה בדיוק הרגע שבו יודעים את זה.
+  const isDraft = !activityId;
+  const [stored, setStored] = useState(isDraft ? [] : null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const needs = isDraft ? (draftNeeds || []) : stored;
+
+  useEffect(() => {
+    if (isDraft) return undefined;
+    let cancelled = false;
+    fetch(`/api/activities/${encodeURIComponent(activityId)}/staff-needs`)
+      .then((r) => (r.ok ? r.json() : { needs: [] }))
+      .then((body) => { if (!cancelled) setStored(body.needs || []); })
+      .catch(() => { if (!cancelled) setStored([]); });
+    return () => { cancelled = true; };
+  }, [activityId, isDraft]);
+
+  const save = async (next) => {
+    if (isDraft) {
+      onDraftChange?.(next);
+      return;
+    }
+    setStored(next);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/activities/${encodeURIComponent(activityId)}/staff-needs`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs: next }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(body.error || 'השמירה נכשלה');
+      }
+    } catch {
+      setError('שגיאת רשת');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const countOf = (role) => (needs || []).find((n) => n.role === role)?.count || 0;
+
+  /** לחיצה על תפקיד מוסיפה מקום; לחיצה נוספת מוסיפה עוד, עד שמאפסים. */
+  const bump = (role, by) => {
+    const current = countOf(role);
+    const next = Math.max(0, Math.min(20, current + by));
+    const without = (needs || []).filter((n) => n.role !== role);
+    save(next === 0 ? without : [...without, { role, count: next }]);
+  };
+
+  if (needs === null) return null;
+  const total = needs.reduce((sum, n) => sum + n.count, 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>מה האירוע צריך</span>
+        {total > 0
+          ? <span className="badge badge-amber">דרושים {total}</span>
+          : <span style={{ opacity: 0.75 }}>לפי סוג הפעילות</span>}
+        {busy && <Loader2 size={12} className="spin" />}
+        {error && <span style={{ color: 'var(--red)' }}>{error}</span>}
+      </div>
+      <div className="choice-row">
+        {roleOptions.map(({ role, key }) => {
+          const count = countOf(role);
+          const Icon = roleIcon(role, key);
+          return (
+            <button
+              type="button"
+              key={role}
+              className={`choice-pill ${count > 0 ? 'active' : ''}`}
+              // הצבע והאייקון של התפקיד, ולא גוון אחיד: אותו „הפעלת קיר” נראה
+              // כאן בדיוק כמו בכרטיס העובד וברשימת השיבוצים, וזה מה שמאפשר
+              // לזהות אותו בלי לקרוא.
+              style={{ '--choice-accent': roleColor(role, key) }}
+              title={count > 0 ? 'לחיצה מוסיפה עוד מקום; לחיצה ימנית מורידה' : 'לחיצה מוסיפה מקום'}
+              onClick={() => bump(role, 1)}
+              onContextMenu={(e) => { e.preventDefault(); bump(role, -1); }}
+            >
+              <Icon size={13} aria-hidden="true" />
+              {role}{count > 0 ? ` ×${count}` : ''}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+        המקומות האלה מוצעים לצוות בטופס ההרשמה למשמרות, וכל אחד בוחר תפקיד שהוא מוסמך אליו.
+      </div>
+    </div>
+  );
+}
+
 function WorkAssignmentsBlock({
   activityId,
   activityType = '',
@@ -808,6 +917,13 @@ function WorkAssignmentsBlock({
         <Users aria-hidden="true" />
         עובדים במשמרת
       </div>
+
+      <StaffNeedsEditor
+        activityId={activityId}
+        roleOptions={payableRoles}
+        draftNeeds={draft?.staffNeeds}
+        onDraftChange={draft?.setStaffNeeds}
+      />
 
       {/* הוספת עובד לאירוע: תפקיד, שכר, שעות, ואז מי — בסדר הזה, כי התפקיד
           הוא שקובע מי בכלל מופיע ברשימת העובדים שאפשר לשבץ.
@@ -2465,6 +2581,9 @@ function RegularActivityModal({
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
                   setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                  // מה האירוע צריך — נבחר לפני שיש לו מזהה, ונשמר מיד אחרי היצירה.
+                  staffNeeds: form._pending_staff_needs || [],
+                  setStaffNeeds: (needs) => setForm((prev) => ({ ...prev, _pending_staff_needs: needs })),
                   details: form._pending_staff_details || {},
                   setDetails: (updater) => setForm((prev) => ({
                     ...prev,
@@ -5485,6 +5604,8 @@ export default function ActivitiesCalendar({
         _pending_staff_times: pendingStaffTimes = null,
         // פרטי שכר ונסיעות שנערכו לכל עובד עוד לפני שלאירוע היה מזהה.
         _pending_staff_details: pendingStaffDetails = {},
+        // אילו תפקידים האירוע צריך — נבחרו בהקמה, נשמרים ברגע שיש מזהה.
+        _pending_staff_needs: pendingStaffNeeds = [],
         ...body
       } = payload;
       // אירוע חדש נשלח בלי כתובת הרשמה. אם טופס שכבר נשמר פעם החזיק את הכתובת
@@ -5506,6 +5627,16 @@ export default function ActivitiesCalendar({
         pushUndo({ type: 'activity_update', label: 'עריכת אירוע', before: { ...before } });
       } else if (!isEdit && data?.id) {
         pushUndo({ type: 'activity_create', label: 'יצירת אירוע', createdId: data.id });
+      }
+
+      // האירוע קיים — עכשיו אפשר לשמור עליו את מה שנבחר בהקמה. נכשל בשקט:
+      // זו הגדרה שאפשר לתקן מתוך האירוע, ואזהרה עליה תבלבל יותר משתועיל.
+      if (!isEdit && data?.id && pendingStaffNeeds.length) {
+        fetch(`/api/activities/${encodeURIComponent(data.id)}/staff-needs`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ needs: pendingStaffNeeds }),
+        }).catch(() => {});
       }
 
       // The event now exists, so the employees picked in the form become real

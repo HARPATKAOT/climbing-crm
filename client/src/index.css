@@ -2245,6 +2245,65 @@ select option, select optgroup {
 .pos-seller-field > span > svg { color: #fb7185; }
 .pos-seller-field > small { color: var(--text-3); font-size: 10px; line-height: 1.45; }
 
+/* === „איך משלמים?” — אמצעי התשלום בשורה אחת ===
+   שורה אחת תמיד: אמצעי תשלום שגלש לשורה שנייה נראה כמו קטגוריה אחרת ולא
+   כאפשרות שוות ערך. מספר העמודות נקבע במקום השימוש, כי „אשראי במסוף” מוצג
+   רק כשיש מכשיר מחובר.
+   העגלה צרה בחלק מהמסכים, ושם שם ארוך כמו „אשראי בקישור” נחתך לצד האייקון.
+   מתחת לרוחב הזה האייקון עולה מעל הכתוב, וכל רוחב העמודה נשאר לשם. */
+.pos-pay-methods {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  container-type: inline-size;
+}
+.pos-pay-method {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: right;
+  color: inherit;
+}
+.pos-pay-method-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pos-pay-method-text { min-width: 0; overflow: hidden; }
+.pos-pay-method-label {
+  display: block;
+  font-weight: 700;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pos-pay-method-hint {
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+@container (max-width: 540px) {
+  .pos-pay-method {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 5px;
+    padding: 10px 6px;
+  }
+  .pos-pay-method-text { width: 100%; }
+}
+
 /* === התפלגות רמות (מסך מבחנים) === */
 .level-dist-plot {
   position: relative;

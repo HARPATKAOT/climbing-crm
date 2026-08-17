@@ -138,6 +138,30 @@ export async function loadEquipmentInfo() {
  * Single-visit wall entry products from the pricelist category «כניסה».
  * Memberships and punch cards live under other categories and are not listed.
  */
+/**
+ * Punch cards and memberships, from the catalogue category the owner keeps them
+ * in. Quoting a price is answering a question; selling one is a counter
+ * transaction with a payment behind it, and that stays with a person.
+ */
+export function passProductsFromPricelist(pricelist = []) {
+  return (pricelist || [])
+    .filter((p) => p && p.active !== false)
+    .filter((p) => {
+      const cats = [
+        ...(Array.isArray(p.categories) ? p.categories : []),
+        p.category,
+      ].filter(Boolean).map((c) => String(c));
+      if (cats.some((c) => /כרטיסי|מנוי/.test(c))) return true;
+      return /(?:^|\s)(?:כרטיסיי?ה|מנוי)(?:\s|$)/.test(String(p.name || '').trim());
+    })
+    .map((p) => ({
+      שם: String(p.name || '').trim(),
+      מחיר: Number(p.price) || 0,
+      הערה: String(p.description || '').trim(),
+    }))
+    .filter((p) => p.שם && p.מחיר > 0);
+}
+
 export function entryProductsFromPricelist(pricelist = []) {
   return (pricelist || [])
     .filter((p) => p && p.active !== false)

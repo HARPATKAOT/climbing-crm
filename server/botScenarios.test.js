@@ -956,6 +956,146 @@ test('רשום במתנ״ס ומשובץ בקבוצה — העברה בין קב
   });
 });
 
+test('כרטיס כפול שאוחד לארכיון אינו חוסם את השיבוץ', async () => {
+  // שתי רשומות של נעמי באותו תיק — אחת שאוחדה לארכיון — והבוט ענה שלושה ימים
+  // „יש כמה ילדים מתאימים”. מי שמסמן כפילות כארכיון לא אמור להידרש גם למחוק
+  // אותה כדי שהשיבוץ יחזור לעבוד.
+  await withSeed({
+    parents: [PARENT],
+    students: [
+      childYotam({ id: 's-live', name: 'נעמי כהן', status: 'details_completed' }),
+      childYotam({ id: 's-merged', name: 'נעמי כהן', status: 'archived' }),
+    ],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-live')],
+    participation_waivers: [waiverFor('s-live')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: 'נעמי', grade: 'ג', frequency: 'פעם בשבוע',
+    });
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.שובץ, 'נעמי כהן');
+    assert.equal(student('s-live').groupId, GROUP_GD.id);
+    assert.equal(student('s-merged').groupId, null);
+  });
+});
+
+test('הכרטיס אומר איזה צעד בהרשמה עדיין פתוח, עד שכולם נסגרו', async () => {
+  // הבוט נהג לסגור שיחה בכל שלב שסיים — „הפרטים התקבלו”, „הילד משובץ” —
+  // והפער התגלה שבועות אחר כך כילד בלי קבוצה או ציוד שאיש לא שילם עליו.
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'health_signed', groupId: null })],
+    groups: [GROUP_GD],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const noForm = await tools.getFamilyCard();
+    assert.match(noForm.ילדים[0].הצעד_הבא, /להשלים את/);
+    assert.equal(noForm.ילדים[0].הרשמה_שלמה, false);
+    assert.match(noForm.הערת_הרשמה, /אין לומר «אין צורך בפעולה נוספת»/);
+  });
+
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'health_signed', groupId: null })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const card = await tools.getFamilyCard();
+    assert.match(card.ילדים[0].הצעד_הבא, /לבחור קבוצה/);
+  });
+
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const card = await tools.getFamilyCard();
+    assert.match(card.ילדים[0].הצעד_הבא, /להירשם במתנ״ס/);
+  });
+
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'registered', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+    student_equipment: [{ id: 'se-1', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const card = await tools.getFamilyCard();
+    assert.match(card.ילדים[0].הצעד_הבא, /להסדיר את הציוד/);
+  });
+
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'registered', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-yotam')],
+    participation_waivers: [waiverFor('s-yotam')],
+    student_equipment: [{ id: 'se-1', student_id: 's-yotam', item_type: 'shoes', payment_status: 'own' }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const card = await tools.getFamilyCard();
+    assert.equal(card.ילדים[0].הרשמה_שלמה, true);
+    assert.equal(card.ילדים[0].הצעד_הבא, undefined);
+    assert.match(card.הערת_הרשמה, /ההרשמה שלמה/);
+  });
+});
+
+test('סתירה בין מה שההורה אומר לתאריך בכרטיס מתוקנת, לא עוצרת', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ birthDate: '2017-05-01' })],
+    groups: [GROUP_GD],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+
+    const fixed = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2015-05-01' });
+    assert.equal(fixed.עודכן, true);
+    assert.equal(student('s-yotam').birthDate, '2015-05-01');
+
+    // אותו תאריך שוב — לא „עודכן”, כדי שלא ייאמר ללקוח שינוי שלא היה.
+    const again = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2015-05-01' });
+    assert.equal(again.עודכן, false);
+    assert.equal(again.כבר_זהה, true);
+
+    // שנה שהוקלדה שגוי מזיזה שכבת גיל שלמה — ולכן נבדקת.
+    const silly = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2925-05-01' });
+    assert.match(silly.error || '', /אינו סביר/);
+    const malformed = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '1.5.2015' });
+    assert.match(malformed.error || '', /YYYY-MM-DD/);
+    assert.equal(student('s-yotam').birthDate, '2015-05-01');
+  });
+});
+
+test('אח מהעבר בארכיון אינו הופך «נרשמנו» לשאלה על מי מדובר', async () => {
+  // אפרת כתבה „נרשמתי גם במתנס וגם מילאתי כבר הכל”. בכרטיס שני ילדים — אחד
+  // בארכיון משנה שעברה — והדיווח נפל על „יש כמה ילדים מתאימים”, כך שהיא קיבלה
+  // העברה לצוות במקום אישור.
+  await withSeed({
+    parents: [PARENT],
+    students: [
+      childYotam({ id: 's-open', name: 'איתמר כהן', status: 'awaiting_centre_confirmation', groupId: GROUP_GD.id }),
+      childYotam({ id: 's-gone', name: 'יערה כהן', status: 'archived', groupId: null }),
+    ],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-open')],
+    participation_waivers: [waiverFor('s-open')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({});
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.נרשם_לבדיקה, 'איתמר כהן');
+  });
+});
+
 test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב זה — הדיווח נרשם בכל זאת', async () => {
   // אביבית כתבה פעמיים שהיא השלימה הרשמה, ופעמיים קיבלה „אני לא רואה
   // שהפעולה נקלטה במערכת”. היא לא שאלה על פעולה — היא דיווחה על אחת.

@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode, CreditCard,
-  AtSign, MessageCircle,
+  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode,
+  AtSign, MessageCircle, SmartphoneNfc, AlertTriangle,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -29,10 +29,17 @@ import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { comparePosShortcuts, isPosShortcut } from '../utils/posShortcuts.js';
 
-// שתי דרכים בלבד, וכל אחת בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
+// כל דרך בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
+// „אשראי במסוף” מופיע רק כשיש מכשיר מחובר לחשבון — כפתור שמוביל לשגיאה
+// גרוע יותר מכפתור שאינו קיים.
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', hint: 'שטרות ומטבעות', icon: Banknote, color: '#34D399' },
-  { id: 'online', label: 'אשראי בקישור', hint: 'נשלח לטלפון הלקוח', icon: CreditCard, color: '#60A5FA' },
+  // מכשיר שמצמידים אליו כרטיס — לא גל NFC מופשט וגם לא עוד כרטיס אשראי,
+  // ששניהם לא נבדלים בהצצה מ„אשראי בקישור” שלידו.
+  { id: 'emv', label: 'אשראי במסוף', hint: 'העברת כרטיס במכשיר', icon: SmartphoneNfc, color: '#A78BFA' },
+  // קישור, לא כרטיס: כרטיס אשראי מצויר הוא בדיוק מה שקורה במסוף שלידו, ושתי
+  // האפשרויות נראו כמו אותו דבר. זה גם האייקון של „פתח עמוד סליקה” באותו מסך.
+  { id: 'online', label: 'אשראי בקישור', hint: 'נשלח לטלפון הלקוח', icon: Link2, color: '#60A5FA' },
 ];
 
 /**
@@ -177,7 +184,6 @@ export default function PosSale({
   // ריק בכוונה: אמצעי התשלום נבחר, לא ננחש. ברירת מחדל „מזומן” גררה מכירות
   // שנרשמו כמזומן כי איש לא שם לב שהיא כבר מסומנת.
   const [paymentMethod, setPaymentMethod] = useState('');
-  const [collectionIntent, setCollectionIntent] = useState('');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsapp, setSendWhatsapp] = useState(true);
   const [quoteIncludePaymentLink, setQuoteIncludePaymentLink] = useState(true);
@@ -217,6 +223,13 @@ export default function PosSale({
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
   const [cashSessionOpen, setCashSessionOpen] = useState(false);
+  // מסוף הסליקה הפיזי: האם הוא מחובר, והאם ממתינים לו כרגע.
+  const [emvInfo, setEmvInfo] = useState({ available: false, reason: '' });
+  const [emvWaiting, setEmvWaiting] = useState(false);
+  // אחרי חיוב שהתשובה עליו אבדה — הכסף אולי נגבה, ואסור לחייב שוב לפני בדיקה.
+  const [emvUnresolved, setEmvUnresolved] = useState(false);
+  const [emvCharges, setEmvCharges] = useState(null);
+  const [emvLookupBusy, setEmvLookupBusy] = useState(false);
   const [lastChange, setLastChange] = useState(null);
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
@@ -257,14 +270,17 @@ export default function PosSale({
 
   const refresh = useCallback(async () => {
     try {
-      const [pRes, sRes, parRes, cRes, sessRes] = await Promise.all([
+      const [pRes, sRes, parRes, cRes, sessRes, emvRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/students'),
         fetch('/api/parents'),
         fetch('/api/product-categories'),
         fetch('/api/cash-register/session'),
+        // זמינות מסוף הסליקה. תשובה שלילית אינה שגיאת טעינה — היא רק מסתירה
+        // את אמצעי התשלום הזה, ושאר הקופה ממשיכה לעבוד.
+        fetch('/api/pos/emv/status').catch(() => null),
       ]);
-      const [p, s, par, cats, sess] = await Promise.all([
+      const [p, s, par, cats, sess, emv] = await Promise.all([
         pRes.ok ? pRes.json() : [],
         sRes.ok ? sRes.json() : [],
         parRes.ok ? parRes.json() : [],
@@ -272,7 +288,15 @@ export default function PosSale({
         sessRes.ok
           ? sessRes.json().catch(() => ({ can_sell_cash: false }))
           : Promise.resolve({ can_sell_cash: false }),
+        emvRes?.ok
+          ? emvRes.json().catch(() => ({ available: false }))
+          : Promise.resolve({ available: false }),
       ]);
+      // תקלת רשת רגעית לא מסירה אמצעי תשלום מהמסך באמצע משמרת — רק תשובה
+      // מפורשת מהשרת משנה את הזמינות.
+      if (emvRes?.ok) {
+        setEmvInfo({ available: !!emv?.available, reason: emv?.reason || '' });
+      }
       setPricelist(
         Array.isArray(p)
           ? p
@@ -507,7 +531,6 @@ export default function PosSale({
     setAppliedCoupon(null);
     setDismissedCoupons(new Set());
     setPaymentMethod('');
-    setCollectionIntent('');
     setTenderedDenoms({});
     setEditingDiscountId(null);
     setShowCustomForm(false);
@@ -1048,7 +1071,7 @@ export default function PosSale({
     seller_name: seller?.name || undefined,
   });
 
-  const validate = ({ requireCollectionIntent = true } = {}) => {
+  const validate = () => {
     if (!cart.length) {
       setError('הוסיפו לפחות פריט אחד לעגלה');
       return false;
@@ -1096,11 +1119,15 @@ export default function PosSale({
       return false;
     }
     if (!paymentMethod) {
-      setError('יש לבחור איך התשלום מתקבל — מזומן או סליקה בקישור');
+      setError('יש לבחור איך התשלום מתקבל');
       return false;
     }
-    if (requireCollectionIntent && paymentMethod === 'online' && !collectionIntent) {
-      setError('יש לבחור אם הקישור הוא לחוב קיים או רק אפשרות לרכישה');
+    if (paymentMethod === 'emv' && !emvInfo.available) {
+      setError(emvInfo.reason || 'מסוף הסליקה לא זמין כרגע');
+      return false;
+    }
+    if (paymentMethod === 'emv' && !(Number(total) > 0)) {
+      setError('לא ניתן לחייב במסוף סכום 0 — שנו מחיר או בחרו אמצעי תשלום אחר');
       return false;
     }
     if (paymentMethod === 'online' && !(Number(total) > 0)) {
@@ -1126,7 +1153,7 @@ export default function PosSale({
   };
 
   const validateQuote = () => {
-    if (!validate({ requireCollectionIntent: false })) return false;
+    if (!validate()) return false;
     if (quoteIncludePaymentLink && !(Number(total) > 0)) {
       setError('לא ניתן לכלול קישור תשלום בסכום 0 — בטלו את הסימון או שנו מחיר');
       return false;
@@ -1168,9 +1195,16 @@ export default function PosSale({
         throw Object.assign(new Error(data.error || 'הפעולה נכשלה'), {
           code: data.code,
           blocked: data.blocked,
+          emvIndeterminate: data.emvIndeterminate,
         });
       }
       setResult(data);
+      // רק מכירה שנשאה חיוב אשראי סוגרת את האזהרה. מכירה במזומן שנעשתה אחריה
+      // אינה מעידה דבר על החיוב התלוי, ואסור לה להעלים אותו מהמסך.
+      if (data.emv) {
+        setEmvUnresolved(false);
+        setEmvCharges(null);
+      }
 
       // שום חלון לא נפתח. באמצע מכירה, לשונית שנפתחת גוזלת את המסך ומשאירה
       // את הדלפקיסט לשלוח ביד — ואם הוא שכח, איש לא יודע שההודעה לא יצאה.
@@ -1220,7 +1254,6 @@ export default function PosSale({
       setCart([]);
       setTenderedDenoms({});
       setPaymentMethod('');
-      setCollectionIntent('');
       setShowQuoteOptions(false);
       clearCustomer();
       setAnonymousSale(false);
@@ -1234,6 +1267,9 @@ export default function PosSale({
       if (err.code === 'wall_documents_required') {
         setDocumentsBlock(err.blocked?.length ? err.blocked : []);
       }
+      // תשובה שלא חזרה מהמסוף. העגלה נשארת, אבל כפתור הגבייה ננעל עד שנדע
+      // אם הכסף נגבה — חיוב חוזר כאן הוא חיוב כפול.
+      if (err.emvIndeterminate) setEmvUnresolved(true);
     } finally {
       setBusy(false);
     }
@@ -1269,20 +1305,49 @@ export default function PosSale({
     }
   };
 
-  const handleCheckout = async () => {
+  const handleCheckout = async (emvConfirmationCode = '') => {
     const couponCode = appliedCoupon?.code || undefined;
     if (paymentMethod === 'online') {
       // The link carries the discounted amount and the benefit is held aside
       // until the payment actually lands.
-      await runAction('/api/pos/payment-link', { couponCode, collectionIntent });
+      await runAction('/api/pos/payment-link', { couponCode });
       return;
     }
     const tendered = Number(tenderedAmount);
-    await runAction('/api/pos/sale', {
-      paymentMethod,
-      couponCode,
-      tenderedAmount: tendered,
-    });
+    // המסוף ממתין ללקוח שיעביר כרטיס, ולכן הקריאה הזאת ארוכה בהרבה מכל אחרת.
+    // המסך אומר במפורש למה מחכים, אחרת „מעבד...” נראה כמו תקיעה.
+    if (paymentMethod === 'emv') setEmvWaiting(true);
+    try {
+      await runAction('/api/pos/sale', {
+        paymentMethod,
+        couponCode,
+        tenderedAmount: tendered,
+        emvConfirmationCode: emvConfirmationCode || undefined,
+      });
+    } finally {
+      setEmvWaiting(false);
+    }
+  };
+
+  /**
+   * איתור חיוב שכבר בוצע במסוף ולא הופקה עליו חשבונית.
+   *
+   * זה מה שעושים במקום לחייב שוב כשתשובת המסוף אבדה. מה שנמצא כאן משלים את
+   * אותה מכירה עצמה — עם אותה עגלה ואותו לקוח — ולא פותח עסקה חדשה.
+   */
+  const lookupEmvCharges = async () => {
+    setEmvLookupBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/pos/emv/orphan-charges?amount=${encodeURIComponent(total)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'בדיקת החיובים נכשלה');
+      setEmvCharges(Array.isArray(data.charges) ? data.charges : []);
+    } catch (err) {
+      setError(err.message || 'בדיקת החיובים נכשלה');
+    } finally {
+      setEmvLookupBusy(false);
+    }
   };
 
   // A medical hold is a decision, not missing paperwork: no form lifts it, so
@@ -1296,6 +1361,12 @@ export default function PosSale({
     return roundMoney(tendered - total);
   }, [paymentMethod, tenderedAmount, total]);
 
+  // מסוף בלי מכשיר מחובר אינו מוצג כלל, ולכן מספר העמודות נגזר מכאן ולא קבוע.
+  const visiblePayMethods = useMemo(
+    () => PAY_METHODS.filter((m) => m.id !== 'emv' || emvInfo.available),
+    [emvInfo.available]
+  );
+
   const selectPaymentMethod = (id) => {
     if (id === 'cash' && !cashSessionOpen) {
       setPaymentMethod('online');
@@ -1304,7 +1375,6 @@ export default function PosSale({
     }
     setCashClosedHint(false);
     setPaymentMethod(id);
-    if (id !== 'online') setCollectionIntent('');
   };
 
   const handleCashOpened = async () => {
@@ -1313,7 +1383,6 @@ export default function PosSale({
     setCashClosedHint(false);
     setShowOpenCash(false);
     setPaymentMethod('cash');
-    setCollectionIntent('');
     await refresh();
   };
 
@@ -2401,16 +2470,17 @@ export default function PosSale({
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: paymentMethod ? 'var(--text-2)' : '#FBBF24' }}>
               איך משלמים?
             </div>
+            {/* מבנה ותצוגה ב-index.css (`.pos-pay-methods`). כאן נשאר רק מה
+                שתלוי בנתונים: מספר העמודות והצבע של האמצעי הנבחר. */}
             <div
+              className="pos-pay-methods"
               style={{
-                display: 'flex', gap: 10, flexWrap: 'wrap',
-                padding: 10,
-                borderRadius: 10,
+                gridTemplateColumns: `repeat(${visiblePayMethods.length}, minmax(0, 1fr))`,
                 border: `1px solid ${paymentMethod ? 'var(--border)' : 'rgba(251, 191, 36, 0.55)'}`,
                 background: paymentMethod ? 'transparent' : 'rgba(251, 191, 36, 0.06)',
               }}
             >
-              {PAY_METHODS.map((m) => {
+              {visiblePayMethods.map((m) => {
                 const Icon = m.icon;
                 const chosen = paymentMethod === m.id;
                 const cashBlocked = m.id === 'cash' && !cashSessionOpen;
@@ -2418,34 +2488,25 @@ export default function PosSale({
                   <button
                     key={m.id}
                     type="button"
+                    className="pos-pay-method"
                     onClick={() => selectPaymentMethod(m.id)}
-                    title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : undefined}
+                    title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : m.hint}
                     style={{
-                      flex: '1 1 150px',
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '10px 12px',
-                      borderRadius: 10,
-                      cursor: 'pointer',
-                      textAlign: 'right',
                       opacity: cashBlocked ? 0.55 : 1,
                       border: `1px solid ${chosen ? m.color : 'var(--border)'}`,
                       background: chosen ? `${m.color}1f` : 'var(--bg-input)',
                       boxShadow: chosen ? `0 0 0 1px ${m.color}` : 'none',
-                      color: 'inherit',
                     }}
                   >
                     <span
-                      style={{
-                        width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: `${m.color}22`, color: m.color,
-                      }}
+                      className="pos-pay-method-icon"
+                      style={{ background: `${m.color}22`, color: m.color }}
                     >
                       <Icon size={19} />
                     </span>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ display: 'block', fontWeight: 700, fontSize: 13.5 }}>{m.label}</span>
-                      <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>{m.hint}</span>
+                    <span className="pos-pay-method-text">
+                      <span className="pos-pay-method-label">{m.label}</span>
+                      <span className="pos-pay-method-hint">{m.hint}</span>
                     </span>
                   </button>
                 );
@@ -2453,66 +2514,98 @@ export default function PosSale({
             </div>
           </div>
 
-          {paymentMethod === 'online' && (
+          {paymentMethod === 'emv' && !emvWaiting && !emvUnresolved && (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
+              לחיצה על „שלח חיוב למסוף” מדליקה את המכשיר עם הסכום. הלקוח מעביר כרטיס,
+              והחשבונית מופקת מיד אחרי האישור.
+            </div>
+          )}
+
+          {emvWaiting && (
             <div
-              style={{
-                marginTop: 12,
-                padding: 10,
-                borderRadius: 10,
-                border: `1px solid ${collectionIntent ? 'var(--border)' : 'rgba(251, 191, 36, 0.62)'}`,
-                background: collectionIntent ? 'transparent' : 'rgba(251, 191, 36, 0.06)',
-              }}
+              className="alert alert-info"
+              style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}
             >
-              <div style={{ fontSize: 12.5, fontWeight: 750, marginBottom: 8, color: collectionIntent ? 'var(--text-2)' : '#FBBF24' }}>
-                מה המשמעות של הקישור? חובה לבחור
+              <SmartphoneNfc size={22} style={{ color: '#A78BFA', flexShrink: 0 }} />
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 14 }}>
+                  המסוף ממתין לכרטיס · ₪{total.toLocaleString()}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                  תנו ללקוח להעביר או להצמיד כרטיס. אל תסגרו את המסך ואל תלחצו שוב —
+                  התשובה תגיע לכאן.
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {[
-                  {
-                    id: 'debt',
-                    label: 'חוב קיים',
-                    hint: 'המוצר נמסר, השירות בוצע או שהלקוח התחייב. יופיע בדוח החובות.',
-                    color: '#F59E0B',
-                  },
-                  {
-                    id: 'offer',
-                    label: 'אפשרות לרכישה',
-                    hint: 'הלקוח עדיין מחליט. הקישור לא יופיע בדוח החובות.',
-                    color: '#818CF8',
-                  },
-                ].map((intent) => {
-                  const chosen = collectionIntent === intent.id;
-                  return (
-                    <button
-                      key={intent.id}
-                      type="button"
-                      aria-pressed={chosen}
-                      onClick={() => {
-                        setCollectionIntent(intent.id);
-                        setError('');
-                      }}
-                      style={{
-                        flex: '1 1 190px',
-                        padding: '11px 12px',
-                        borderRadius: 10,
-                        cursor: 'pointer',
-                        textAlign: 'right',
-                        border: `1px solid ${chosen ? intent.color : 'var(--border)'}`,
-                        background: chosen ? `${intent.color}1f` : 'var(--bg-input)',
-                        boxShadow: chosen ? `0 0 0 1px ${intent.color}` : 'none',
-                        color: 'inherit',
-                      }}
-                    >
-                      <span style={{ display: 'block', fontWeight: 800, fontSize: 13.5, color: chosen ? intent.color : 'inherit' }}>
-                        {intent.label}
-                      </span>
-                      <span style={{ display: 'block', marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-3)' }}>
-                        {intent.hint}
-                      </span>
-                    </button>
-                  );
-                })}
+            </div>
+          )}
+
+          {/* חיוב שלא ידוע אם עבר. הכפתור היחיד שנפתח כאן הוא בדיקה, לא חיוב
+              נוסף: מי שלוחץ „נסה שוב” אחרי שהכרטיס כבר חויב מחייב פעמיים. */}
+          {emvUnresolved && (
+            <div className="alert alert-warn" style={{ marginTop: 12, display: 'block' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800 }}>
+                <AlertTriangle size={16} /> חיוב שלא אושר במסך
               </div>
+              <div style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
+                בדקו במכשיר אם העסקה אושרה. אם כן — הכסף כבר נגבה, ומכאן רק משלימים
+                את החשבונית. אם לא — אפשר לבטל את ההמתנה ולחייב מחדש.
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={emvLookupBusy || busy}
+                  onClick={lookupEmvCharges}
+                >
+                  {emvLookupBusy ? 'בודק...' : 'בדיקת חיוב במסוף'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setEmvUnresolved(false);
+                    setEmvCharges(null);
+                    setError('');
+                  }}
+                >
+                  המכשיר לא חייב — אפשר לחייב שוב
+                </button>
+              </div>
+              {emvCharges && emvCharges.length === 0 && (
+                <div style={{ fontSize: 12.5, marginTop: 10, color: 'var(--text-3)' }}>
+                  לא נמצא חיוב על ₪{total.toLocaleString()} ללא חשבונית. אם המכשיר לא הציג
+                  אישור — סימן שלא חויב, ואפשר לחייב שוב.
+                </div>
+              )}
+              {emvCharges?.map((charge) => (
+                <div
+                  key={charge.confirmationCode}
+                  style={{
+                    marginTop: 10, padding: 10, borderRadius: 8,
+                    border: '1px solid var(--border)', background: 'var(--bg-input)',
+                    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 180, fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 700 }}>
+                      ₪{Number(charge.amount).toLocaleString()} · אישור {charge.confirmationCode}
+                    </div>
+                    <div style={{ color: 'var(--text-3)' }}>
+                      {[charge.cardType, charge.cardLast4 && `כרטיס ${charge.cardLast4}`, charge.holderName]
+                        .filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm"
+                    disabled={busy}
+                    onClick={() => handleCheckout(charge.confirmationCode)}
+                  >
+                    זה החיוב — הפק חשבונית
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -2828,13 +2921,45 @@ export default function PosSale({
               )}
             </div>
           )}
-          {result && !result.payUrl && !lastPayUrl && (
+          {/* הכסף עבר והחשבונית לא יצאה. זה חייב להיאמר בנפרד מ„הפעולה הושלמה”,
+              אחרת חיוב אמיתי נשאר בלי מסמך ואיש לא יודע שצריך להשלים אותו. */}
+          {result?.documentError && (
+            <div className="alert alert-error" style={{ marginTop: 12, display: 'block' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800 }}>
+                <AlertTriangle size={16} /> הכרטיס חויב, החשבונית לא הופקה
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
+                {result.emv?.confirmationCode
+                  ? `מספר אישור ${result.emv.confirmationCode}`
+                  : ''}
+                {result.emv?.cardLast4 ? ` · כרטיס ${result.emv.cardLast4}` : ''}
+                {' — '}
+                {result.documentError}
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 6 }}>
+                המכירה נרשמה. יש להוציא את החשבונית ב-iCount על החיוב הזה. אל תחייבו שוב.
+              </div>
+            </div>
+          )}
+          {result?.fulfillmentError && (
+            <div className="alert alert-warn" style={{ marginTop: 12, display: 'block' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800 }}>
+                <AlertTriangle size={16} /> התשלום עבר, ההרשאה לא הונפקה
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
+                {result.fulfillmentError} — יש להפעיל את הכרטיסייה או המנוי ידנית בתיק הלקוח.
+                אל תמכרו שוב.
+              </div>
+            </div>
+          )}
+          {result && !result.payUrl && !lastPayUrl && !result.documentError && (
             <div className="alert alert-success" style={{ marginTop: 12 }}>
               <CheckCircle2 size={14} />
               <span>
                 {result.doc?.docnum
                   ? `מסמך ${result.doc.docnum} הופק`
                   : 'הפעולה הושלמה'}
+                {result.emv?.cardLast4 ? ` · אשראי ${result.emv.cardLast4}` : ''}
                 {result.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
                 {sendWhatsapp ? (result.whatsappSent ? ' · החשבונית נשלחה בוואטסאפ' : ' · החשבונית לא נשלחה') : ''}
               </span>
@@ -2851,16 +2976,23 @@ export default function PosSale({
               type="button"
               className="btn btn-primary"
               style={{ flex: 1, paddingBlock: 12 }}
-              disabled={busy}
-              onClick={handleCheckout}
+              disabled={busy || (paymentMethod === 'emv' && emvUnresolved)}
+              title={paymentMethod === 'emv' && emvUnresolved
+                ? 'יש חיוב שלא ידוע אם עבר — בדקו אותו לפני חיוב נוסף'
+                : undefined}
+              onClick={() => handleCheckout()}
             >
               {busy
-                ? 'מעבד...'
+                ? (emvWaiting ? 'ממתין למסוף...' : 'מעבד...')
                 : !paymentMethod
                   ? 'בחרו אמצעי תשלום'
-                  : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
+                  : paymentMethod === 'online'
+                    ? 'שלח קישור לתשלום'
+                    : paymentMethod === 'emv'
+                      ? 'שלח חיוב למסוף'
+                      : 'גבה והפק חשבונית'}
             </button>
-            {paymentMethod === 'cash' && (
+            {(paymentMethod === 'cash' || paymentMethod === 'emv') && (
               <SendToggle
                 on={sendWhatsapp}
                 onToggle={() => setSendWhatsapp((v) => !v)}
@@ -2938,11 +3070,7 @@ export default function PosSale({
           )}
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
-              {!collectionIntent
-                ? 'בחרו אם הקישור מייצג חוב או רק אפשרות לרכישה.'
-                : collectionIntent === 'debt'
-                  ? 'הקישור יירשם כחוב פתוח עד שהתשלום יתקבל.'
-                  : 'הקישור לא יירשם כחוב; לאחר תשלום הוא יופיע כעסקה.'}
+              הקישור יירשם כחוב פתוח עד שהתשלום יתקבל.
               {' '}
               {sendWhatsapp
                 ? 'הקישור יישלח בוואטסאפ ויוצג גם כקוד לסריקה.'

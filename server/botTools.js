@@ -25,7 +25,8 @@ import {
   requestProgramApproval,
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
-import { activeEnrollmentGroupIds, studentGroupIds } from './studentGroups.js';
+import { studentGroupIds } from './studentGroups.js';
+import { hasLiveGroup, registrationStep } from './registrationSteps.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
@@ -119,13 +120,14 @@ import {
   newFollowUpId,
   planFollowUp,
 } from './botFollowUps.js';
-import { resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
+import { openEndedPause, resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
 import { shortMailingPreferencesUrl } from './mailingShortLinks.js';
 import {
   loadEquipmentPrices,
   loadEquipmentInfo,
   resolveEnrichmentFee,
   entryProductsFromPricelist,
+  passProductsFromPricelist,
   trainerNameForGroup,
   groupSignupUrl,
   eventPublicUrl,
@@ -449,6 +451,27 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         },
       },
       required: ['note'],
+    },
+  },
+  {
+    name: 'updateTraineeBirthDate',
+    description:
+      'מתקן תאריך לידה של מתאמן שכבר קיים בכרטיס. להשתמש רק כשמה שהלקוח אומר '
+      + 'על הגיל או הכיתה אינו מתיישב עם התאריך שבמערכת, ורק אחרי ששאלת אותו '
+      + 'לוודא ומסר תאריך. אין לאסוף תאריך לידה של מתאמן חדש — הוא מגיע מהטופס.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: {
+          type: 'string',
+          description: 'שם המתאמן שהתאריך שלו מתעדכן. ריק = המתאמן היחיד בכרטיס',
+        },
+        birthDate: {
+          type: 'string',
+          description: 'תאריך הלידה שהלקוח מסר, בפורמט YYYY-MM-DD',
+        },
+      },
+      required: ['birthDate'],
     },
   },
   {
@@ -1048,18 +1071,13 @@ export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }
 
-/**
- * Does this trainee actually sit somewhere — a group on the card, a live
- * enrollment, or a place already being held?
- *
- * The status alone does not answer it. „רשום” is written the moment the
- * מתנ״ס confirms, which is routinely before anybody has chosen a group.
- */
-export function hasLiveGroup(student) {
-  if (!student?.id) return false;
-  if (studentGroupIds(student).length) return true;
-  if (activeEnrollmentGroupIds(db.get('enrollments') || [], student.id).length) return true;
-  return Boolean(activeHoldForStudent(db, student.id)?.group_ids?.length);
+/** The open registration step, in the shape the model reads. See registrationSteps. */
+function registrationProgress(student, group) {
+  const progress = registrationStep(db, student, { group });
+  return {
+    הרשמה_שלמה: progress.complete,
+    ...(progress.complete ? {} : { הצעד_הבא: progress.label }),
+  };
 }
 
 /** A pending placement only exists when it points at a real group. */
@@ -1213,11 +1231,20 @@ function requireKnownChild(parent, childName, studentId = '') {
   }
   const exactId = String(studentId || '').trim();
   const named = String(childName || '').trim();
-  const matches = exactId
+  let matches = exactId
     ? kids.filter((s) => String(s.id) === exactId)
     : (named
       ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
       : kids);
+  // An archived card is not a person anyone is asking about. Two cards for
+  // נעמי — one of them a merged-away shell — answered to the same name, and
+  // every placement attempt died on "יש כמה ילדים מתאימים" for three days.
+  // A staff member who archives a duplicate should not have to also delete it
+  // before the bot can work again.
+  if (matches.length > 1) {
+    const live = matches.filter((s) => !['archived', 'cancelled'].includes(String(s.status || '')));
+    if (live.length) matches = live;
+  }
   if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
   if (matches.length > 1) {
     return {
@@ -1244,7 +1271,7 @@ function requireDeclaredChild(parent, childName, studentId = '') {
   // words to carry on to the group. Refusing there left a mother who had paid
   // and registered being told her son "כבר רשום" — with no place held for him
   // anywhere.
-  if (isRegisteredTrainee(student) && hasLiveGroup(student)) {
+  if (isRegisteredTrainee(student) && hasLiveGroup(db, student)) {
     return {
       error: `${student.name || 'המתאמן'} כבר רשום לחוג ומשובץ בקבוצה — הוספה או העברה בין קבוצות נעשית מול הצוות`,
     };
@@ -1403,11 +1430,25 @@ export function buildCustomerTools({
           ? entries
           : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
       }
+      // A price is an answer; a sale is a counter transaction. The bot may say
+      // what a punch card costs and must not sell one.
+      const passes = passProductsFromPricelist(db.get('pricelist') || []);
+      payload.כרטיסיות_ומנויים = passes.length
+        ? {
+          מוצרים: passes,
+          הערה: 'מותר למסור את המחירים האלה. אין למכור, אין לפתוח כרטיסייה או '
+            + 'מנוי, ואין להבטיח הארכה או הקפאה — רכישה נעשית בדלפק או מול הצוות.',
+        }
+        : { הערה: 'אין כרטיסיות או מנויים פעילים במחירון — אין לנקוב בסכום' };
       const fee = await resolveEnrichmentFee(settings);
       // A yearly charge quoted beside monthly class fees reads as monthly.
       payload.דמי_העשרה = fee > 0
         ? { סכום: fee, תדירות: 'תשלום שנתי, פעם בשנת חוגים' }
         : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };
+      // What a parent asking "כמה עולה החוג?" is actually asking about.
+      payload.מה_להשיב_על_עלות_חוג = 'עלות חוג היא תמיד שלושה מרכיבים יחד: '
+        + 'המחיר החודשי של הקבוצה, דמי ההעשרה השנתיים, ועלות הציוד. יש למסור את '
+        + 'שלושתם באותה תשובה, גם אם נשאל רק על אחד מהם, ולציין מה חודשי ומה חד-פעמי.';
       return payload;
     },
 
@@ -1706,10 +1747,11 @@ export function buildCustomerTools({
         // שאלה על טיול אינה בקשה להירשם, ולכן אין לרשום מיוזמתנו — אבל מי
         // ששאל ולא נשאל בחזרה פשוט נעלם. לקוחה קיבלה את כל פרטי הטיול, איש
         // לא הציע לה להישמר ברשימה, והעניין שלה לא נרשם בשום מקום.
-        הערה: 'אחרי מסירת הפרטים חובה לשאול בסוף התשובה אם לרשום אותם לרשימת '
-          + 'המתעניינים — משפט אחד, למשל «לרשום אתכם לרשימת המתעניינים?». '
-          + 'אין לרשום בלי שהלקוח אישר; ברגע שאישר יש לקרוא ל-addActivityInterest '
-          + 'עם ה«מזהה» של האירוע.',
+        הערה: 'לכל אירוע כאן יש «קישור» — זהו דף ההרשמה והתשלום, והוא מה שנשלח '
+          + 'ללקוח שאומר שהוא רוצה להירשם. אין להעביר הרשמה לאירוע פתוח לצוות. '
+          + 'אחרי מסירת הפרטים חובה לשאול משפט אחד בסוף התשובה: האם לשלוח את '
+          + 'קישור ההרשמה, או לרשום לרשימת המתעניינים בינתיים. אין לרשום כמתעניין '
+          + 'בלי שהלקוח אישר; ברגע שאישר — addActivityInterest עם ה«מזהה».',
       };
     },
 
@@ -1811,9 +1853,24 @@ export function buildCustomerTools({
       if (!kids.length) return { error: 'אין מתאמן בכרטיס — יש להעביר לצוות' };
 
       const named = String(childName || '').trim();
-      const matches = named
+      let matches = named
         ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
         : kids;
+      if (!named && matches.length > 1) {
+        // „נרשמתי גם במתנ״ס” from a family with an archived sibling read as an
+        // ambiguity, and the report was dropped. A child who left last year is
+        // not a candidate for a registration somebody is reporting now, and
+        // neither is one whose registration is already closed.
+        const open = matches.filter((s) => !['archived', 'cancelled'].includes(String(s.status || '')));
+        if (open.length === 1) matches = open;
+        else if (open.length > 1) {
+          const midRegistration = open.filter((s) => [
+            'pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
+          ].includes(String(s.status || '')));
+          if (midRegistration.length === 1) matches = midRegistration;
+          else matches = open;
+        }
+      }
       if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
       if (matches.length > 1) {
         return {
@@ -2007,6 +2064,63 @@ export function buildCustomerTools({
     },
 
     /**
+     * תיקון תאריך לידה שאינו מתיישב עם מה שההורה אומר.
+     *
+     * עד היום סתירה כזאת עצרה את השיחה: הכרטיס אמר גיל אחד, ההורה אמר אחר,
+     * והבוט לא שיבץ ולא שאל. אבל ההורה הוא המקור — הוא מילא את הטופס, והוא
+     * זה שיודע. שאלה אחת לאימות פותרת את זה, ובלעדיה השיבוץ נתקע על נתון
+     * שאיש לא בדק.
+     */
+    updateTraineeBirthDate: async ({ childName, birthDate } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const child = requireKnownChild(parent, childName);
+      if (child.error) return child;
+      const { student } = child;
+
+      const wanted = String(birthDate || '').trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(wanted)) {
+        return { error: 'תאריך לידה חייב להיות בפורמט YYYY-MM-DD — יש לשאול את הלקוח שוב' };
+      }
+      const age = ageFromBirthDate(wanted);
+      // A typo in the year is the failure that matters here: it silently moves
+      // the trainee to another age band, and the next placement follows it.
+      if (!age || age.years < 2 || age.years > 100) {
+        return {
+          error: 'התאריך שנמסר אינו סביר — יש לוודא אותו עם הלקוח ולא לעדכן',
+          תאריך_שנמסר: wanted,
+        };
+      }
+      const previous = String(student.birthDate || student.birth_date || '');
+      if (previous === wanted) {
+        return {
+          עודכן: false,
+          כבר_זהה: true,
+          מתאמן: student.name || '',
+          תאריך_לידה: wanted,
+          הערה: 'התאריך בכרטיס כבר זהה. אין לומר שעודכן — יש להמשיך בשיבוץ.',
+        };
+      }
+
+      const saved = db.update('students', student.id, { birthDate: wanted });
+      if (!saved) return { error: 'עדכון תאריך הלידה נכשל — יש להעביר לצוות' };
+      await persistCore('students', saved);
+      journal(
+        'details_saved',
+        `תאריך הלידה של ${student.name || 'מתאמן'} עודכן ל-${wanted}${previous ? ` (היה ${previous})` : ''}`,
+        { field: 'birthDate', from: previous || null, to: wanted },
+        saved
+      );
+      return {
+        עודכן: true,
+        מתאמן: student.name || '',
+        תאריך_לידה: wanted,
+        גיל: ageLabelFor(wanted),
+        הערה: 'הכרטיס עודכן. יש לאשר בקצרה ולהמשיך לשיבוץ לפי הגיל החדש, '
+          + 'בלי לבקש פרטים נוספים.',
+      };
+    },
+
+    /**
      * „אני בחו״ל וזה לא מאפשר לי לשלם” נאמר שלוש פעמים, ובכל בוקר יצאה עוד
      * תזכורת על אותו טופס ואותו ציוד. הבוט ענה נכון בכל פעם — פשוט לא היה לו
      * איפה לרשום שאסור לפנות עכשיו.
@@ -2015,17 +2129,15 @@ export function buildCustomerTools({
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const subject = String(note || '').trim();
       if (!subject) return { error: 'חסר מה הלקוח אמר' };
-      const plan = resolvePauseUntil({ days, targetMonth, untilDate });
-      if (!plan) {
-        return {
-          error: 'צריך לדעת עד מתי',
-          הערה: 'יש לשאול את הלקוח מתי נוח שנחזור אליו, ורק אז לקרוא לכלי שוב.',
-        };
-      }
+      // No date given is not a reason to guess one. The customer said they
+      // cannot act now, so the reminders stop; the question of when to come
+      // back is asked, and the answer moves the date.
+      const dated = resolvePauseUntil({ days, targetMonth, untilDate });
+      const plan = dated || openEndedPause();
       const saved = await setOutreachPause(db, persistCore, {
         parentId: parent.id,
         until: plan.until,
-        reason: reason || 'general',
+        reason: dated ? (reason || 'general') : 'awaiting_customer_date',
         note: subject,
       });
       if (!saved) return { error: 'שמירת ההשהיה נכשלה' };
@@ -2037,9 +2149,14 @@ export function buildCustomerTools({
       return {
         מושהה_עד: plan.date,
         סיבה: subject,
-        הערה: 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
-          + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
-          + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.',
+        נקב_במועד: Boolean(dated),
+        הערה: dated
+          ? 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
+            + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
+            + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.'
+          : 'הלקוח לא נקב במועד, ולכן התזכורות נעצרו לגמרי. יש לומר לו שלא '
+            + 'נטריד בינתיים, ולשאול משפט אחד מתי נוח שנחזור אליו. כשהוא יענה — '
+            + 'יש לקרוא לכלי שוב עם המועד שמסר. אין לנקוב במועד מטעמנו.',
       };
     },
 
@@ -2953,12 +3070,19 @@ export function buildCustomerTools({
           ...(s.status === 'pending_signup' && !group
             ? { הערת_סטטוס: 'אין קבוצה משובצת, ולכן אין להציג את המתאמן כממתין להרשמה' }
             : {}),
+          ...registrationProgress(s, group),
         };
       });
+      const openSteps = kids.filter((kid) => kid.הצעד_הבא);
       return {
         שם_הלקוח: parent.name || '',
         ילדים: kids,
         הערה: 'הגיל כבר מחושב — אין לחשב גיל מתאריך הלידה.',
+        הערת_הרשמה: openSteps.length
+          ? `ההרשמה אינה שלמה. הצעד הפתוח: ${openSteps
+            .map((kid) => `${kid.שם} — ${kid.הצעד_הבא}`).join('; ')}. `
+            + 'כל תשובה חייבת להסתיים בצעד הזה, ואין לומר «אין צורך בפעולה נוספת» כל עוד הוא פתוח.'
+          : 'ההרשמה שלמה לכל המתאמנים בכרטיס — טופס, קבוצה, מתנ״ס וציוד.',
       };
     },
   };

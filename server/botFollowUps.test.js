@@ -157,6 +157,26 @@ test('the message says what was promised, not "just checking in"', () => {
   assert.match(followUpMessage({ reason: 'general' }, {}), /^היי,/);
 });
 
+test('a signed form with no group asks for a day, not for a form', () => {
+  // The sweep's own message. Nothing is owed and nothing went wrong — they
+  // stopped halfway, usually because the conversation ended on our side.
+  const one = followUpMessage(
+    { reason: 'no_group_yet' },
+    { firstName: 'דנה', awaitingGroup: ['יותם'] }
+  );
+  assert.match(one, /היי דנה/);
+  assert.match(one, /יותם רשום אצלנו עם טופס חתום/);
+  assert.match(one, /כתבו לי איזה יום נוח/);
+  assert.doesNotMatch(one, /למלא/);
+
+  assert.match(
+    followUpMessage({ reason: 'no_group_yet' }, { firstName: 'דנה', awaitingGroup: ['יותם', 'אלה'] }),
+    /יותם ואלה רשומים/
+  );
+  // Somebody who chose a group overnight is asked nothing at all.
+  assert.equal(followUpMessage({ reason: 'no_group_yet' }, { awaitingGroup: [] }), '');
+});
+
 test('an adult who signed herself up is asked about herself, not about a child', () => {
   // "היי פנינה, הספקתם להשלים את ההרשמה של פנינה במתנ״ס?" was sent to a woman
   // who is her own trainee. It reads as a message about somebody else.

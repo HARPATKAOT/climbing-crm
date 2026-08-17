@@ -89,7 +89,13 @@ export function isConfigured() {
   return !!getToken();
 }
 
-export async function icountPost(endpoint, fields = {}) {
+/**
+ * @param {string} endpoint
+ * @param {object} [fields]
+ * @param {{ timeoutMs?: number }} [options] תקרת זמן לקריאה. רלוונטית לקריאות
+ *   שממתינות לאדם — סליקה במסוף EMV היא היחידה כזאת — ולא לשאר ה-API.
+ */
+export async function icountPost(endpoint, fields = {}, { timeoutMs = 0 } = {}) {
   const token = getToken();
   if (!token) {
     const err = new Error('ICOUNT_API_TOKEN is not configured');
@@ -103,14 +109,31 @@ export async function icountPost(endpoint, fields = {}) {
     body.append(key, String(value));
   }
 
-  const res = await fetch(`${BASE_URL}/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+      signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+    });
+  } catch (err) {
+    // ניתוק או תום זמן אינם „העסקה נכשלה”: הצד השני אולי סיים בהצלחה ורק
+    // התשובה אבדה. הקוד מבדיל בין השניים כדי שמי שקורא לא יסיק מסקנה
+    // שאי אפשר להסיק. ראו chargeEmv.
+    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    const wrapped = new Error(
+      timedOut
+        ? `iCount לא השיב בזמן (${endpoint})`
+        : `החיבור ל-iCount נכשל (${endpoint}): ${err?.message || 'שגיאת רשת'}`
+    );
+    wrapped.code = timedOut ? 'timeout' : 'network';
+    wrapped.cause = err;
+    throw wrapped;
+  }
 
   let data;
   try {
@@ -324,6 +347,8 @@ export async function createInvRec({
   paymentMethod = 'cash',
   vattype = icountVatType(),
   vatRate = DEFAULT_VAT_RATE,
+  cc = null,
+  sanityString = '',
 }) {
   const fields = {
     doctype: 'invrec',
@@ -342,6 +367,9 @@ export async function createInvRec({
     fields.email_to = emailTo;
     fields.send_email = 1;
   }
+  // מפתח ייחודי למסמך. ניסיון שני על אותה מכירה מחזיר את המסמך הקיים במקום
+  // להוציא חשבונית שנייה על אותו כסף — מה שמאפשר לנסות שוב אחרי תקלת רשת.
+  if (sanityString) fields.sanity_string = String(sanityString).slice(0, 64);
 
   const net = lineItemsNetTotal(items);
   // vattype 1 means the line prices are net, so VAT is added on top. This line
@@ -356,6 +384,13 @@ export async function createInvRec({
   const method = String(paymentMethod || 'cash').toLowerCase();
   if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {
     fields['cc[0][sum]'] = paid;
+    // פרטי החיוב שכבר נעשה במסוף. בלעדיהם המסמך אומר „שולם באשראי” ולא אילו
+    // ארבע ספרות ואיזה מספר אישור — בדיוק מה שמחפשים כשלקוח חוזר עם שאלה.
+    if (cc?.numOfPayments != null) fields['cc[0][num_of_payments]'] = cc.numOfPayments;
+    if (cc?.confirmationCode) fields['cc[0][confirmation_code]'] = cc.confirmationCode;
+    if (cc?.last4) fields['cc[0][card_number]'] = cc.last4;
+    if (cc?.cardType) fields['cc[0][card_type]'] = cc.cardType;
+    if (cc?.holderName) fields['cc[0][holder_name]'] = cc.holderName;
   } else {
     // cash, online confirmation, or unknown → record as cash payment on the document
     fields['cash[sum]'] = paid;
@@ -551,6 +586,197 @@ export async function findCcCharge({ docnum, around, windowDays = 3 } = {}) {
     confirmationCode: match.confirmation_code || null,
     cardLast4: match.cc_cardnumber || null,
   };
+}
+
+/* ── מסוף EMV פיזי ─────────────────────────────────────────────────────────
+ *
+ * `cc/emv` שולח את החיוב למכשיר הסליקה שמחובר לחשבון, והקריאה נשארת פתוחה עד
+ * שהלקוח מעביר כרטיס במכשיר או שהעסקה נדחית. זו הקריאה היחידה ב-API שמחכה
+ * לאדם, ולכן היא היחידה עם תקרת זמן משלה ועם מסלול התאוששות: תום זמן אינו
+ * אומר שהכסף לא נגבה, אלא רק שהתשובה לא הגיעה.
+ */
+
+const EMV_DEFAULT_TIMEOUT_MS = 180000;
+
+/** תקרת ההמתנה למכשיר, בשניות של לקוח שעומד מול הדלפק. */
+export function emvTimeoutMs() {
+  const raw = Number(process.env.ICOUNT_EMV_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw >= 15000 && raw <= 600000) return Math.round(raw);
+  return EMV_DEFAULT_TIMEOUT_MS;
+}
+
+export async function getCompanySettings() {
+  const data = await icountPost('company/settings', {});
+  return data.company_settings || {};
+}
+
+let _emvStatusCache = { at: 0, value: null };
+
+/**
+ * האם יש מכשיר סליקה שאפשר לשלוח אליו חיוב.
+ * נקרא מהמסך בכל טעינה של הקופה, ולכן נשמר במטמון לכמה דקות.
+ */
+export async function emvStatus({ maxAgeMs = 5 * 60 * 1000, force = false } = {}) {
+  if (!isConfigured()) {
+    return { available: false, configured: false, reason: 'iCount לא מוגדר בשרת', devices: [] };
+  }
+  const now = Date.now();
+  if (!force && _emvStatusCache.value && now - _emvStatusCache.at < maxAgeMs) {
+    return _emvStatusCache.value;
+  }
+  try {
+    const settings = await getCompanySettings();
+    const devices = (Array.isArray(settings.emv_devices) ? settings.emv_devices : [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    const ccEnabled = settings.cc_enabled !== false;
+    const enabled = settings.emv_enabled === true;
+    const value = {
+      configured: true,
+      available: enabled && ccEnabled && devices.length > 0,
+      enabled,
+      ccEnabled,
+      refundEnabled: settings.cc_refund_enabled === true,
+      devices,
+      reason: !enabled
+        ? 'מסוף EMV לא מופעל בחשבון iCount'
+        : !ccEnabled
+          ? 'סליקת אשראי כבויה בחשבון iCount'
+          : !devices.length
+            ? 'לא מחובר מכשיר סליקה לחשבון iCount'
+            : '',
+    };
+    _emvStatusCache = { at: now, value };
+    return value;
+  } catch (err) {
+    const value = {
+      configured: true,
+      available: false,
+      devices: [],
+      reason: `בדיקת מסוף הסליקה נכשלה: ${err.message}`,
+    };
+    // כישלון זמני לא ננעל למטמון ארוך — דקה, כדי לא להציף את ה-API.
+    _emvStatusCache = { at: now - maxAgeMs + 60000, value };
+    return value;
+  }
+}
+
+/** שורת חיוב מיומן ה-cc, בשמות שאנחנו משתמשים בהם. */
+function normalizeCcRow(row = {}) {
+  const last4Digits = String(row.cc_cardnumber || '').replace(/\D/g, '');
+  return {
+    ccBillLogId: row.cc_bill_log_id != null ? String(row.cc_bill_log_id) : null,
+    confirmationCode: row.confirmation_code ? String(row.confirmation_code).trim() : null,
+    charged: Number(row.cctotal) || 0,
+    cardLast4: last4Digits ? last4Digits.slice(-4) : null,
+    cardType: row.cc_cardtype ? String(row.cc_cardtype).trim() : null,
+    holderName: row.cc_holder_name ? String(row.cc_holder_name).trim() : null,
+    numOfPayments: Number(row.cc_numofpayments) || 1,
+    chargeDate: row.cc_charge_date ? String(row.cc_charge_date) : null,
+    docnumber: row.docnumber != null && String(row.docnumber).trim() ? String(row.docnumber).trim() : null,
+    alreadyRefunded: String(row.refunded || '0') !== '0',
+    raw: row,
+  };
+}
+
+function isoDay(value) {
+  const d = value ? new Date(value) : new Date();
+  return (Number.isNaN(d.getTime()) ? new Date() : d).toISOString().slice(0, 10);
+}
+
+/** חיובי הכרטיסים ביום נתון. משמש גם לאיתור חיוב שהתשובה עליו אבדה. */
+export async function listCcCharges({ date, confirmationCode } = {}) {
+  const day = isoDay(date);
+  const data = await icountPost('cc/transactions', {
+    start_date: day,
+    end_date: day,
+    confirmation_code: confirmationCode || undefined,
+  });
+  const rows = Array.isArray(data?.results_list) ? data.results_list : [];
+  return rows.map(normalizeCcRow);
+}
+
+/** חיוב לפי מספר האישור שהמסוף החזיר. */
+export async function findCcChargeByConfirmation({ confirmationCode, date } = {}) {
+  const code = String(confirmationCode || '').trim();
+  if (!code) return null;
+  let rows = [];
+  try {
+    rows = await listCcCharges({ date, confirmationCode: code });
+  } catch (err) {
+    if (!/אין תוצאות|no results/i.test(err.message || '')) throw err;
+  }
+  return rows.find((row) => row.confirmationCode === code) || null;
+}
+
+/**
+ * חיוב במסוף ה-EMV.
+ *
+ * שגיאה שהיא ודאית — כרטיס שנדחה, סכום פסול — נזרקת עם `indeterminate=false`,
+ * ואז מותר לומר ללקוח שלא חויב. תום זמן או ניתוק נזרקים עם `indeterminate=true`:
+ * ייתכן מאוד שהכסף כן נגבה, ואסור להציע חיוב חוזר לפני בדיקה.
+ */
+export async function chargeEmv({
+  clientId,
+  clientName,
+  email,
+  sum,
+  numOfPayments = 1,
+  timeoutMs = emvTimeoutMs(),
+} = {}) {
+  const amount = roundMoney(sum);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    const err = new Error('סכום החיוב חייב להיות גדול מאפס');
+    err.code = 'bad_sum';
+    err.indeterminate = false;
+    throw err;
+  }
+
+  const fields = { sum: amount, currency_code: 'ILS' };
+  if (Number(numOfPayments) > 1) fields.num_of_payments = Math.round(Number(numOfPayments));
+  if (clientId) fields.client_id = clientId;
+  else if (clientName) fields.client_name = clientName;
+  if (email) fields.email = email;
+
+  let data;
+  try {
+    data = await icountPost('cc/emv', fields, { timeoutMs });
+  } catch (err) {
+    err.indeterminate = err.code === 'timeout' || err.code === 'network';
+    throw err;
+  }
+
+  if (data.success === false) {
+    const err = new Error(
+      data.error_description || data.reason || 'העסקה נדחתה במסוף הסליקה'
+    );
+    err.code = data.reason || 'declined';
+    err.indeterminate = false;
+    err.details = data;
+    throw err;
+  }
+
+  const last4Digits = String(data.cc_last4 || data.card_number || data.cc_cardnumber || '')
+    .replace(/\D/g, '');
+  return {
+    confirmationCode: data.confirmation_code != null && String(data.confirmation_code).trim()
+      ? String(data.confirmation_code).trim()
+      : null,
+    cardType: data.cc_type || data.card_type || null,
+    cardLast4: last4Digits ? last4Digits.slice(-4) : null,
+    ccBillLogId: extractBillLogId(data),
+    amount,
+    raw: data,
+  };
+}
+
+function extractBillLogId(raw = {}) {
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (/bill_?log/i.test(key) && value != null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return null;
 }
 
 /** מחזיר סכום לכרטיס. `sum` חובה — בלעדיו עלול לזכות את החיוב במלואו. */
@@ -855,6 +1081,12 @@ export const icount = {
   refundCcAmount,
   createRefundDoc,
   MIN_PARTIAL_REFUND,
+  getCompanySettings,
+  emvStatus,
+  emvTimeoutMs,
+  chargeEmv,
+  listCcCharges,
+  findCcChargeByConfirmation,
   listInventoryItems,
   updateInventoryQty,
   buildPaymentUrl,

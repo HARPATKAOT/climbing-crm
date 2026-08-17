@@ -1,14 +1,20 @@
 /**
- * The link the staff get instead of a WhatsApp poll: pick who you are, tick the
- * shifts that suit you, send. Nothing here places anyone — a tick is an offer,
- * and the manager is the one who turns it into a shift on the roster.
+ * The link the staff get instead of a WhatsApp poll: pick who you are, then for
+ * each shift say which role you would come in. Nothing here places anyone — a
+ * claim is an offer, and the manager turns it into a shift on the roster.
+ *
+ * The role matters and cannot be inferred: eight of the twenty-three staff hold
+ * four roles each, and the role is what decides the rate they are paid. So the
+ * form shows each person only the seats they are marked for, and a shift with
+ * none of their roles says so rather than disappearing.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CalendarCheck, Check, CheckCircle, Loader2 } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import AppSelect from './AppSelect.jsx';
+import { roleIcon, roleColor } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -35,9 +41,12 @@ export default function PublicShiftSignup() {
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
 
+  // המפתח האישי שבקישור. מי שקיבל אותו בוואטסאפ מזוהה בלי לבחור שם מרשימה.
+  const personalKey = new URLSearchParams(window.location.search).get('u') || '';
+
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/public/shift-signup/${encodeURIComponent(token)}`)
+    fetch(`/api/public/shift-signup/${encodeURIComponent(token)}${personalKey ? `?u=${encodeURIComponent(personalKey)}` : ''}`)
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -46,6 +55,14 @@ export default function PublicShiftSignup() {
           return;
         }
         setData(body);
+        // קישור אישי פותח את הטופס על השם של מי שקיבל אותו, כולל מה שכבר ענה.
+        if (body.me) {
+          setEmployeeId(body.me);
+          const mine = (body.mine || []).find((row) => String(row.employee_id) === String(body.me));
+          setPicked(mine?.picks || []);
+          setWanted(mine?.wanted_count || 0);
+          setNote(mine?.note || '');
+        }
       })
       .catch(() => { if (!cancelled) setError('שגיאת רשת — נסו שוב'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -60,17 +77,32 @@ export default function PublicShiftSignup() {
   const chooseEmployee = (id) => {
     setEmployeeId(id);
     const mine = (data?.mine || []).find((row) => String(row.employee_id) === String(id));
-    setPicked(mine?.slot_ids || []);
+    setPicked(mine?.picks || []);
     setWanted(mine?.wanted_count || 0);
     setNote(mine?.note || '');
   };
 
-  const toggleSlot = (slotId) => {
+  /** התפקידים שהעובד הנוכחי מסומן בהם. מהם נגזר מה הוא יכול לקחת. */
+  const myRoles = useMemo(() => {
+    const me = (data?.eligible || []).find((e) => String(e.id) === String(employeeId));
+    return me?.roles || [];
+  }, [data, employeeId]);
+
+  const canTake = (role) => !role || myRoles.includes(role);
+  const claimOf = (slotId) => picked.find((p) => p.slot_id === slotId) || null;
+
+  /**
+   * לחיצה על תפקיד היא הבחירה כולה: איזו משמרת, ובאיזה כובע.
+   * לחיצה על אותו תפקיד מבטלת; לחיצה על תפקיד אחר באותה משמרת מחליפה, כי אי
+   * אפשר לעבוד בשני תפקידים באותה שעה.
+   */
+  const claimSeat = (slotId, role) => {
     setPicked((current) => {
-      const next = current.includes(slotId)
-        ? current.filter((id) => id !== slotId)
-        : [...current, slotId];
-      // „רוצה 4” אחרי שהורדנו לשלוש סימונים הוא בקשה למשמרת שלא סומנה.
+      const mine = current.find((p) => p.slot_id === slotId);
+      const next = mine && mine.role === role
+        ? current.filter((p) => p.slot_id !== slotId)
+        : [...current.filter((p) => p.slot_id !== slotId), { slot_id: slotId, role }];
+      // „רוצה 4” אחרי שירדנו לשלוש בחירות הוא בקשה למשמרת שלא נבחרה.
       setWanted((n) => (n > next.length ? next.length : n));
       return next;
     });
@@ -90,7 +122,8 @@ export default function PublicShiftSignup() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          employee_id: employeeId, slot_ids: picked, wanted_count: wanted, note,
+          employee_id: employeeId, picks: picked, wanted_count: wanted, note,
+          u: personalKey || undefined,
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -165,7 +198,7 @@ export default function PublicShiftSignup() {
           <div className="event-brand">הרשמה למשמרות</div>
           <h1>{data.title}</h1>
           <div className="event-meta">
-            <span>תפקיד: {data.role}</span>
+            <span>{(data.slots || []).length} משמרות</span>
             {data.deadline && <span>אפשר לענות עד {dayLabel(data.deadline)}</span>}
           </div>
           {data.note && <p className="event-body">{data.note}</p>}
@@ -179,45 +212,79 @@ export default function PublicShiftSignup() {
           <form onSubmit={submit}>
             <section style={{ marginTop: 18 }}>
               <label className="event-label">מי ממלא?</label>
-              <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
-                <option value="">בחרו את השם שלכם...</option>
-                {(data.eligible || []).map((employee) => (
-                  <option key={employee.id} value={employee.id}>{employee.name}</option>
-                ))}
-              </AppSelect>
+              {/* קישור אישי כבר יודע מי זה. בורר במקרה כזה הוא לא נוחות אלא
+                  הזמנה לענות בשם מישהו אחר. */}
+              {data.me ? (
+                <div className="event-body" style={{ fontWeight: 700, fontSize: 17 }}>
+                  {(data.eligible || []).find((e) => String(e.id) === String(data.me))?.name || ''}
+                </div>
+              ) : (
+                <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
+                  <option value="">בחרו את השם שלכם...</option>
+                  {(data.eligible || []).map((employee) => (
+                    <option key={employee.id} value={employee.id}>{employee.name}</option>
+                  ))}
+                </AppSelect>
+              )}
               {(data.eligible || []).length === 0 && (
                 <p className="event-hint" style={{ marginTop: 10 }}>
-                  אף עובד לא מסומן בתפקיד „{data.role}” — צריך לסמן את התפקיד בכרטיס העובד.
+                  אין עובדים פעילים ברשימת הטופס — דברו עם המנהל.
                 </p>
               )}
             </section>
 
             <section>
-              <h2 style={{ padding: 0 }}>סמנו את המשמרות שמתאימות</h2>
+              <h2 style={{ padding: 0 }}>מה מתאים לכם?</h2>
               <p className="event-hint">
-                אפשר לסמן יותר ממה שצריך — סימון הוא זמינות, לא שיבוץ. מי שישובץ בפועל יקבל הודעה.
+                {employeeId
+                  ? 'לכל משמרת בחרו באיזה תפקיד תבואו. אפשר לסמן יותר ממה שצריך — זו זמינות, לא שיבוץ.'
+                  : 'קודם בחרו את השם שלכם, ואז יוצגו התפקידים שאתם יכולים לקחת בכל משמרת.'}
               </p>
               <div className="shift-rows">
                 {slots.map((slot) => {
-                  const on = picked.includes(slot.id);
+                  const claim = claimOf(slot.id);
+                  // תפקיד שהעובד לא מסומן בו מוצג ולא נעלם: „למה אני לא רואה את
+                  // יום שלישי” היא שאלה גרועה יותר מ„למה אני לא יכול לקחת אותו”.
+                  const mine = (slot.needs || []).filter((need) => canTake(need.role));
                   return (
-                    <button
-                      type="button"
-                      key={slot.id}
-                      className={`shift-row ${on ? 'is-on' : ''}`}
-                      onClick={() => toggleSlot(slot.id)}
-                      aria-pressed={on}
-                    >
-                      <span className="shift-row-mark">{on ? <Check size={15} /> : null}</span>
-                      <span className="shift-row-text">
-                        <span className="shift-row-day">
-                          {dayLabel(slot.date)}{slot.label ? ` · ${slot.label}` : ''}
-                        </span>
-                        <span className="shift-row-meta">
-                          {slot.start_time}–{slot.end_time} · דרושים {slot.capacity} · סימנו {slot.taken}
-                        </span>
-                      </span>
-                    </button>
+                    <div key={slot.id} className={`shift-row-card ${claim ? 'is-on' : ''}`}>
+                      <div className="shift-row-day">
+                        {dayLabel(slot.date)}{slot.label ? ` · ${slot.label}` : ''}
+                      </div>
+                      <div className="shift-row-meta">{slot.start_time}–{slot.end_time}</div>
+                      <div className="seat-row">
+                        {(slot.needs || []).map((need) => {
+                          const on = claim?.role === (need.role || '');
+                          const allowed = canTake(need.role);
+                          const Icon = roleIcon(need.role);
+                          return (
+                            <button
+                              type="button"
+                              key={need.role || 'any'}
+                              className={`seat-pill ${on ? 'is-on' : ''} ${allowed ? '' : 'is-off'}`}
+                              // גוון התפקיד, אותו אחד שבכרטיס העובד. כשמסמנים,
+                              // הוא הופך לרקע — כך רואים מרחוק מה נבחר.
+                              style={{ '--seat-accent': roleColor(need.role) }}
+                              disabled={!allowed || !employeeId}
+                              aria-pressed={on}
+                              title={allowed
+                                ? undefined
+                                : `התפקיד „${need.role}” לא מסומן אצלכם בכרטיס העובד`}
+                              onClick={() => claimSeat(slot.id, need.role || '')}
+                            >
+                              {on ? <Check size={13} /> : <Icon size={13} aria-hidden="true" />}
+                              {need.role || 'משמרת'}
+                              <span className="seat-count">
+                                {need.taken > 0 ? `${need.taken}/${need.count}` : `דרושים ${need.count}`}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {employeeId && mine.length === 0 && (
+                        <div className="shift-row-meta">אין כאן תפקיד שמסומן אצלכם.</div>
+                      )}
+                    </div>
                   );
                 })}
                 {slots.length === 0 && (
@@ -292,6 +359,25 @@ export default function PublicShiftSignup() {
         .shift-row-day{font-weight:800;font-size:15px;color:#fff}
         .shift-row-meta{font-size:12.5px;color:#94a3b8}
         .shift-row.is-on .shift-row-meta{color:var(--form-accent-text,#7dd3fc)}
+        /* כרטיס למשמרת, ובתוכו כפתור לכל תפקיד. הבחירה היא „באיזה כובע אני בא”,
+           ולכן היא שייכת לתפקיד ולא לשורת המשמרת כולה. */
+        .shift-row-card{display:flex;flex-direction:column;gap:7px;padding:13px 14px;border-radius:13px;
+          border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.04);
+          transition:border-color .14s ease,background .14s ease}
+        .shift-row-card.is-on{border-color:var(--form-accent-solid,#38bdf8);
+          background:var(--form-accent-soft-strong,rgba(56,189,248,.14))}
+        .seat-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
+        .seat-pill{--seat-accent:#94a3b8;
+          display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;
+          font:inherit;font-size:13px;font-weight:700;cursor:pointer;
+          border:1px solid color-mix(in srgb, var(--seat-accent) 34%, transparent);
+          background:color-mix(in srgb, var(--seat-accent) 12%, transparent);color:#e2e8f0}
+        .seat-pill svg{color:var(--seat-accent);flex-shrink:0}
+        .seat-pill.is-on{border-color:var(--seat-accent);background:var(--seat-accent);color:#0b1220}
+        .seat-pill.is-on svg{color:#0b1220}
+        .seat-pill.is-off{opacity:.4;cursor:not-allowed}
+        .seat-pill:disabled{cursor:not-allowed}
+        .seat-count{font-weight:500;font-size:11.5px;opacity:.75}
         .want-row{display:flex;flex-wrap:wrap;gap:8px}
         .want-pill{min-width:44px;padding:10px 14px;border-radius:11px;font:inherit;font-weight:700;
           cursor:pointer;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.04);color:#e2e8f0}

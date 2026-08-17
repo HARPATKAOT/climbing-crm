@@ -37,6 +37,8 @@ import {
   eligibleEmployees,
   expandWeeklySlots,
   isWindowOpen,
+  newSignupToken,
+  normalizeNeeds,
   normalizeWindow,
   planAssignments,
   publicWindowView,
@@ -60,7 +62,7 @@ import {
 } from './cashRegister.js';
 import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
 import { alertRecipients, alertSubscribers } from './staffAlerts.js';
-import { sendStaffAlert } from './staffNotify.js';
+import { sendStaffAlert, noteStaffAlertFailure } from './staffNotify.js';
 import {
   GROUP_META_COLLECTION,
   enrichGroupsWithBotMeta,
@@ -297,6 +299,11 @@ import {
   isDraftableField,
 } from './activityCopyDraft.js';
 import { executePartialRefund } from './partialRefund.js';
+import {
+  chargeEmvForSale,
+  emvFailureMessage,
+  listOrphanEmvCharges,
+} from './emvCharge.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
 import { equipmentPurchaseRows } from './equipmentPurchases.js';
 import { canClearPaidEquipmentStatus } from './equipmentPaymentSecurity.js';
@@ -544,6 +551,8 @@ import {
   publicFieldDefs,
   buildEmployeeFromSubmission,
   EMPLOYEE_ONBOARD_DOC_DEFS,
+  getEmployeeOnboardInviteNonce,
+  resetEmployeeOnboardInviteNonce,
   getForm101Url,
   saveForm101Url,
 } from './employeeOnboardingForm.js';
@@ -1902,9 +1911,14 @@ app.post('/api/leads', async (req, res) => {
 });
 
 // ─── Employee onboarding link (public) ────────────────────────────────────
-app.post('/api/employees/onboard-invite', (req, res) => {
+// קישור אחד וקבוע לכל הצוות: אותו קישור חוזר בכל טעינה של המסך, ומשרת כמה
+// נקלטים שרוצים. `reset: true` מחליף את ה-nonce ובכך פוסל את הקישור הישן.
+app.post('/api/employees/onboard-invite', async (req, res) => {
   try {
-    res.status(201).json(issueEmployeeOnboardInvite());
+    const nonce = req.body?.reset
+      ? await resetEmployeeOnboardInviteNonce()
+      : await getEmployeeOnboardInviteNonce();
+    res.status(201).json(issueEmployeeOnboardInvite({ nonce }));
   } catch (error) {
     res.status(503).json({ error: error.message || 'Employee onboarding signing is not configured' });
   }
@@ -1947,9 +1961,6 @@ app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) =
   try {
     const invite = requireEmployeeOnboardInvite(req, res);
     if (!invite) return;
-    if ((db.get('employees') || []).some((employee) => employee.onboard_invite_id === invite.inviteId)) {
-      return res.status(409).json({ error: 'קישור הקליטה כבר נוצל' });
-    }
     const config = await getEmployeeOnboardConfig();
     const { employee, error } = buildEmployeeFromSubmission(req.body?.answers, config);
     if (error) return res.status(400).json({ error });
@@ -3479,6 +3490,9 @@ async function processWhatsAppWebhookChange(change = {}) {
     for (const st of value.statuses) {
       const statusMap = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
       updateMessageStatusByMetaId(st.id, statusMap[st.status] || st.status);
+      // A staff alert that Meta accepted and then rejected was still written to
+      // the journal as sent. Reopen it, so the next scan tries again.
+      if (st.status === 'failed') noteStaffAlertFailure(st.id);
     }
   }
 
@@ -12807,6 +12821,16 @@ function allCatalogLabels(catalog) {
  * כפילויות נמחקות: אם השם החדש כבר קיים אצל אותו עובד (איחוד שני תפקידים
  * לאחד), הוא לא יופיע פעמיים.
  */
+/**
+ * מה כל אירוע צריך מבחינת כוח אדם: „מפעיל קיר אחד ושני עוזרי מדריך”.
+ *
+ * טבלה נפרדת ולא עמודה על `activities`, כי `activities` היא טבלת SQL עם עמודות
+ * מפורשות ואי אפשר להריץ מכאן מיגרציה — רישום עמודה שאינה קיימת היה מפיל כל
+ * שמירה של אירוע. השורה היא מסמך אחד לכל אירוע, וזה בדיוק מה שהאחסון התפעולי
+ * נועד לו. מזהה השורה הוא מזהה האירוע, כך שאין חיפוש ואין שתי שורות לאירוע אחד.
+ */
+const STAFF_NEEDS_TABLE = 'activity_staff_needs';
+
 function propagateRoleRename(from, to) {
   let touched = 0;
   for (const emp of db.get('employees') || []) {
@@ -12841,6 +12865,37 @@ function propagateRoleRename(from, to) {
   for (const row of db.get('work_assignments') || []) {
     if (row.role !== from) continue;
     db.update('work_assignments', row.id, { role: to });
+    touched += 1;
+  }
+  // צרכי האיוש של אירועים ושל טפסי המשמרות. בלי אלה שינוי שם תפקיד היה משאיר
+  // טופס שנשלח לצוות מבקש תפקיד שכבר לא קיים — מושב שאיש אינו מסומן בו, ולכן
+  // איש לא יכול לקחת אותו.
+  for (const row of db.get(STAFF_NEEDS_TABLE) || []) {
+    const needs = Array.isArray(row.needs) ? row.needs : [];
+    if (!needs.some((need) => need.role === from)) continue;
+    db.update(STAFF_NEEDS_TABLE, row.id, {
+      needs: needs.map((need) => (need.role === from ? { ...need, role: to } : need)),
+    });
+    touched += 1;
+  }
+  for (const win of db.get('shift_signup_windows') || []) {
+    const slots = Array.isArray(win.slots) ? win.slots : [];
+    if (!slots.some((slot) => (slot.needs || []).some((need) => need.role === from))) continue;
+    db.update('shift_signup_windows', win.id, {
+      slots: slots.map((slot) => ({
+        ...slot,
+        needs: (slot.needs || []).map((need) => (need.role === from ? { ...need, role: to } : need)),
+      })),
+    });
+    touched += 1;
+  }
+  // ומה שכבר נבחר בתשובות, אחרת סימון של עובד מצביע על מושב שאין לו שם.
+  for (const answer of db.get('shift_signup_responses') || []) {
+    const picks = Array.isArray(answer.picks) ? answer.picks : [];
+    if (!picks.some((pick) => pick.role === from)) continue;
+    db.update('shift_signup_responses', answer.id, {
+      picks: picks.map((pick) => (pick.role === from ? { ...pick, role: to } : pick)),
+    });
     touched += 1;
   }
   return touched;
@@ -14649,6 +14704,51 @@ app.delete('/api/work-assignments/:id', (req, res) => {
 const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
 
 /**
+ * מי מחזיק במפתח האישי שבקישור.
+ *
+ * המפתח נוצר בשליחה, אחד לכל עובד, ונשמר על הטופס. הוא מזהה בלי סיסמה ובלי
+ * בחירה מרשימה — וגם חוסם תשובה בשם מישהו אחר, מה שהבורר הפתוח אִפשר.
+ */
+function employeeIdForKey(windowRow, key) {
+  const wanted = String(key || '').trim();
+  if (!wanted) return null;
+  const keys = windowRow?.employee_keys || {};
+  return Object.keys(keys).find((employeeId) => keys[employeeId] === wanted) || null;
+}
+
+/** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
+function windowRowRoles(windowRow) {
+  return [...new Set((windowRow?.slots || [])
+    .flatMap((slot) => (slot.needs || []).map((need) => need.role))
+    .filter(Boolean))];
+}
+
+function staffNeedsFor(activityId) {
+  const row = db.getOne(STAFF_NEEDS_TABLE, String(activityId || ''));
+  return Array.isArray(row?.needs) ? row.needs : [];
+}
+
+app.get('/api/activities/:id/staff-needs', (req, res) => {
+  res.json({ needs: staffNeedsFor(req.params.id) });
+});
+
+app.put('/api/activities/:id/staff-needs', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+  // רשימה ריקה היא „לפי סוג הפעילות” — מחיקה של ההגדרה, לא אפס אנשים.
+  const needs = normalizeNeeds(req.body?.needs, 0).filter((need) => need.role);
+  const existing = db.getOne(STAFF_NEEDS_TABLE, String(activity.id));
+  if (!needs.length) {
+    if (existing) db.delete(STAFF_NEEDS_TABLE, existing.id);
+    return res.json({ needs: [] });
+  }
+  const saved = existing
+    ? db.update(STAFF_NEEDS_TABLE, existing.id, { needs })
+    : db.insert(STAFF_NEEDS_TABLE, { id: String(activity.id), needs });
+  res.json({ needs: saved.needs });
+});
+
+/**
  * איזה תפקיד מתאים לאיזו רשומה ביומן — כפי שבורר המשמרות צריך לראות את זה.
  *
  * חוג אינו סוג פעילות אלא קבוצה, ולכן אין לו שורה בקטלוג: התפקידים שיכולים
@@ -14677,8 +14777,10 @@ function signupWindowSummary(windowRow, responses, today, assignments = null) {
   return {
     id: windowRow.id,
     title: windowRow.title,
-    role: windowRow.role,
     work_type: windowRow.work_type,
+    // אילו תפקידים הטופס כולו מבקש — כותרת הרשימה, במקום התפקיד היחיד שהיה
+    // נעול על הטופס. נגזר מהמשמרות, כי שם הוא באמת נקבע.
+    roles: [...new Set(slots.flatMap((slot) => (slot.needs || []).map((n) => n.role)).filter(Boolean))],
     status: windowRow.status,
     deadline: windowRow.deadline || null,
     note: windowRow.note || '',
@@ -14719,16 +14821,24 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
   try {
     const [activities, groups, assignments] = await readTables('activities', 'groups', 'work_assignments');
     const catalog = await signupRoleCatalog();
+    // מה שהמנהל כתב על האירוע עצמו („מפעיל קיר אחד ושני עוזרים”) גובר על מה
+    // שסוג הפעילות מרמז. השורות נקראות פעם אחת ומחוברות לאירועים כאן, כדי
+    // שהמודול יישאר טהור ולא יידע על טבלאות.
+    const needsById = new Map(
+      (db.get(STAFF_NEEDS_TABLE) || []).map((row) => [String(row.id), row.needs])
+    );
+    const withNeeds = activities.map((activity) => (needsById.has(String(activity.id))
+      ? { ...activity, staff_needs: needsById.get(String(activity.id)) }
+      : activity));
+
     const { candidates, withoutHours, byType, error } = calendarSlotCandidates({
-      activities,
+      activities: withNeeds,
       groups,
       assignments,
       rolesByType: catalog.rolesByType,
       classRoles: catalog.classRoles,
-      role: req.query.role || '',
       from: req.query.from,
       to: req.query.to,
-      capacity: req.query.capacity,
       // רשימת סוגים מופרדת בפסיקים, כפי שהמסך מסמן אותם. ריק פירושו „הכל”,
       // כדי שקריאה ישנה בלי הפרמטר תמשיך להתנהג כמו קודם.
       types: String(req.query.types || '').split(',').map((t) => t.trim()).filter(Boolean),
@@ -14762,7 +14872,7 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
       respondents_detail: respondentSummary(windowRow, responses, employees, assignments),
       // מי שהטופס פונה אליו ועדיין לא ענה — השאלה הראשונה של כל מנהל שפתח
       // את הלוח ורואה ארבע תשובות במקום שבע.
-      pending: eligibleEmployees(employees, windowRow.role, windowRow.recipients)
+      pending: eligibleEmployees(employees, windowRow.recipients)
         .filter((person) => !answers.some((answer) => answer.employee_id === person.id)),
     });
   } catch (error) {
@@ -14799,21 +14909,45 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   const windowRow = db.getOne('shift_signup_windows', req.params.id);
   if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
   const employees = db.get('employees') || [];
-  const audience = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
+  const audience = eligibleEmployees(employees, windowRow.recipients);
   const only = Array.isArray(req.body?.employee_ids) && req.body.employee_ids.length
     ? new Set(req.body.employee_ids.map(String))
     : null;
+  // רק מי שיכול לקחת משהו. שליחה למי שאין לו אף אחד מהתפקידים שהטופס מבקש היא
+  // הודעה שאי אפשר לענות עליה — ובגודל הצוות הזה, רוב ההודעות היו כאלה.
+  const wantedRoles = windowRowRoles(windowRow);
   const targets = audience
     .filter((person) => !only || only.has(String(person.id)))
+    .filter((person) => !wantedRoles.length
+      || wantedRoles.some((role) => (person.roles || []).includes(role)))
     .map((person) => employees.find((e) => e.id === person.id))
     .filter(Boolean);
-  if (!targets.length) return res.status(400).json({ error: 'לא נבחר אף עובד לשליחה' });
+  if (!targets.length) {
+    return res.status(400).json({
+      error: wantedRoles.length
+        ? `אף עובד לא מסומן באחד מהתפקידים שהטופס מבקש (${wantedRoles.join(', ')})`
+        : 'לא נבחר אף עובד לשליחה',
+    });
+  }
 
-  const link = `${eventPublicBase()}/shift-signup/${windowRow.token}`;
+  const base = `${eventPublicBase()}/shift-signup/${windowRow.token}`;
   try {
-    const { sent, results } = await sendSignupInvites({ windowRow, employees: targets, link });
-    db.update('shift_signup_windows', windowRow.id, { sent_at: new Date().toISOString() });
-    res.json({ sent, results, link });
+    // קישור אישי לכל אחד: הטופס נפתח על השם שלו בלי שיבחר אותו מרשימה, ואי
+    // אפשר לענות בשם מישהו אחר גם אם הקישור הועבר הלאה.
+    const keys = { ...(windowRow.employee_keys || {}) };
+    for (const employee of targets) {
+      if (!keys[employee.id]) keys[employee.id] = newSignupToken();
+    }
+    const { sent, results } = await sendSignupInvites({
+      windowRow,
+      employees: targets,
+      linkFor: (employee) => `${base}?u=${keys[employee.id]}`,
+    });
+    db.update('shift_signup_windows', windowRow.id, {
+      sent_at: new Date().toISOString(),
+      employee_keys: keys,
+    });
+    res.json({ sent, results, link: base });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -14853,7 +14987,7 @@ app.post('/api/shift-signup/windows/:id/assign', async (req, res) => {
 
   const bySlots = new Map();
   const created = [];
-  for (const { assignment, slot } of rows) {
+  for (const { assignment, slot, role } of rows) {
     // מזהה מפורש: ברירת המחדל של `db.insert` היא חותמת זמן במילישניות, ולולאה
     // שכותבת חמש שורות ברצף מסיימת בתוך אותה מילישנייה — חמש שורות עם אותו id,
     // שדורסות זו את זו באחסון העמיד ונמחקות יחד.
@@ -14864,7 +14998,7 @@ app.post('/api/shift-signup/windows/:id/assign', async (req, res) => {
     created.push(record);
     const key = String(assignment.employee_id);
     if (!bySlots.has(key)) bySlots.set(key, []);
-    bySlots.get(key).push(slot);
+    bySlots.get(key).push({ slot, role });
   }
 
   // ההודעה יוצאת אחרי שהשורות כבר נשמרו: עובד שקיבל הודעה על משמרת שלא נרשמה
@@ -14897,12 +15031,17 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     const answers = responsesForWindow(responses, windowRow.id);
     res.json({
       ...publicWindowView(windowRow, answers),
-      eligible: eligibleEmployees(employees, windowRow.role, windowRow.recipients),
+      // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
+      // לענות בשם מישהו אחר — הקישור עובר בוואטסאפ ואפשר להעביר אותו הלאה.
+      me: employeeIdForKey(windowRow, req.query.u) || null,
+      // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
+      // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
+      eligible: eligibleEmployees(employees, windowRow.recipients),
       // מה שכל אחד כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
       // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
       mine: answers.map((answer) => ({
         employee_id: answer.employee_id,
-        slot_ids: answer.slot_ids || [],
+        picks: answer.picks || [],
         wanted_count: answer.wanted_count || 0,
         note: answer.note || '',
       })),
@@ -14921,17 +15060,23 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // רק מי שהטופס פונה אליו יכול לענות: הקישור עובר בוואטסאפ ואפשר להעביר
     // אותו הלאה, ותשובה בשם מישהו אחר היא בדיוק מה שאסור שיקרה כאן.
     const employees = db.get('employees') || [];
-    const allowed = eligibleEmployees(employees, windowRow.role, windowRow.recipients);
-    if (!allowed.some((person) => String(person.id) === String(req.body?.employee_id || ''))) {
+    const allowed = eligibleEmployees(employees, windowRow.recipients);
+    // מפתח אישי גובר על מה שהדפדפן שלח: מי שקיבל קישור אישי עונה בשמו בלבד.
+    const keyed = employeeIdForKey(windowRow, req.query.u || req.body?.u);
+    const employeeId = keyed || String(req.body?.employee_id || '');
+    if (!allowed.some((person) => String(person.id) === employeeId)) {
       return res.status(403).json({ error: 'השם הזה לא מופיע ברשימת הטופס' });
     }
 
-    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {});
+    // העובד עצמו נמסר לבדיקת הכשירות: מושב בתפקיד שהוא לא מסומן בו נדחה כאן,
+    // ולא רק מוסתר במסך — הקישור עובר בוואטסאפ ואפשר לשלוח בקשה בלי המסך.
+    const employee = employees.find((e) => String(e.id) === employeeId) || null;
+    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {}, { employee });
     if (error) return res.status(400).json({ error });
     const saved = existing
       ? db.update('shift_signup_responses', existing.id, record)
       : db.insert('shift_signup_responses', record);
-    res.status(existing ? 200 : 201).json({ success: true, picked: (saved.slot_ids || []).length });
+    res.status(existing ? 200 : 201).json({ success: true, picked: (saved.picks || []).length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -16943,6 +17088,54 @@ function posSellerForRequest(req) {
   return { employee_id: employee.id, name: employee.name || 'עובד' };
 }
 
+/**
+ * האם אפשר להציע „אשראי במסוף” בקופה.
+ *
+ * התשובה מגיעה מהגדרות החשבון ב-iCount ולא ממשתנה סביבה, כדי שחיבור מכשיר או
+ * ניתוקו ישתקפו במסך בלי לגעת בשרת. התשובה נשמרת במטמון לכמה דקות.
+ */
+app.get('/api/pos/emv/status', async (req, res) => {
+  try {
+    const status = await icount.emvStatus({ force: req.query.refresh === '1' });
+    res.json({ ...status, timeoutMs: icount.emvTimeoutMs() });
+  } catch (err) {
+    res.json({ available: false, configured: icount.isConfigured(), reason: err.message, devices: [] });
+  }
+});
+
+/**
+ * חיובי אשראי של היום שלא הופק עליהם מסמך.
+ *
+ * זה המסך שמופיע אחרי חיוב שהתשובה עליו אבדה: במקום לחייב שוב, מאתרים כאן את
+ * החיוב שכבר קרה ומשלימים עליו את המכירה.
+ */
+app.get('/api/pos/emv/orphan-charges', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const amountRaw = String(req.query.amount || '').trim();
+    const amount = amountRaw ? Number(amountRaw) : null;
+    const charges = await listOrphanEmvCharges({
+      icount,
+      amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+    });
+    res.json({
+      charges: charges.map((row) => ({
+        confirmationCode: row.confirmationCode,
+        amount: row.charged,
+        cardLast4: row.cardLast4,
+        cardType: row.cardType,
+        holderName: row.holderName,
+        chargeDate: row.chargeDate,
+      })),
+    });
+  } catch (err) {
+    console.error('POS emv orphan lookup error:', err.message);
+    res.status(502).json({ error: err.message || 'בדיקת החיובים נכשלה' });
+  }
+});
+
 app.post('/api/pos/sale', async (req, res) => {
   // ההדפסה בדלפק ממתינה לתשובה הזאת: מספר המסמך מודפס על הקבלה, ולכן אי אפשר
   // להדפיס לפני שהוא קיים. המשמעות היא שכל קריאה חיצונית שיושבת כאן נמדדת
@@ -16969,6 +17162,9 @@ app.post('/api/pos/sale', async (req, res) => {
       sendWhatsapp = false,
       couponCode,
       tenderedAmount,
+      // מספר אישור מחיוב שכבר בוצע במסוף — מסלול ההשלמה אחרי תשובה שאבדה.
+      // כשהוא קיים לא נשלח חיוב חדש למכשיר.
+      emvConfirmationCode = '',
     } = req.body || {};
 
     let lines = mapCartLines(cart);
@@ -17009,11 +17205,13 @@ app.post('/api/pos/sale', async (req, res) => {
     }
 
     const total = computeSaleTotal(lines);
-    const method = String(paymentMethod || 'cash').toLowerCase();
-    if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {
-      return res.status(400).json({
-        error:
-          'אשראי במסוף לא זמין כרגע — אין חיבור למסוף פיזי. השתמשו במזומן או בסליקה בקישור.',
+    const rawMethod = String(paymentMethod || 'cash').toLowerCase();
+    // „אשראי במסוף” הגיע בעבר בכמה שמות. כולם אותו דבר, ונשמרים כ-emv אחד
+    // כדי שסינון, דוחות וזיכוי לא יצטרכו להכיר ארבע מילים לאותו אמצעי תשלום.
+    const method = ['emv', 'credit', 'cc', 'card'].includes(rawMethod) ? 'emv' : rawMethod;
+    if (method === 'emv' && !icount.isConfigured()) {
+      return res.status(503).json({
+        error: 'סליקה במסוף דורשת חיבור ל-iCount, והוא לא מוגדר בשרת',
       });
     }
 
@@ -17044,28 +17242,106 @@ app.post('/api/pos/sale', async (req, res) => {
     }
     phase('icount:client');
 
+    const customerName = syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק';
+
+    // הכסף לפני המסמך. חשבונית אפשר להוציא שוב, חיוב שנכשל אחרי שהוצאה
+    // חשבונית הוא הכנסה רשומה שלא התקבלה.
+    let emvCharge = null;
+    if (method === 'emv') {
+      try {
+        emvCharge = await chargeEmvForSale({
+          icount,
+          total,
+          clientId,
+          clientName: customerName,
+          email: syncedParent?.email || walkInEmail || '',
+          confirmationCode: emvConfirmationCode,
+        });
+      } catch (chargeErr) {
+        console.error(
+          `💳 [POS] EMV charge failed (₪${total})`,
+          chargeErr.code || '',
+          chargeErr.message,
+          chargeErr.indeterminate ? '— תשובה לא ודאית' : ''
+        );
+        if (chargeErr.indeterminate) {
+          await recordFinanceAudit({
+            action: 'emv_charge_unknown',
+            amount: total,
+            reason: chargeErr.message,
+            actor: seller.name || req.crmUser?.email || null,
+            details: `לקוח=${customerName}`,
+          });
+        }
+        return res.status(chargeErr.status || 502).json({
+          error: emvFailureMessage(chargeErr),
+          code: chargeErr.code || 'emv_failed',
+          emvIndeterminate: !!chargeErr.indeterminate,
+        });
+      }
+      phase('icount:emv');
+    }
+
     let doc = null;
+    let docError = null;
     if (icount.isConfigured()) {
-      doc = await icount.createInvRec({
+      const createDoc = () => icount.createInvRec({
         clientId,
-        clientName: syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק',
+        clientName: customerName,
         items: lines.map((l) => ({
           description: l.description,
           unitprice: l.unitprice,
           quantity: l.quantity,
         })),
-        comment: `מכירה בדלפק · ${paymentMethod}${student?.name ? ` · עבור: ${student.name}` : ''}`,
+        comment: `מכירה בדלפק · ${method}${student?.name ? ` · עבור: ${student.name}` : ''}`,
         emailTo: sendEmail ? syncedParent?.email || walkInEmail : undefined,
-        paymentMethod,
+        paymentMethod: method,
         vattype: icountVatType(true),
+        cc: emvCharge
+          ? {
+            confirmationCode: emvCharge.confirmationCode,
+            last4: emvCharge.cardLast4,
+            cardType: emvCharge.cardType,
+            numOfPayments: emvCharge.numOfPayments || 1,
+          }
+          : null,
+        // מפתח ייחודי לחיוב הזה: ניסיון שני לא יוציא חשבונית שנייה על אותו כסף.
+        sanityString: emvCharge?.confirmationCode
+          ? `emv-${emvCharge.confirmationCode}`
+          : emvCharge?.ccBillLogId
+            ? `emv-bill-${emvCharge.ccBillLogId}`
+            : '',
       });
+
+      if (emvCharge) {
+        // הכסף כבר נגבה. כישלון בהפקת המסמך אינו מבטל את המכירה — הוא מדווח
+        // בגלוי כדי שיושלם, ולא בולע חיוב שקרה.
+        try {
+          doc = await createDoc();
+        } catch (err) {
+          docError = err.message || 'הפקת החשבונית נכשלה';
+          console.error('🧾 [POS] EMV charged but invoice failed:', docError);
+          await recordFinanceAudit({
+            action: 'emv_invoice_failed',
+            amount: total,
+            reason: docError,
+            actor: seller.name || req.crmUser?.email || null,
+            details: `אישור=${emvCharge.confirmationCode || '-'} כרטיס=${emvCharge.cardLast4 || '-'}`,
+          });
+        }
+      } else {
+        doc = await createDoc();
+      }
     }
     phase('icount:doc');
 
     let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
       total,
-      payment_method: paymentMethod,
+      payment_method: method,
+      cc_confirmation_code: emvCharge?.confirmationCode || null,
+      cc_last4: emvCharge?.cardLast4 || null,
+      cc_card_type: emvCharge?.cardType || null,
       status: 'paid',
       price_includes_vat: true,
       student_id: student?.id || null,
@@ -17121,16 +17397,39 @@ app.post('/api/pos/sale', async (req, res) => {
       console.log(`🎟️ [POS] coupon ${coupon.code} redeemed on sale ${sale.id} (₪${couponDiscount})`);
     }
 
-    const passes = await fulfillSalePasses({
-      sale,
-      lines,
-      studentId: student?.id,
-      parentId: syncedParent?.id || null,
-      docId: doc?.docId,
-      docNumber: doc?.docnum,
-    });
-    decrementInventory(lines);
-    await registerEntriesForSale({ lines, studentId: student?.id });
+    /**
+     * הנפקת הכרטיסיות והמלאי.
+     *
+     * בעסקת מסוף הכסף כבר עבר בשלב הזה, ולכן שגיאה כאן אינה מוחזרת כשגיאת
+     * מכירה: דלפקיסט שרואה „הפעולה נכשלה” אחרי שכרטיס חויב ינסה שוב, וזה
+     * חיוב כפול. הכשל מדווח כאזהרה לצד מכירה שהצליחה, כדי שיושלם ביד.
+     */
+    let passes = [];
+    let fulfillmentError = null;
+    try {
+      passes = await fulfillSalePasses({
+        sale,
+        lines,
+        studentId: student?.id,
+        parentId: syncedParent?.id || null,
+        docId: doc?.docId,
+        docNumber: doc?.docnum,
+      });
+      decrementInventory(lines);
+      await registerEntriesForSale({ lines, studentId: student?.id });
+    } catch (fulfillErr) {
+      if (method !== 'emv') throw fulfillErr;
+      fulfillmentError = fulfillErr.message || 'הנפקת הכרטיסייה נכשלה';
+      console.error(`🎫 [POS] EMV sale ${sale.id} charged but fulfilment failed:`, fulfillmentError);
+      await recordFinanceAudit({
+        action: 'emv_fulfilment_failed',
+        saleId: sale.id,
+        amount: total,
+        reason: fulfillmentError,
+        actor: seller.name || req.crmUser?.email || null,
+        details: `אישור=${emvCharge?.confirmationCode || '-'}`,
+      });
+    }
 
     db.insert('payments', {
       parent_id: syncedParent?.id || null,
@@ -17142,6 +17441,12 @@ app.post('/api/pos/sale', async (req, res) => {
       icount_client_id: clientId,
       icount_doc_id: doc?.docId || null,
       icount_doc_number: doc?.docnum || null,
+      // מזהה החיוב הוא מה שזיכוי חלקי דורש בהמשך, והוא אינו מופיע ב-doc/info.
+      // הרגע הזה הוא ההזדמנות היחידה לשמור אותו בלי חיפוש ביומן החיובים.
+      cc_bill_log_id: emvCharge?.ccBillLogId || null,
+      cc_confirmation_code: emvCharge?.confirmationCode || null,
+      cc_last4: emvCharge?.cardLast4 || null,
+      cc_card_type: emvCharge?.cardType || null,
       pos_sale_id: sale.id,
       paid_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -17228,11 +17533,13 @@ app.post('/api/pos/sale', async (req, res) => {
 
     phase('whatsapp');
 
-    const receipt = method === 'cash'
+    // גם עסקת אשראי במסוף מקבלת קבלה מודפסת — אבל בלי לפתוח את המגירה,
+    // שאין בה מה לעשות כשלא עבר מזומן.
+    const receipt = method === 'cash' || method === 'emv'
       ? buildSaleReceipt({
         sale,
         changeGiven,
-        openDrawer: true,
+        openDrawer: method === 'cash',
       })
       : null;
 
@@ -17244,6 +17551,17 @@ app.post('/api/pos/sale', async (req, res) => {
       sale,
       passes,
       doc,
+      // החיוב עבר אבל החשבונית לא יצאה — נאמר במפורש, כדי שיושלם ולא ייעלם.
+      documentError: docError,
+      fulfillmentError,
+      emv: emvCharge
+        ? {
+          confirmationCode: emvCharge.confirmationCode,
+          cardLast4: emvCharge.cardLast4,
+          cardType: emvCharge.cardType,
+          adopted: !!emvCharge.adopted,
+        }
+        : null,
       whatsappUrl,
       whatsappSent: invoiceWhatsappSent,
       whatsappError: invoiceWhatsappSent ? null : invoiceWhatsappError,
@@ -17876,17 +18194,10 @@ app.post('/api/pos/payment-link', async (req, res) => {
       walkInEmail,
       sendWhatsapp = false,
       couponCode,
-      collectionIntent,
     } = req.body || {};
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
-    if (!['debt', 'offer'].includes(collectionIntent)) {
-      return res.status(400).json({
-        error: 'יש לבחור אם הקישור הוא לחוב קיים או רק אפשרות לרכישה',
-        code: 'collection_intent_required',
-      });
-    }
     const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -17928,7 +18239,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
         recordCounterPolicyAcceptances(req, cancellationPolicies, sale, payerId),
       soldBy: seller.name,
       soldByEmployeeId: seller.employee_id,
-      source: collectionIntent === 'offer' ? 'pos_offer' : 'pos_debt',
+      // קישור תשלום מהדלפק נשלח רק על דבר שכבר מחייב — ולכן הוא תמיד חוב.
+      source: 'pos_debt',
     });
 
     const delivery = sendWhatsapp
@@ -21011,6 +21323,26 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
 
 // Daily attendance ensure at 06:00 Asia/Jerusalem (in-process; also call POST /api/attendance/ensure-today)
 let lastAttendanceEnsureDate = null;
+let lastOpenStepSweepDate = null;
+
+/**
+ * The trainee sweep, once a day and never twice. The date marker is cleared on
+ * failure so a blip does not cost a whole day of the people it exists to find.
+ */
+async function runOpenStepSweepIfDue(hour = 10) {
+  try {
+    const today = israelDateStr();
+    if (lastOpenStepSweepDate === today) return null;
+    if (israelHour() < hour) return null;
+    lastOpenStepSweepDate = today;
+    return await automationsService.runOpenStepSweep();
+  } catch (err) {
+    console.error('open-step sweep failed:', err.message);
+    lastOpenStepSweepDate = null;
+    return null;
+  }
+}
+
 async function runDailyAttendanceEnsureIfDue() {
   try {
     const today = israelDateStr();
@@ -21331,6 +21663,12 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Once a day, over the trainees rather than the conversations: whoever is
+  // stuck mid-registration and is not in anybody's queue. Ten in the morning,
+  // so the follow-up it opens goes out during the day rather than at dawn.
+  setTimeout(() => { runOpenStepSweepIfDue(10); }, 90_000);
+  setInterval(() => { runOpenStepSweepIfDue(10); }, 15 * 60 * 1000);
 
   // Durable seat holds, waitlist offers and intro follow-ups. Every action has
   // its own event key, so restarts and multiple server instances cannot send it
