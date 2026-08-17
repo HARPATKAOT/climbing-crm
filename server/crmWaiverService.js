@@ -88,6 +88,31 @@ function normalizedName(value) {
 }
 
 /**
+ * Is this card on the family file the same person the form is describing?
+ *
+ * The adult/child flag is something we set, not part of who somebody is. A
+ * trainee who has been on the file since she was fifteen does not become a
+ * different person on the day she turns eighteen and fills the form herself —
+ * but requiring `isAdult` to already be true is what gave נעמי a second card,
+ * and two cards under one parent answering to the same name are exactly what
+ * left the bot unable to place her.
+ *
+ * The flag was guarding against a real thing: a parent and a child can share a
+ * first name. So an agreeing birth date is what may cross that line, and
+ * nothing else.
+ */
+export function sameFamilyParticipant(candidate, { name, participantType, birthDate = '' } = {}) {
+  if (normalizedName(candidate?.name) !== normalizedName(name)) return false;
+  const wantedBirthDate = clean(birthDate);
+  if (participantType === 'adult') {
+    if (candidate?.isAdult === true) return true;
+    return !!wantedBirthDate && String(candidate?.birthDate || '') === wantedBirthDate;
+  }
+  if (candidate?.isAdult === true) return false;
+  return !wantedBirthDate || !candidate?.birthDate || candidate.birthDate === wantedBirthDate;
+}
+
+/**
  * Forms sometimes include the family name although the imported card stores
  * only the given names (or the opposite). With an exact birth date and the
  * same household, that suffix difference must update the existing trainee,
@@ -669,13 +694,10 @@ export async function saveCrmParticipants({
       }
     }
     if (!student) {
-      student = (db.get('students') || []).find((item) => {
-        if (item.parentId !== parent.id) return false;
-        if (normalizedName(item.name) !== normalizedName(name)) return false;
-        if (participantType === 'adult') return item.isAdult === true;
-        if (item.isAdult === true) return false;
-        return !input.birthDate || !item.birthDate || item.birthDate === input.birthDate;
-      });
+      student = (db.get('students') || []).find((item) => (
+        item.parentId === parent.id
+        && sameFamilyParticipant(item, { name, participantType, birthDate: input.birthDate })
+      ));
     }
     if (!student) {
       student = sameHouseholdParticipantCandidate(db, parent.id, input, participantType);

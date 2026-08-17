@@ -4,6 +4,7 @@ import {
   findLatestDeclaration,
   findLatestValidDeclaration,
   resolveDeclarationTemplate,
+  sameFamilyParticipant,
 } from './crmWaiverService.js';
 import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 
@@ -119,4 +120,48 @@ test('legacy templates expose only the canonical medical questions', () => {
     'יש להצטייד במים בכמות מתאימה ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה'
   );
   assert.equal(resolved.healthQuestions.some((question) => question.id === 'm10'), false);
+});
+
+test('turning eighteen does not make a trainee a new person on the family file', () => {
+  // נעמי was imported as a child in 2026-08 and filled the form herself a
+  // fortnight later, at eighteen. The match demanded that the card already
+  // carry the adult flag, so a second card was created — and two cards under
+  // one parent, answering to the same name, are why the bot could not place
+  // her at all and kept saying "יש כפילות בכרטיס".
+  const imported = { name: 'נעמי ברש', isAdult: false, birthDate: '2008-08-04' };
+  assert.equal(
+    sameFamilyParticipant(imported, { name: 'נעמי ברש', participantType: 'adult', birthDate: '2008-08-04' }),
+    true
+  );
+
+  // The flag was guarding a real case: a mother and daughter can share a name.
+  // Only an agreeing birth date crosses it.
+  assert.equal(
+    sameFamilyParticipant(imported, { name: 'נעמי ברש', participantType: 'adult', birthDate: '1979-03-02' }),
+    false
+  );
+  assert.equal(
+    sameFamilyParticipant(imported, { name: 'נעמי ברש', participantType: 'adult' }),
+    false
+  );
+
+  // A card already marked adult still matches on the name alone, as before.
+  assert.equal(
+    sameFamilyParticipant({ name: 'נעמי ברש', isAdult: true }, { name: 'נעמי ברש', participantType: 'adult' }),
+    true
+  );
+
+  // And a child signed for by a parent never resolves onto an adult's card.
+  assert.equal(
+    sameFamilyParticipant({ name: 'נעמי ברש', isAdult: true }, { name: 'נעמי ברש', participantType: 'child' }),
+    false
+  );
+  assert.equal(
+    sameFamilyParticipant(imported, { name: 'נעמי ברש', participantType: 'child', birthDate: '2008-08-04' }),
+    true
+  );
+  assert.equal(
+    sameFamilyParticipant(imported, { name: 'יונתן ברש', participantType: 'child' }),
+    false
+  );
 });
