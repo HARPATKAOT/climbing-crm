@@ -8,7 +8,7 @@ import {
   unbackedReplyClaims,
   unbackedClaimHandoffText,
   CUSTOMER_TOOL_RULES,
-  explicitGroupSuitabilityHandoff,
+  asksToCrossAgeBands,
   confirmsLastBotQuestion,
   separateMultiChildGradeQuestion,
   directRestrictedEligibility,
@@ -61,26 +61,31 @@ test('HANDOFF on the first line marks the turn for the team', async () => {
   assert.equal(turn.text, 'מעביר את זה לצוות, הם יחזרו אליך.');
 });
 
-test('a group-suitability handoff says plainly that the bot does not know', async () => {
+test('a request to break the age band names what it is handing over', async () => {
+  // "לאיזו קבוצה הוא מתאים" has an answer — the age on the card. Asking to put
+  // a fourth-grader in his brother's fifth-grade group does not.
   const turn = await runCustomerToolTurn({
-    incomingText: "היי, לאיזו קבוצה רועי מתאים שנה הבאה בכיתה ה'?",
+    incomingText: "אפשר להכניס את הבן שלי מכיתה ד' לקבוצה של אחיו מכיתה ה'?",
     apiKey: 'test-key',
-    callModel: scriptedModel([textReply('HANDOFF\nקיבלנו 🙏 מעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.')]),
+    callModel: scriptedModel([textReply('HANDOFF\nקיבלנו 🙏 מעביר לצוות שלנו.')]),
   });
-
   assert.equal(turn.handoff, true);
-  assert.equal(
-    turn.text,
-    'אני לא יודע לאיזו קבוצה רועי מתאים, ולכן אני מעביר את השאלה לצוות שלנו.\n'
-      + 'מישהו מהצוות יחזור אליכם בהקדם.'
-  );
+  assert.equal(turn.text, 'קיבלנו 🙏 מעביר לצוות שלנו.');
+
+  const bare = await runCustomerToolTurn({
+    incomingText: "אפשר לשבץ אותם יחד באותה קבוצה?",
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('HANDOFF')]),
+  });
+  assert.match(bare.text, /שיבוץ מחוץ לשכבת הגיל/);
 });
 
-test('the transparent wording is limited to group suitability questions', () => {
-  assert.equal(
-    explicitGroupSuitabilityHandoff('אני רוצה החזר', 'מעביר את בקשת ההחזר לצוות.'),
-    'מעביר את בקשת ההחזר לצוות.'
-  );
+test('asking which group a child fits is not a request to break the band', () => {
+  assert.equal(asksToCrossAgeBands("לאיזו קבוצה רועי מתאים שנה הבאה בכיתה ה'?"), false);
+  assert.equal(asksToCrossAgeBands('אני רוצה החזר'), false);
+  assert.equal(asksToCrossAgeBands("אפשר להכניס את הבן שלי מכיתה ד' עם אחיו מכיתה ה'?"), true);
+  assert.equal(asksToCrossAgeBands('אפשר לשבץ אותו עם אחותו באותה קבוצה?'), true);
+  assert.equal(asksToCrossAgeBands('אפשר בכל זאת למרות הגיל?'), true);
 });
 
 test('an UNSURE prefix is stripped and is not a handoff', async () => {
@@ -595,6 +600,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'scheduleIntroSession',
     'startSignup',
     'updateCustomerDetails',
+    'updateTraineeBirthDate',
   ]);
   // Every writing tool must name the child it acts on, so the bot can never
   // place — or unplace — "somebody" from the card.

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isOutreachPaused,
+  openEndedPause,
   outreachPausedUntil,
   pauseRowId,
   resolvePauseUntil,
@@ -99,6 +100,29 @@ test('an unknown reason is stored as general rather than as itself', async () =>
     now: NOW,
   });
   assert.equal(saved.reason, 'general');
+});
+
+test('no date given is silence, not a two-week guess', async () => {
+  // "אני בחו״ל" with no return date used to buy a fortnight of quiet, after
+  // which the reminders came back on a customer who had never said they would
+  // be ready by then. The owner's call: ask, and stay quiet until they answer.
+  const open = openEndedPause({ now: NOW });
+  assert.equal(open.date, '2026-12-14');
+  assert.notEqual(open.date, '2026-08-30');
+
+  const db = makeDb();
+  await setOutreachPause(db, null, {
+    parentId: 'p1',
+    until: open.until,
+    reason: 'awaiting_customer_date',
+    note: 'בחו״ל, לא אמרה עד מתי',
+    now: NOW,
+  });
+  assert.ok(isOutreachPaused(db, 'p1', new Date('2026-10-01T09:00:00Z')));
+  // A date the customer later gives replaces it rather than adding a second row.
+  const named = resolvePauseUntil({ untilDate: '2026-09-05', now: NOW });
+  await setOutreachPause(db, null, { parentId: 'p1', until: named.until, note: 'חוזרת ב-5.9', now: NOW });
+  assert.equal(outreachPausedUntil(db, 'p1', NOW).slice(0, 10), '2026-09-05');
 });
 
 test('clearing releases the pause immediately', async () => {

@@ -71,6 +71,8 @@ export const CUSTOMER_TOOL_RULES = [
   'לקוח שאומר שכבר יש לו ציוד («יש לנו משנה שעברה», «לילד יש נעליים») — אל תאמר «מצוין, אין צורך». צריך להיכנס לאותו קישור ולסמן בו על כל פריט שהוא כבר קיים; בלי הסימון הפריט נשאר חסר במערכת והציוד ייראה כאילו לא הושלם. שלח את הקישור והסבר את שתי המטרות שלו: לסמן מה יש, ולהשלים מה שחסר.',
   'לקוח שכותב «בוצע», «סיימנו» או ניסוח דומה לגבי ציוד אינו הוכחה שהמערכת עודכנה. קרא ל-getEquipmentPaymentLink ובדוק את המצב בפועל. רק אם הכלי מחזיר שהציוד סגור מותר לאשר שהכול מעודכן; אחרת שלח את הקישור והסבר מה עדיין פתוח.',
   `לקוח שרוצה להירשם: ודא קודם ${FORM_SHORT} (getHealthDeclarations). אין טופס — שלח את הקישור והסבר ש${FORM_PURPOSE}, ואל תשבץ. יש טופס — קרא ל-startSignup לקבוצה שנבחרה, ואם היא מלאה ל-joinWaitlist.`,
+  'ההרשמה נגמרת רק כשכל החמישה הושלמו: טופס השתתפות חתום, קבוצה שנבחרה ומקום שנשמר, קישור ההרשמה במתנ״ס שנשלח, דיווח שההרשמה במתנ״ס הושלמה, וציוד ששולם או שסומן שהוא קיים מהבית. אין לעצור באמצע ואין לסיים תשובה בלי הצעד הפתוח הבא.',
+  'getFamilyCard מחזיר «הצעד_הבא» לכל מתאמן ו«הערת_הרשמה» לכרטיס. כל עוד יש צעד פתוח — הוא מה שסוגר את התשובה, ואסור לומר «אין צורך בפעולה נוספת», «הכול מסודר» או «ניפגש באימונים». מותר לומר שהכול מסודר רק כש«הרשמה_שלמה» היא אמת.',
   'אחרי startSignup מוצלח: אמור בקצרה שהילד משובץ ושהמקום שמור עד המועד שהכלי החזיר. הסבר שחייבים להירשם במתנ״ס ולאשר לנו בתוך 3 ימים, ושלח את חבילת ההרשמה והציוד פעם אחת. אל תציג שמות סטטוסים פנימיים.',
   'שליחת קישור, מילוי הטופס בקישור, צילום מסך או דיווח של הלקוח אינם אישור מאומת להרשמה. אמור שהדיווח התקבל לבדיקה. רק אימות מהמתנ״ס או אישור צוות מאפשרים לומר שההרשמה אושרה.',
   'בקשה להתחיל בחודש עתידי אינה שיבוץ ואינה שמירת מקום. אל תקרא ל-startSignup ואל תאמר ששמרת מקום; הסבר בקצרה שלא ניתן להירשם מראש לחודש עתידי, ורק אם הלקוח מבקש לחזור אליו קרא ל-scheduleFollowUp.',
@@ -88,7 +90,10 @@ export const CUSTOMER_TOOL_RULES = [
   'שגיאה שכלי החזיר היא עניין פנימי שלנו. אסור לתאר אותה ללקוח כתקלה, כפילות, סתירה או בעיה בכרטיס שלו — «יש כפילות בכרטיס של נעמי» נאמר לאמא שלא הייתה שום כפילות אצלה, והמשמעות היחידה של השגיאה הייתה שיותר מקבוצה אחת התאימה. אם הכלי מבקש לשאול — שאל את השאלה. אם צריך אדם — כתוב שאתה מעביר לצוות, בלי להמציא סיבה.',
   'לקוח שנקב בשני ימים («ראשון ורביעי», «שני וחמישי») כבר ענה על שאלת התדירות: זה פעמיים בשבוע. העבר frequency «פעמיים בשבוע» ואל תשאל אותו לבחור יום אחד מהשניים שהוא ביקש.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
-  'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תבקש תאריך לידה בשיחה. תאריך לידה מתעדכן דרך טופס ההרשמה; אם הטופס כבר מולא והסתירה נשארה, העבר לצוות.',
+  'שאלה „לאיזו קבוצה הילד מתאים?” היא שאלה שיש לה תשובה: הגיל שבכרטיס קובע את השכבה, ו-listClasses מחזיר את הקבוצות שלה. ענה עליה — אל תעביר אותה לצוות ואל תאמר שאינך יודע. אם אין גיל בכרטיס, שלח את טופס ההשתתפות שממנו הוא מגיע.',
+  'מה שכן עובר לאדם הוא בקשה לחרוג מהשכבה: לשבץ ילד עם אח או חבר מכיתה אחרת, „אפשר בכל זאת למרות הגיל”, או כל בקשה חריגה אחרת. שם אין טבלה שתכריע, וזו החלטה של הצוות שמפעיל את הקבוצה.',
+  'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל או כיתה שאינם מתיישבים עם תאריך הלידה שבכרטיס — שאל פעם אחת לוודא את תאריך הלידה («רק לוודא — מה תאריך הלידה שלו?»), וכשהוא נמסר קרא ל-updateTraineeBirthDate ואז המשך בשיבוץ. אין לשבץ על סמך גיל שנאמר בשיחה בלי לעדכן את הכרטיס.',
+  'תאריך לידה של מתאמן חדש נאסף בטופס ההשתתפות ולא בשיחה. את updateTraineeBirthDate קוראים רק כדי לתקן סתירה שהתגלתה, ורק על מתאמן שכבר קיים בכרטיס.',
   'הגיל של ילד מגיע מוכן מהמערכת בשדה «גיל». אל תחשב גיל מתאריך לידה בעצמך, ואל תסיק ממנו שכבה.',
   'בשיחת וואטסאפ אוספים מהלקוח רק שם פרטי ושם משפחה. אל תבקש תעודת זהות, תאריך לידה, כתובת או פרטי הרשמה אחרים — הם נאספים בטופס ההרשמה.',
   'לקוח לא מזוהה חייב למסור שם פרטי ושם משפחה. כששניהם נמסרו, קרא ל-updateCustomerDetails עם שני השדות. אם נמסר רק שם פרטי, שאל רק לשם המשפחה.',
@@ -561,19 +566,32 @@ function textOf(content) {
  * the bot does not know the answer. Make that limitation explicit without
  * changing handoffs for refunds, cancellations and other human-only topics.
  */
-export function explicitGroupSuitabilityHandoff(incomingText, fallbackText = '') {
-  const incoming = String(incomingText || '').trim();
-  const asksWhichGroup = /(?:לאיז(?:ו|ה)\s+קבוצה|איזו\s+קבוצה|לאיזו\s+מסגרת)/u.test(incoming);
-  const asksWhatFits = /(?:למה|לְמה)\s+[^?!.]{1,60}\s+מתאי(?:ם|מה)|מתאי(?:ם|מה)\s+לאיז(?:ו|ה)\s+קבוצה/u.test(incoming);
-  if (!asksWhichGroup && !asksWhatFits) return String(fallbackText || '').trim();
+/**
+ * A request to put a child somewhere the age band does not put them.
+ *
+ * „לאיזו קבוצה הוא מתאים?” is not that question — the age on the card answers
+ * it, and answering it was the bot's job all along. What no table can answer
+ * is „אפשר להכניס את הבן שלי מכיתה ד׳ לקבוצה של אחיו מכיתה ה׳?”: that is a
+ * request to break the band, and it belongs to whoever runs the group.
+ */
+export function asksToCrossAgeBands(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  const together = /(?:יחד\s+עם|באותה\s+קבוצה|עם\s+אח(?:יו|ותו|ות|ים)?\b|עם\s+האח|עם\s+החבר|באותו\s+חוג)/u.test(value);
+  const twoGrades = /(?:כיתה|כיתות)\s*[א-י].{0,40}(?:כיתה|כיתות)\s*[א-י]/u.test(value);
+  const asksException = /(?:חריג|לעשות\s+יוצא|אפשר\s+בכל\s+זאת|למרות\s+הגיל|למרות\s+שהוא\s+קטן|מבוגר\s+מדי|צעיר\s+מדי)/u.test(value);
+  return asksException || twoGrades || (together && /קבוצ|חוג/u.test(value));
+}
 
-  const nameMatch = incoming.match(/(?:לאיז(?:ו|ה)\s+קבוצה|(?:למה|לְמה))\s+([\p{L}'״׳-]{2,24})\s+מתאי(?:ם|מה)/u);
-  const possibleName = String(nameMatch?.[1] || '').trim();
-  const name = /^(?:הוא|היא|הילד|הילדה|המתאמן|המתאמנת)$/u.test(possibleName) ? '' : possibleName;
-  const missingFact = name
-    ? `אני לא יודע לאיזו קבוצה ${name} מתאים, ולכן אני מעביר את השאלה לצוות שלנו.`
-    : 'אני לא יודע מהי הקבוצה המתאימה במקרה הזה, ולכן אני מעביר את השאלה לצוות שלנו.';
-  return `${missingFact}\nמישהו מהצוות יחזור אליכם בהקדם.`;
+/**
+ * The answer a customer gets when they asked to break the band. It names the
+ * thing they asked for, so the handoff does not read as "I did not understand".
+ */
+export function crossBandHandoffText(fallbackText = '') {
+  const written = String(fallbackText || '').trim();
+  if (written) return written;
+  return 'שיבוץ מחוץ לשכבת הגיל הוא החלטה של הצוות שמפעיל את הקבוצה, ולכן אני מעביר את הבקשה אליהם.\n'
+    + 'מישהו יחזור אליכם בהקדם.';
 }
 
 function recentCustomerText(history = [], incomingText = '') {
@@ -930,7 +948,7 @@ export async function runCustomerToolTurn({
       if (reported) return reported;
 
       const customerText = handoff
-        ? explicitGroupSuitabilityHandoff(incoming, text)
+        ? (asksToCrossAgeBands(incoming) ? crossBandHandoffText(text) : text)
         : text;
       return { text: customerText, handoff, unsure, toolsUsed, reason: 'ok' };
     }

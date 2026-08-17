@@ -99,9 +99,10 @@ export const BOT_CAPABILITIES = [
   {
     key: 'save_name',
     label: 'עדכון פרטים בכרטיס',
-    hint: 'שם פרטי ושם משפחה בלבד; יתר הפרטים נאספים בטופס ההרשמה',
+    hint: 'שם פרטי ושם משפחה, ותיקון תאריך לידה שאינו מתיישב עם מה שההורה אומר; '
+      + 'יתר הפרטים נאספים בטופס ההרשמה',
     source: 'כותב לכרטיס הלקוח',
-    tools: ['updateCustomerDetails'],
+    tools: ['updateCustomerDetails', 'updateTraineeBirthDate'],
   },
   {
     key: 'mailing_preferences',

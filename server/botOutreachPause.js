@@ -24,6 +24,7 @@ export const MAX_PAUSE_DAYS = 120;
 export const PAUSE_REASONS = new Set([
   'customer_unavailable', // „אני בחו״ל”, „אני בטיול”
   'customer_later',       // „נירשם רק באוקטובר”
+  'awaiting_customer_date', // אמר שאינו יכול, טרם אמר מתי כן
   'staff_handling',       // הועבר לצוות ואדם מטפל
   'general',
 ]);
@@ -104,6 +105,19 @@ export function resolvePauseUntil({
     if (date) return { date, until: new Date(israelTimeToEpoch(date, '09:00')).toISOString() };
   }
   return null;
+}
+
+/**
+ * „אני בחו״ל” with no date at all.
+ *
+ * Guessing a fortnight is how the reminders came back on a customer who had
+ * not said anything of the sort. The owner's call: ask when to come back, and
+ * stay quiet until they answer. Quiet means the season ceiling — an inbound
+ * message is answered as usual throughout, because the pause only ever held
+ * back what we start.
+ */
+export function openEndedPause({ now = new Date() } = {}) {
+  return resolvePauseUntil({ days: MAX_PAUSE_DAYS, now });
 }
 
 const MONTHS_HE = new Map([

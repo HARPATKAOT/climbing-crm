@@ -119,7 +119,7 @@ import {
   newFollowUpId,
   planFollowUp,
 } from './botFollowUps.js';
-import { resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
+import { openEndedPause, resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
 import { shortMailingPreferencesUrl } from './mailingShortLinks.js';
 import {
   loadEquipmentPrices,
@@ -450,6 +450,27 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         },
       },
       required: ['note'],
+    },
+  },
+  {
+    name: 'updateTraineeBirthDate',
+    description:
+      'מתקן תאריך לידה של מתאמן שכבר קיים בכרטיס. להשתמש רק כשמה שהלקוח אומר '
+      + 'על הגיל או הכיתה אינו מתיישב עם התאריך שבמערכת, ורק אחרי ששאלת אותו '
+      + 'לוודא ומסר תאריך. אין לאסוף תאריך לידה של מתאמן חדש — הוא מגיע מהטופס.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: {
+          type: 'string',
+          description: 'שם המתאמן שהתאריך שלו מתעדכן. ריק = המתאמן היחיד בכרטיס',
+        },
+        birthDate: {
+          type: 'string',
+          description: 'תאריך הלידה שהלקוח מסר, בפורמט YYYY-MM-DD',
+        },
+      },
+      required: ['birthDate'],
     },
   },
   {
@@ -1047,6 +1068,36 @@ export function checkAgeAgainstBand(student, group) {
 
 export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
+}
+
+/**
+ * The five things a registration is made of, and which one is still open.
+ *
+ * The bot used to close a conversation at whichever step it had just finished:
+ * a form was signed, so „הפרטים התקבלו”; a place was held, so „הילד משובץ”.
+ * Nobody was carried to the end, and the gap surfaced weeks later as a child
+ * with no group or a kit nobody paid for. Every turn now ends with whichever
+ * of these is still missing.
+ */
+function registrationProgress(student, group) {
+  const documents = participationEligibility(db, { studentId: student.id });
+  const equipment = unpaidEquipmentItems((db.get('student_equipment') || []).filter(
+    (row) => String(row.student_id || row.studentId || '') === String(student.id)
+  ));
+  const reported = ['awaiting_centre_confirmation', 'registered', 'active']
+    .includes(String(student.status || ''));
+
+  const steps = [
+    { done: documents.eligible, next: `להשלים את ${FORM_SHORT}` },
+    { done: Boolean(group) || hasLiveGroup(student), next: 'לבחור קבוצה ולשמור מקום' },
+    { done: reported, next: 'להירשם במתנ״ס ולעדכן אותנו שנרשמתם' },
+    { done: !equipment.length, next: 'להסדיר את הציוד, או לסמן בקישור מה כבר קיים מהבית' },
+  ];
+  const open = steps.find((step) => !step.done);
+  return {
+    הרשמה_שלמה: !open,
+    ...(open ? { הצעד_הבא: open.next } : {}),
+  };
 }
 
 /**
@@ -2047,6 +2098,63 @@ export function buildCustomerTools({
     },
 
     /**
+     * תיקון תאריך לידה שאינו מתיישב עם מה שההורה אומר.
+     *
+     * עד היום סתירה כזאת עצרה את השיחה: הכרטיס אמר גיל אחד, ההורה אמר אחר,
+     * והבוט לא שיבץ ולא שאל. אבל ההורה הוא המקור — הוא מילא את הטופס, והוא
+     * זה שיודע. שאלה אחת לאימות פותרת את זה, ובלעדיה השיבוץ נתקע על נתון
+     * שאיש לא בדק.
+     */
+    updateTraineeBirthDate: async ({ childName, birthDate } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const child = requireKnownChild(parent, childName);
+      if (child.error) return child;
+      const { student } = child;
+
+      const wanted = String(birthDate || '').trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(wanted)) {
+        return { error: 'תאריך לידה חייב להיות בפורמט YYYY-MM-DD — יש לשאול את הלקוח שוב' };
+      }
+      const age = ageFromBirthDate(wanted);
+      // A typo in the year is the failure that matters here: it silently moves
+      // the trainee to another age band, and the next placement follows it.
+      if (!age || age.years < 2 || age.years > 100) {
+        return {
+          error: 'התאריך שנמסר אינו סביר — יש לוודא אותו עם הלקוח ולא לעדכן',
+          תאריך_שנמסר: wanted,
+        };
+      }
+      const previous = String(student.birthDate || student.birth_date || '');
+      if (previous === wanted) {
+        return {
+          עודכן: false,
+          כבר_זהה: true,
+          מתאמן: student.name || '',
+          תאריך_לידה: wanted,
+          הערה: 'התאריך בכרטיס כבר זהה. אין לומר שעודכן — יש להמשיך בשיבוץ.',
+        };
+      }
+
+      const saved = db.update('students', student.id, { birthDate: wanted });
+      if (!saved) return { error: 'עדכון תאריך הלידה נכשל — יש להעביר לצוות' };
+      await persistCore('students', saved);
+      journal(
+        'details_saved',
+        `תאריך הלידה של ${student.name || 'מתאמן'} עודכן ל-${wanted}${previous ? ` (היה ${previous})` : ''}`,
+        { field: 'birthDate', from: previous || null, to: wanted },
+        saved
+      );
+      return {
+        עודכן: true,
+        מתאמן: student.name || '',
+        תאריך_לידה: wanted,
+        גיל: ageLabelFor(wanted),
+        הערה: 'הכרטיס עודכן. יש לאשר בקצרה ולהמשיך לשיבוץ לפי הגיל החדש, '
+          + 'בלי לבקש פרטים נוספים.',
+      };
+    },
+
+    /**
      * „אני בחו״ל וזה לא מאפשר לי לשלם” נאמר שלוש פעמים, ובכל בוקר יצאה עוד
      * תזכורת על אותו טופס ואותו ציוד. הבוט ענה נכון בכל פעם — פשוט לא היה לו
      * איפה לרשום שאסור לפנות עכשיו.
@@ -2055,17 +2163,15 @@ export function buildCustomerTools({
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const subject = String(note || '').trim();
       if (!subject) return { error: 'חסר מה הלקוח אמר' };
-      const plan = resolvePauseUntil({ days, targetMonth, untilDate });
-      if (!plan) {
-        return {
-          error: 'צריך לדעת עד מתי',
-          הערה: 'יש לשאול את הלקוח מתי נוח שנחזור אליו, ורק אז לקרוא לכלי שוב.',
-        };
-      }
+      // No date given is not a reason to guess one. The customer said they
+      // cannot act now, so the reminders stop; the question of when to come
+      // back is asked, and the answer moves the date.
+      const dated = resolvePauseUntil({ days, targetMonth, untilDate });
+      const plan = dated || openEndedPause();
       const saved = await setOutreachPause(db, persistCore, {
         parentId: parent.id,
         until: plan.until,
-        reason: reason || 'general',
+        reason: dated ? (reason || 'general') : 'awaiting_customer_date',
         note: subject,
       });
       if (!saved) return { error: 'שמירת ההשהיה נכשלה' };
@@ -2077,9 +2183,14 @@ export function buildCustomerTools({
       return {
         מושהה_עד: plan.date,
         סיבה: subject,
-        הערה: 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
-          + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
-          + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.',
+        נקב_במועד: Boolean(dated),
+        הערה: dated
+          ? 'לא ייצאו תזכורות עד המועד הזה. יש לאשר ללקוח בקצרה שנחזור אז, '
+            + 'ולא להבטיח שעה מדויקת. אם הלקוח רוצה להמשיך בכל זאת — אפשר להמשיך '
+            + 'רגיל, ההשהיה חלה רק על פניות שאנחנו יוזמים.'
+          : 'הלקוח לא נקב במועד, ולכן התזכורות נעצרו לגמרי. יש לומר לו שלא '
+            + 'נטריד בינתיים, ולשאול משפט אחד מתי נוח שנחזור אליו. כשהוא יענה — '
+            + 'יש לקרוא לכלי שוב עם המועד שמסר. אין לנקוב במועד מטעמנו.',
       };
     },
 
@@ -2993,12 +3104,19 @@ export function buildCustomerTools({
           ...(s.status === 'pending_signup' && !group
             ? { הערת_סטטוס: 'אין קבוצה משובצת, ולכן אין להציג את המתאמן כממתין להרשמה' }
             : {}),
+          ...registrationProgress(s, group),
         };
       });
+      const openSteps = kids.filter((kid) => kid.הצעד_הבא);
       return {
         שם_הלקוח: parent.name || '',
         ילדים: kids,
         הערה: 'הגיל כבר מחושב — אין לחשב גיל מתאריך הלידה.',
+        הערת_הרשמה: openSteps.length
+          ? `ההרשמה אינה שלמה. הצעד הפתוח: ${openSteps
+            .map((kid) => `${kid.שם} — ${kid.הצעד_הבא}`).join('; ')}. `
+            + 'כל תשובה חייבת להסתיים בצעד הזה, ואין לומר «אין צורך בפעולה נוספת» כל עוד הוא פתוח.'
+          : 'ההרשמה שלמה לכל המתאמנים בכרטיס — טופס, קבוצה, מתנ״ס וציוד.',
       };
     },
   };
