@@ -12,7 +12,8 @@ import {
   Loader2, Lock, Unlock, Plus, Repeat, Send, Square, Trash2, UserPlus, Users, X,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
-import { assignableLabelsOf, useRoleCatalog } from '../utils/staffRoles.js';
+import { assignableLabelsOf, rolesOf, useRoleCatalog } from '../utils/staffRoles.js';
+import { isWallStaff } from '../utils/employeeScope.js';
 import { activityFilterChips, activityTypeMeta, useActivityTypes } from '../utils/activityTypes.js';
 import { activityTypeIcon } from '../utils/activityIcons.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
@@ -175,47 +176,102 @@ function TypeChips({ chips, selected, onChange, stats }) {
 }
 
 /**
- * מי מקבל את הקישור.
+ * למי הטופס נשלח.
  *
- * ברירת המחדל היא כל הצוות, כי הטופס מציג לכל אחד רק את התפקידים שהוא מחזיק —
- * אין סיבה לסנן מראש. אבל „כולם” הוא לא תמיד מי שרוצים: אחד בחופשה, אחד חדש
- * שעוד לא מוכן למשמרת לבד. לכן אפשר לצמצם לשמות, והרשימה נפתחת מקופלת כדי שלא
- * תשתלט על הטופס.
+ * רשימה ריקה פירושה „כל הצוות” — זו ברירת המחדל ולא מצב חסר. כדי לבחור קבוצה
+ * אין צורך ללחוץ 23 שמות: הקיצורים ממלאים את הרשימה (עובדי קיר, עובדי חוץ, או
+ * תפקיד מסוים), ומשם אפשר להוסיף ולהוריד שמות ידנית. „ניקוי הכל” מרוקן את
+ * הסימון כדי להתחיל בחירה מאפס — וזה מצב שאי אפשר לשמור ממנו, כי טופס שלא
+ * מגיע לאף אחד הוא טעות ולא בחירה.
  */
-function RecipientPicker({ employees, value, onChange }) {
+function RecipientPicker({ employees, value, onChange, cleared, onCleared }) {
   const [open, setOpen] = useState(false);
   const explicit = value.length > 0;
+  const isOn = (id) => (cleared ? false : (explicit ? value.includes(id) : true));
+
+  const pick = (ids) => {
+    onCleared(false);
+    onChange(ids);
+    setOpen(true);
+  };
 
   const toggle = (id) => {
+    onCleared(false);
     // המעבר מ„כולם” לרשימה מפורשת מתחיל מכולם פחות מי שהוסר — אחרת לחיצה אחת
     // על שם אחד הייתה מבטלת בשקט את כל השאר.
-    if (!explicit) {
+    if (!explicit && !cleared) {
       onChange(employees.map((e) => e.id).filter((x) => x !== id));
       return;
     }
     onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
   };
 
+  const idsWhere = (predicate) => employees.filter(predicate).map((e) => e.id);
+  const roleOptions = [...new Set(employees.flatMap((e) => rolesOf(e)))].sort((a, b) => a.localeCompare(b, 'he'));
+
   return (
     <div>
       <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span>למי לשלוח</span>
-        <span className="badge badge-blue">
-          {explicit ? `${value.length} נבחרו` : `כל הצוות (${employees.length})`}
+        <span className={`badge ${cleared ? 'badge-red' : 'badge-blue'}`}>
+          {cleared ? 'לא נבחר אף אחד' : (explicit ? `${value.length} נבחרו` : `כל הצוות (${employees.length})`)}
         </span>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(!open)}>
           {open ? 'סגירה' : 'בחירת שמות'}
         </button>
-        {explicit && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange([])}>
-            <X size={12} /> חזרה לכולם
+        {(explicit || cleared) && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => { onCleared(false); onChange([]); }}
+          >
+            <Users size={12} /> חזרה לכולם
           </button>
         )}
       </div>
+
+      <div className="choice-row" style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          className="choice-pill"
+          style={{ '--choice-accent': '#34D399' }}
+          onClick={() => pick(idsWhere((e) => isWallStaff(e)))}
+        >
+          <Users size={14} /> עובדי קיר
+        </button>
+        <button
+          type="button"
+          className="choice-pill"
+          style={{ '--choice-accent': '#FBBF24' }}
+          onClick={() => pick(idsWhere((e) => !isWallStaff(e)))}
+        >
+          <Users size={14} /> עובדי חוץ
+        </button>
+        {roleOptions.map((role) => (
+          <button
+            type="button"
+            key={role}
+            className="choice-pill"
+            style={{ '--choice-accent': roleColor(role) }}
+            onClick={() => pick(idsWhere((e) => rolesOf(e).includes(role)))}
+          >
+            {role}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="choice-pill"
+          style={{ '--choice-accent': '#F87171' }}
+          onClick={() => { onCleared(true); onChange([]); setOpen(true); }}
+        >
+          <X size={14} /> ניקוי הכל
+        </button>
+      </div>
+
       {open && (
         <div className="choice-row" style={{ maxHeight: 132, overflowY: 'auto', marginTop: 8 }}>
           {employees.map((employee) => {
-            const on = explicit ? value.includes(employee.id) : true;
+            const on = isOn(employee.id);
             return (
               <button
                 type="button"
@@ -250,6 +306,9 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
   const [note, setNote] = useState('');
   const [deadline, setDeadline] = useState('');
   const [recipients, setRecipients] = useState([]);
+  // „ניקוי הכל” — מצב ביניים של בחירה מאפס. רשימה ריקה לבדה פירושה „כל הצוות”,
+  // ולכן צריך סימן נפרד כדי לא לשלוח בטעות לכולם.
+  const [recipientsCleared, setRecipientsCleared] = useState(false);
   const [slots, setSlots] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -435,6 +494,8 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         employees={employees}
         value={recipients}
         onChange={setRecipients}
+        cleared={recipientsCleared}
+        onCleared={setRecipientsCleared}
       />
 
       {source === 'calendar' && (
@@ -629,8 +690,10 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         <button
           className="btn btn-primary btn-sm"
           onClick={create}
-          disabled={busy || !chosenSlots.length || !title.trim()}
-          title={!chosenSlots.length ? 'קודם שלפו משמרות וסמנו מה להציע' : ''}
+          disabled={busy || !chosenSlots.length || !title.trim() || recipientsCleared}
+          title={recipientsCleared
+            ? 'לא נבחר אף עובד — סמנו למי לשלוח'
+            : (!chosenSlots.length ? 'קודם שלפו משמרות וסמנו מה להציע' : '')}
         >
           <Plus size={14} /> יצירת הטופס
           {chosenSlots.length > 0 ? ` (${chosenSlots.length})` : ''}
