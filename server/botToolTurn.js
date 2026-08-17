@@ -78,8 +78,9 @@ export const CUSTOMER_TOOL_RULES = [
   'בקשה להוציא ילד מקבוצה או לבטל שיבוץ: קרא ל-cancelSignup עם שמו. להעביר לקבוצה אחרת: cancelSignup ואז startSignup לקבוצה החדשה.',
   'כאשר הורה של מתאמן שמסומן «היה רשום בשנה האחרונה» אומר במפורש שלא ימשיך או לא יירשם השנה, קרא ל-archiveNonReturningStudent. אל תסתפק בתשובת תודה. הכלי מיועד רק לעונה הקודמת; ביטול של מתאמן שרשום כעת עובר לצוות.',
   'שיבוץ, העברה וביטול מותרים רק כל עוד המתאמן אינו רשום לחוג. אם כלי החזיר שהוא כבר רשום — זו העברה לצוות, לא ניסיון נוסף ולא ניסוח אחר.',
-  'שאלה על טיולים או אירועים: קרא ל-getEvents ומסור את הפרטים. שאלה היא שאלה — אל תרשום אף אחד כמתעניין רק כי שאל. בסוף הפרטים שאל אם זה מעניין אותם ואם לרשום כמתעניינים.',
-  'רק אחרי שהלקוח אמר שכן — קרא ל-addActivityInterest עם המזהה של אותו אירוע, ואמור שזו התעניינות בלבד: אינה תופסת מקום, אינה הרשמה ואינה חיוב.',
+  'שאלה על טיולים או אירועים: קרא ל-getEvents ומסור את הפרטים. שאלה היא שאלה — אל תרשום אף אחד כמתעניין רק כי שאל.',
+  'לאירוע פתוח שיש לו תאריך ו«קישור» — מי שאומר שהוא רוצה להירשם מקבל את הקישור הזה, והוא דף ההרשמה והתשלום. אין להעביר אותו לצוות ואין להסתפק ברישום כמתעניין. יש לציין שההרשמה נסגרת בתשלום בדף, ואם יש «מקומות_פנויים» — לומר כמה נשארו.',
+  'רשימת המתעניינים היא לשני מצבים בלבד: פעילות שעדיין אין לה תאריך («רעיונות»), ולקוח שמתעניין אבל אינו רוצה להירשם עכשיו. בשני המצבים — רק אחרי שהלקוח אמר שכן, קרא ל-addActivityInterest עם המזהה, ואמור שזו התעניינות בלבד: אינה תופסת מקום, אינה הרשמה ואינה חיוב.',
   'הלקוח אמר שהוא לא מעוניין, לא יכול בתאריך, או ביקש להוריד אותו מהרשימה — קרא ל-removeActivityInterest עם המזהה של האירוע. אשר בקצרה ואל תשכנע אותו לחזור.',
   'לקוח שמבקש לחזור אליו («תבדוק איתי מחר», «נדבר בשבוע הבא») — קרא ל-scheduleFollowUp עם מספר הימים ועם מה שסוכם, ואמור לו שנחזור אליו. אל תבטיח שעה מדויקת.',
   'לקוח שאומר שאינו יכול להתקדם עכשיו — «אני בחו״ל», «זה לא מאפשר לי לשלם מכאן», «נירשם רק באוקטובר», «תחזרו אליי אחרי החגים» — קרא ל-pauseOutreach כדי שלא יקבל תזכורות בינתיים. אם הוא נקב במועד, העבר אותו ב-days, ב-targetMonth או ב-untilDate. אם לא נקב — שאל אותו מתי נוח שנחזור, ורק אחרי שיענה קרא לכלי. אין להמשיך לשלוח לו קישורי טופס, ציוד או הרשמה באותה שיחה אחרי שאמר את זה.',
@@ -231,14 +232,30 @@ function successfulToolNames(calls = []) {
   return new Set(calls.map((call) => call.name));
 }
 
+/**
+ * Statuses a customer may be told they are registered under.
+ *
+ * `awaiting_centre_confirmation` belongs here: it is written only after the
+ * parent has told us they registered at the מתנ״ס, so "אתם רשומים אצלנו" is
+ * true — what remains unverified is the מתנ״ס's own confirmation, and the
+ * wording rules already forbid claiming that. Leaving it out meant a father
+ * whose two daughters were placed and reported got "אני בודק את מצב ההרשמה
+ * מול הצוות" as an answer, and replied with a laughing emoji.
+ */
+const REGISTERED_ENOUGH_TO_SAY = new Set([
+  'registered', 'active', 'awaiting_centre_confirmation',
+  'רשום', 'רשומה', 'פעיל', 'פעילה',
+]);
+
 function resultContainsRegisteredStatus(value) {
   if (!value || typeof value !== 'object') return false;
   if (Array.isArray(value)) return value.some(resultContainsRegisteredStatus);
   for (const [key, item] of Object.entries(value)) {
-    if (/^(?:status|סטטוס|מצב_הרשמה)$/i.test(key)) {
-      const status = String(item || '').trim().toLowerCase();
-      if (['registered', 'active', 'רשום', 'רשומה', 'פעיל', 'פעילה'].includes(status)) return true;
+    if (/^(?:status|סטטוס|מצב_הרשמה|סטטוס_פנימי)$/i.test(key)) {
+      if (REGISTERED_ENOUGH_TO_SAY.has(String(item || '').trim().toLowerCase())) return true;
     }
+    // The registration tool answers with the fact rather than a status name.
+    if (/^(?:משובץ_אצלנו|רשום_כבר_במתנס)$/.test(key) && item === true) return true;
     if (item && typeof item === 'object' && resultContainsRegisteredStatus(item)) return true;
   }
   return false;

@@ -126,6 +126,7 @@ import {
   loadEquipmentInfo,
   resolveEnrichmentFee,
   entryProductsFromPricelist,
+  passProductsFromPricelist,
   trainerNameForGroup,
   groupSignupUrl,
   eventPublicUrl,
@@ -1412,11 +1413,25 @@ export function buildCustomerTools({
           ? entries
           : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
       }
+      // A price is an answer; a sale is a counter transaction. The bot may say
+      // what a punch card costs and must not sell one.
+      const passes = passProductsFromPricelist(db.get('pricelist') || []);
+      payload.כרטיסיות_ומנויים = passes.length
+        ? {
+          מוצרים: passes,
+          הערה: 'מותר למסור את המחירים האלה. אין למכור, אין לפתוח כרטיסייה או '
+            + 'מנוי, ואין להבטיח הארכה או הקפאה — רכישה נעשית בדלפק או מול הצוות.',
+        }
+        : { הערה: 'אין כרטיסיות או מנויים פעילים במחירון — אין לנקוב בסכום' };
       const fee = await resolveEnrichmentFee(settings);
       // A yearly charge quoted beside monthly class fees reads as monthly.
       payload.דמי_העשרה = fee > 0
         ? { סכום: fee, תדירות: 'תשלום שנתי, פעם בשנת חוגים' }
         : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };
+      // What a parent asking "כמה עולה החוג?" is actually asking about.
+      payload.מה_להשיב_על_עלות_חוג = 'עלות חוג היא תמיד שלושה מרכיבים יחד: '
+        + 'המחיר החודשי של הקבוצה, דמי ההעשרה השנתיים, ועלות הציוד. יש למסור את '
+        + 'שלושתם באותה תשובה, גם אם נשאל רק על אחד מהם, ולציין מה חודשי ומה חד-פעמי.';
       return payload;
     },
 
@@ -1715,10 +1730,11 @@ export function buildCustomerTools({
         // שאלה על טיול אינה בקשה להירשם, ולכן אין לרשום מיוזמתנו — אבל מי
         // ששאל ולא נשאל בחזרה פשוט נעלם. לקוחה קיבלה את כל פרטי הטיול, איש
         // לא הציע לה להישמר ברשימה, והעניין שלה לא נרשם בשום מקום.
-        הערה: 'אחרי מסירת הפרטים חובה לשאול בסוף התשובה אם לרשום אותם לרשימת '
-          + 'המתעניינים — משפט אחד, למשל «לרשום אתכם לרשימת המתעניינים?». '
-          + 'אין לרשום בלי שהלקוח אישר; ברגע שאישר יש לקרוא ל-addActivityInterest '
-          + 'עם ה«מזהה» של האירוע.',
+        הערה: 'לכל אירוע כאן יש «קישור» — זהו דף ההרשמה והתשלום, והוא מה שנשלח '
+          + 'ללקוח שאומר שהוא רוצה להירשם. אין להעביר הרשמה לאירוע פתוח לצוות. '
+          + 'אחרי מסירת הפרטים חובה לשאול משפט אחד בסוף התשובה: האם לשלוח את '
+          + 'קישור ההרשמה, או לרשום לרשימת המתעניינים בינתיים. אין לרשום כמתעניין '
+          + 'בלי שהלקוח אישר; ברגע שאישר — addActivityInterest עם ה«מזהה».',
       };
     },
 
