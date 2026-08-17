@@ -87,6 +87,26 @@ test('a reminder already sent is not sent again on the next tick', () => {
   assert.equal(dueShiftReminders({ now: hoursBefore(5), store }).length, 0);
 });
 
+test('a send that WhatsApp reported as failed comes back on the next tick', () => {
+  // Meta accepts the message, then rejects it a second later over the webhook —
+  // a closed 24-hour window. Counting that as delivered left the instructor
+  // with no reminder at all.
+  const failed = { id: 'sa-shift-reminder-wo1', failed_at: '2026-08-09T12:00:00.000Z', attempts: 1 };
+  assert.equal(
+    dueShiftReminders({ now: hoursBefore(5), store: storeWith({ employees: [subscriber()], sends: [failed] }) }).length,
+    1
+  );
+  // …but not forever: a number that always fails must not turn one reminder
+  // into a message every ten minutes until the shift starts.
+  assert.equal(
+    dueShiftReminders({
+      now: hoursBefore(5),
+      store: storeWith({ employees: [subscriber()], sends: [{ ...failed, attempts: 3 }] }),
+    }).length,
+    0
+  );
+});
+
 test('nobody subscribed, nobody archived, nobody reminded', () => {
   assert.equal(
     dueShiftReminders({ now: hoursBefore(5), store: storeWith({ employees: [subscriber({ alerts: [] })] }) }).length,

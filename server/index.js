@@ -62,7 +62,7 @@ import {
 } from './cashRegister.js';
 import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
 import { alertRecipients, alertSubscribers } from './staffAlerts.js';
-import { sendStaffAlert } from './staffNotify.js';
+import { sendStaffAlert, noteStaffAlertFailure } from './staffNotify.js';
 import {
   GROUP_META_COLLECTION,
   enrichGroupsWithBotMeta,
@@ -3486,6 +3486,9 @@ async function processWhatsAppWebhookChange(change = {}) {
     for (const st of value.statuses) {
       const statusMap = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
       updateMessageStatusByMetaId(st.id, statusMap[st.status] || st.status);
+      // A staff alert that Meta accepted and then rejected was still written to
+      // the journal as sent. Reopen it, so the next scan tries again.
+      if (st.status === 'failed') noteStaffAlertFailure(st.id);
     }
   }
 

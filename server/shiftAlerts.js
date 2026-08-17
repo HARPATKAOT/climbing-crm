@@ -15,7 +15,7 @@
 
 import { db } from './db.js';
 import { reminderLeadHours, alertSubscribers } from './staffAlerts.js';
-import { sendStaffAlert } from './staffNotify.js';
+import { sendStaffAlert, alertAlreadySent, MAX_SEND_ATTEMPTS } from './staffNotify.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -119,8 +119,16 @@ function templateVars({ employee, activity, assignment }) {
   ];
 }
 
+/**
+ * Same rule as `alertAlreadySent`, against whichever store the scan reads:
+ * an entry whose delivery failed is not a send, so the reminder comes back.
+ */
 function alreadySentIn(store, sendId) {
-  return (store.get('automation_sends') || []).some((r) => r.id === sendId);
+  if (store === db) return alertAlreadySent(sendId);
+  const row = (store.get('automation_sends') || []).find((r) => r.id === sendId);
+  if (!row) return false;
+  if (!row.failed_at) return true;
+  return Number(row.attempts || 1) >= MAX_SEND_ATTEMPTS;
 }
 
 /**
