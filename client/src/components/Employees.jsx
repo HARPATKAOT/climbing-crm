@@ -2417,8 +2417,8 @@ function EmployeeOnboardFieldsModal({ onClose }) {
 }
 
 // ─── Tab: Employee Onboarding Link ─────────────────────────────────────────────
-// A fresh, one-time invite for each new hire. It lives in its own tab so it
-// does not compete for space with the employee table.
+// One permanent link for the whole team — unlimited hires, no expiry. It lives
+// in its own tab so it does not compete for space with the employee table.
 function EmployeeOnboardingLinkPanel() {
   const [copied, setCopied] = useState(false);
   const [inviteToken, setInviteToken] = useState('');
@@ -2433,11 +2433,15 @@ function EmployeeOnboardingLinkPanel() {
     ? `${window.location.origin}/staff-onboard#${encodeURIComponent(inviteToken)}`
     : '';
 
-  const createInvite = async () => {
+  const createInvite = async (reset = false) => {
     setInviteLoading(true);
     setInviteError('');
     try {
-      const response = await fetch('/api/employees/onboard-invite', { method: 'POST' });
+      const response = await fetch('/api/employees/onboard-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: !!reset }),
+      });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.token) throw new Error(data.error || 'יצירת הקישור נכשלה');
       setInviteToken(data.token);
@@ -2496,7 +2500,8 @@ function EmployeeOnboardingLinkPanel() {
     <div className="card card-p" style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          שלחו לעובד/ת חדש/ה קישור אישי. הקישור חד־פעמי ותקף ל־7 ימים; הרשומה נוצרת כלא־פעילה עד לאישור צוות.
+          קישור קבוע לקליטת צוות — אותו קישור לכל הנקלטים, בלי הגבלת שימושים ובלי תפוגה.
+          כל רשומה נוצרת כלא־פעילה עד לאישור צוות. «החלפת קישור» מבטלת את הקישור הקיים.
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowFieldsModal(true)}>
           <Settings2 size={13} /> עריכת שדות הטופס
@@ -2513,8 +2518,17 @@ function EmployeeOnboardingLinkPanel() {
         <button type="button" className="btn btn-ghost btn-sm" disabled={!link} onClick={copyLink}>
           <Copy size={13} /> {copied ? 'הועתק!' : 'העתקה'}
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={inviteLoading} onClick={createInvite}>
-          <RefreshCw size={13} /> קישור חדש
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={inviteLoading}
+          onClick={() => {
+            if (window.confirm('להחליף את קישור הקליטה? הקישור הקיים יפסיק לעבוד אצל כל מי שכבר קיבל אותו.')) {
+              createInvite(true);
+            }
+          }}
+        >
+          <RefreshCw size={13} /> החלפת קישור
         </button>
       </div>
       {inviteError && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{inviteError}</div>}

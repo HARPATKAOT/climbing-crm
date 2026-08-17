@@ -106,12 +106,19 @@ export function resolvePublicRedirectRecordId(
   return Number(match[1]) <= Number(legacyCutoffMs) ? supplied : null;
 }
 
+/**
+ * קישור הקליטה של הצוות הוא קישור קבוע: הוא נשלח לכל נקלט/ת, ללא הגבלת
+ * שימושים ובלי תפוגה (`expiresAt: 0`). הביטול היחיד הוא החלפת ה-nonce מהמסך,
+ * שמייד פוסלת את הקישור הישן. `expiresAt` חיובי נשמר עבור קישורים בני שבוע
+ * שהונפקו בעבר — הם ממשיכים לעבוד עד שיפוגו.
+ */
 export function issueEmployeeOnboardInvite({
   secret = '',
   now = Date.now(),
   nonce = crypto.randomBytes(24).toString('base64url'),
+  permanent = true,
 } = {}) {
-  const expiresAt = Number(now) + EMPLOYEE_ONBOARD_TTL_MS;
+  const expiresAt = permanent ? 0 : Number(now) + EMPLOYEE_ONBOARD_TTL_MS;
   const payload = Buffer.from(JSON.stringify({
     v: 1,
     purpose: 'employee-onboard',
@@ -129,16 +136,18 @@ export function verifyEmployeeOnboardInvite(token, { secret = '', now = Date.now
   if (!secureCompare(suppliedMac, expectedMac)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const expiresAt = Number(parsed?.expiresAt);
+    const permanent = expiresAt === 0;
     if (
       parsed?.v !== 1
       || parsed.purpose !== 'employee-onboard'
       || typeof parsed.nonce !== 'string'
       || parsed.nonce.length < 20
-      || Number(parsed.expiresAt) < Number(now)
-      || Number(parsed.expiresAt) > Number(now) + EMPLOYEE_ONBOARD_TTL_MS
+      || !Number.isFinite(expiresAt)
+      || (!permanent && (expiresAt < Number(now) || expiresAt > Number(now) + EMPLOYEE_ONBOARD_TTL_MS))
     ) return null;
     return {
-      expiresAt: Number(parsed.expiresAt),
+      expiresAt,
       inviteId: crypto.createHash('sha256').update(parsed.nonce).digest('hex'),
     };
   } catch {

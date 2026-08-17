@@ -551,6 +551,8 @@ import {
   publicFieldDefs,
   buildEmployeeFromSubmission,
   EMPLOYEE_ONBOARD_DOC_DEFS,
+  getEmployeeOnboardInviteNonce,
+  resetEmployeeOnboardInviteNonce,
   getForm101Url,
   saveForm101Url,
 } from './employeeOnboardingForm.js';
@@ -1909,9 +1911,14 @@ app.post('/api/leads', async (req, res) => {
 });
 
 // ─── Employee onboarding link (public) ────────────────────────────────────
-app.post('/api/employees/onboard-invite', (req, res) => {
+// קישור אחד וקבוע לכל הצוות: אותו קישור חוזר בכל טעינה של המסך, ומשרת כמה
+// נקלטים שרוצים. `reset: true` מחליף את ה-nonce ובכך פוסל את הקישור הישן.
+app.post('/api/employees/onboard-invite', async (req, res) => {
   try {
-    res.status(201).json(issueEmployeeOnboardInvite());
+    const nonce = req.body?.reset
+      ? await resetEmployeeOnboardInviteNonce()
+      : await getEmployeeOnboardInviteNonce();
+    res.status(201).json(issueEmployeeOnboardInvite({ nonce }));
   } catch (error) {
     res.status(503).json({ error: error.message || 'Employee onboarding signing is not configured' });
   }
@@ -1954,9 +1961,6 @@ app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) =
   try {
     const invite = requireEmployeeOnboardInvite(req, res);
     if (!invite) return;
-    if ((db.get('employees') || []).some((employee) => employee.onboard_invite_id === invite.inviteId)) {
-      return res.status(409).json({ error: 'קישור הקליטה כבר נוצל' });
-    }
     const config = await getEmployeeOnboardConfig();
     const { employee, error } = buildEmployeeFromSubmission(req.body?.answers, config);
     if (error) return res.status(400).json({ error });

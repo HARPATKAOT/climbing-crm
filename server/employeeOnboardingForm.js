@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supa } from './supa.js';
 
 const SETTINGS_KEY = 'employee_onboarding_form';
@@ -52,6 +53,35 @@ export async function saveForm101Url(raw) {
   const result = await supa.setAppSetting(FORM101_URL_KEY, url);
   if (!result?.ok) throw new Error(result?.error || 'שמירת הקישור נכשלה');
   return url;
+}
+
+// ה-nonce של קישור הקליטה הקבוע. הוא נשמר פעם אחת כדי שהקישור שמוצג במסך
+// יהיה תמיד אותו קישור — אפשר לשמור אותו בתשובה מוכנה בוואטסאפ ולשלוח לכל
+// נקלט/ת. החלפתו היא פעולת הביטול היחידה.
+const INVITE_NONCE_KEY = 'employee_onboarding_invite_nonce';
+
+function newInviteNonce() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+
+/**
+ * קריאה דרך `readAppSetting` ולא `getAppSetting`: תקלת רשת רגעית מחזירה שם
+ * `null` בדיוק כמו "אין ערך שמור", ואם היינו מייצרים nonce חדש במקרה כזה
+ * הקישור שכבר נשלח לכל הצוות היה מת בלי שאיש ביקש. עדיף להיכשל ולומר זאת.
+ */
+export async function getEmployeeOnboardInviteNonce() {
+  const result = await supa.readAppSetting(INVITE_NONCE_KEY);
+  if (!result?.ok) throw new Error(result?.error || 'טעינת קישור הקליטה נכשלה');
+  const stored = typeof result.value === 'string' ? result.value.trim() : '';
+  if (stored.length >= 20) return stored;
+  return resetEmployeeOnboardInviteNonce();
+}
+
+export async function resetEmployeeOnboardInviteNonce() {
+  const nonce = newInviteNonce();
+  const result = await supa.setAppSetting(INVITE_NONCE_KEY, nonce);
+  if (!result?.ok) throw new Error(result?.error || 'שמירת קישור הקליטה נכשלה');
+  return nonce;
 }
 
 const FIELD_DEF_BY_KEY = new Map(EMPLOYEE_ONBOARD_FIELD_DEFS.map((f) => [f.key, f]));
