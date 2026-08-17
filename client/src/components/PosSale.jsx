@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode, CreditCard,
-  AtSign, MessageCircle, Nfc, AlertTriangle,
+  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode,
+  AtSign, MessageCircle, SmartphoneNfc, AlertTriangle,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -34,8 +34,12 @@ import { comparePosShortcuts, isPosShortcut } from '../utils/posShortcuts.js';
 // גרוע יותר מכפתור שאינו קיים.
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', hint: 'שטרות ומטבעות', icon: Banknote, color: '#34D399' },
-  { id: 'emv', label: 'אשראי במסוף', hint: 'העברת כרטיס במכשיר', icon: Nfc, color: '#A78BFA' },
-  { id: 'online', label: 'אשראי בקישור', hint: 'נשלח לטלפון הלקוח', icon: CreditCard, color: '#60A5FA' },
+  // מכשיר שמצמידים אליו כרטיס — לא גל NFC מופשט וגם לא עוד כרטיס אשראי,
+  // ששניהם לא נבדלים בהצצה מ„אשראי בקישור” שלידו.
+  { id: 'emv', label: 'אשראי במסוף', hint: 'העברת כרטיס במכשיר', icon: SmartphoneNfc, color: '#A78BFA' },
+  // קישור, לא כרטיס: כרטיס אשראי מצויר הוא בדיוק מה שקורה במסוף שלידו, ושתי
+  // האפשרויות נראו כמו אותו דבר. זה גם האייקון של „פתח עמוד סליקה” באותו מסך.
+  { id: 'online', label: 'אשראי בקישור', hint: 'נשלח לטלפון הלקוח', icon: Link2, color: '#60A5FA' },
 ];
 
 /**
@@ -1364,6 +1368,12 @@ export default function PosSale({
     return roundMoney(tendered - total);
   }, [paymentMethod, tenderedAmount, total]);
 
+  // מסוף בלי מכשיר מחובר אינו מוצג כלל, ולכן מספר העמודות נגזר מכאן ולא קבוע.
+  const visiblePayMethods = useMemo(
+    () => PAY_METHODS.filter((m) => m.id !== 'emv' || emvInfo.available),
+    [emvInfo.available]
+  );
+
   const selectPaymentMethod = (id) => {
     if (id === 'cash' && !cashSessionOpen) {
       setPaymentMethod('online');
@@ -2469,16 +2479,17 @@ export default function PosSale({
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: paymentMethod ? 'var(--text-2)' : '#FBBF24' }}>
               איך משלמים?
             </div>
+            {/* מבנה ותצוגה ב-index.css (`.pos-pay-methods`). כאן נשאר רק מה
+                שתלוי בנתונים: מספר העמודות והצבע של האמצעי הנבחר. */}
             <div
+              className="pos-pay-methods"
               style={{
-                display: 'flex', gap: 10, flexWrap: 'wrap',
-                padding: 10,
-                borderRadius: 10,
+                gridTemplateColumns: `repeat(${visiblePayMethods.length}, minmax(0, 1fr))`,
                 border: `1px solid ${paymentMethod ? 'var(--border)' : 'rgba(251, 191, 36, 0.55)'}`,
                 background: paymentMethod ? 'transparent' : 'rgba(251, 191, 36, 0.06)',
               }}
             >
-              {PAY_METHODS.filter((m) => m.id !== 'emv' || emvInfo.available).map((m) => {
+              {visiblePayMethods.map((m) => {
                 const Icon = m.icon;
                 const chosen = paymentMethod === m.id;
                 const cashBlocked = m.id === 'cash' && !cashSessionOpen;
@@ -2486,34 +2497,25 @@ export default function PosSale({
                   <button
                     key={m.id}
                     type="button"
+                    className="pos-pay-method"
                     onClick={() => selectPaymentMethod(m.id)}
-                    title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : undefined}
+                    title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : m.hint}
                     style={{
-                      flex: '1 1 150px',
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '10px 12px',
-                      borderRadius: 10,
-                      cursor: 'pointer',
-                      textAlign: 'right',
                       opacity: cashBlocked ? 0.55 : 1,
                       border: `1px solid ${chosen ? m.color : 'var(--border)'}`,
                       background: chosen ? `${m.color}1f` : 'var(--bg-input)',
                       boxShadow: chosen ? `0 0 0 1px ${m.color}` : 'none',
-                      color: 'inherit',
                     }}
                   >
                     <span
-                      style={{
-                        width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: `${m.color}22`, color: m.color,
-                      }}
+                      className="pos-pay-method-icon"
+                      style={{ background: `${m.color}22`, color: m.color }}
                     >
                       <Icon size={19} />
                     </span>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ display: 'block', fontWeight: 700, fontSize: 13.5 }}>{m.label}</span>
-                      <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>{m.hint}</span>
+                    <span className="pos-pay-method-text">
+                      <span className="pos-pay-method-label">{m.label}</span>
+                      <span className="pos-pay-method-hint">{m.hint}</span>
                     </span>
                   </button>
                 );
@@ -2533,7 +2535,7 @@ export default function PosSale({
               className="alert alert-info"
               style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}
             >
-              <Nfc size={22} style={{ color: '#A78BFA', flexShrink: 0 }} />
+              <SmartphoneNfc size={22} style={{ color: '#A78BFA', flexShrink: 0 }} />
               <div>
                 <div style={{ fontWeight: 800, fontSize: 14 }}>
                   המסוף ממתין לכרטיס · ₪{total.toLocaleString()}
