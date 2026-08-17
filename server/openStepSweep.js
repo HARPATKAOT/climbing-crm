@@ -22,7 +22,7 @@ import {
   FOLLOWUP_OPEN,
   newFollowUpId,
 } from './botFollowUps.js';
-import { registrationStep, STEP_FOLLOWUP_REASON } from './registrationSteps.js';
+import { hasLiveGroup, registrationStep, STEP_FOLLOWUP_REASON } from './registrationSteps.js';
 import { outreachPausedUntil } from './botOutreachPause.js';
 import { isOptedOut } from './whatsappBot.js';
 
@@ -34,6 +34,23 @@ export const SWEEPABLE_STATUSES = new Set([
   'awaiting_parent_confirmation',
   'registered',
 ]);
+
+/**
+ * האם המתאמן בכלל בתוך תהליך של חוג.
+ *
+ * הריצה היבשה הראשונה מצאה 47 משפחות, ומתוכן 23 היו „טופס חתום בלי קבוצה” —
+ * כולן אנשים שבאו לטפס פעם אחת וחתמו על הוויתור בדלפק. הם לא ביקשו חוג
+ * מעולם, ו„יש לכם טופס חתום אבל אין קבוצה, איזה יום נוח?” הוא פרסום לאדם
+ * שלא ביקש כלום — בדיוק מה שהמעבר הזה לא אמור להיות.
+ *
+ * הסימן היחיד שמחזיק הוא קבוצה: שיבוץ, רישום פעיל או שמירת מקום. חתימה על
+ * טופס אינה מעידה על כלום, וגם שורת ציוד לא — הן קיימות אצל מאות אנשים
+ * מהייבוא ההיסטורי. המשמעות: „טופס חתום בלי קבוצה” אינו מקרה שאפשר לזהות
+ * מכאן, והמעבר הזה מוותר עליו במקום לנחש. מי שנתקע שם עדיין מגיע דרך שיחה.
+ */
+export function inClassProcess(db, student) {
+  return hasLiveGroup(db, student);
+}
 
 /** אותו אדם לא נדחף יותר מפעם בשבוע, גם אם פתוחים אצלו שלושה דברים. */
 export const SWEEP_COOLDOWN_DAYS = 7;
@@ -61,6 +78,7 @@ export function openStepCandidates(db, { now = new Date() } = {}) {
     const parent = parentById.get(String(student.parentId || student.parent_id || ''));
     if (!parent?.phone) continue;
     if (isOptedOut(parent)) continue;
+    if (!inClassProcess(db, student)) continue;
 
     const group = groups.find((row) => String(row.id) === String(student.groupId || ''));
     const progress = registrationStep(db, student, { group });
