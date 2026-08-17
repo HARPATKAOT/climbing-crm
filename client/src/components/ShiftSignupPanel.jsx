@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CalendarPlus, CalendarRange, Check, Copy, Link2, Loader2, Lock, Unlock, Plus, Repeat, Send,
-  Square, Trash2, UserPlus, Users, X,
+  Square, Trash2, UserCheck, UserPlus, Users, X, GraduationCap,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { assignableLabelsOf, useRoleCatalog } from '../utils/staffRoles.js';
@@ -66,21 +66,48 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
   const [slots, setSlots] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  // 'calendar' — משמרות שכבר קיימות ביומן; 'pattern' — דפוס שבועי שמוקלד כאן.
+  // 'calendar' — אירועים מהיומן; 'classes' — חוגים מלוח החוגים; 'pattern' —
+  // משמרת קבועה שמוקלדת כאן ואין לה רישום בשום לוח.
   const [source, setSource] = useState('calendar');
   const [candidates, setCandidates] = useState(null);
   const [withoutHours, setWithoutHours] = useState(0);
   const [pickedIds, setPickedIds] = useState([]);
+  // מקומות לכל חוג. בלוח החוגים המספר נקבע לחוג ולא למשמרת הבודדת, כי חוג
+  // שצריך שני עוזרי מדריך צריך אותם בכל מפגש שלו.
+  const [classSeats, setClassSeats] = useState({});
+  const [audienceMode, setAudienceMode] = useState('role');
+  const [audienceIds, setAudienceIds] = useState([]);
+  const [allStaff, setAllStaff] = useState([]);
+  const [reach, setReach] = useState(null);
 
   useEffect(() => {
     if (!role && roleOptions.length) setRole(roleOptions[0]);
   }, [role, roleOptions]);
+
+  // רשימת השמות נטענת פעם אחת, לבחירה ידנית ולספירה של מי יקבל את הטופס.
+  useEffect(() => {
+    callApi('/api/shift-signup/audience?mode=all')
+      .then((body) => setAllStaff(body.employees || []))
+      .catch(() => setAllStaff([]));
+  }, []);
+
+  /** כמה עובדים יקבלו את הטופס בפועל — נקרא מהשרת כדי שלא ננחש כלל אחר. */
+  useEffect(() => {
+    let cancelled = false;
+    const query = new URLSearchParams({ role, mode: audienceMode });
+    if (audienceMode === 'names') query.set('employee_ids', audienceIds.join(','));
+    callApi(`/api/shift-signup/audience?${query}`)
+      .then((body) => { if (!cancelled) setReach(body.employees || []); })
+      .catch(() => { if (!cancelled) setReach(null); });
+    return () => { cancelled = true; };
+  }, [role, audienceMode, audienceIds]);
 
   /** כל שינוי שמזיז את מה שייכנס לטופס מבטל תצוגה מוקדמת ישנה. */
   const resetPreview = () => {
     setSlots([]);
     setCandidates(null);
     setPickedIds([]);
+    setClassSeats({});
   };
 
   const toggleWeekday = (day) => {
@@ -110,18 +137,27 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
     }
   };
 
-  /** מה שכבר קיים ביומן ומתאים לתפקיד שנבחר — לסימון, לא להקלדה. */
+  /** מה שכבר רשום בלוח שנבחר ומתאים לתפקיד — לסימון, לא להקלדה. */
   const loadFromCalendar = async () => {
     setError('');
     setBusy(true);
     try {
-      const query = new URLSearchParams({ role, from, to });
+      const query = new URLSearchParams({
+        role, from, to, include: source === 'classes' ? 'groups' : 'activities',
+      });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
-      setCandidates(body.candidates || []);
+      const rows = body.candidates || [];
+      setCandidates(rows);
       setWithoutHours(body.withoutHours || 0);
-      // ברירת המחדל היא רק מה שעוד לא מאויש — כדי שלא יישלח לצוות טופס שרובו
-      // משמרות שכבר סגורות.
-      setPickedIds((body.candidates || []).filter((c) => c.staffed < c.capacity).map((c) => c.id));
+      if (source === 'classes') {
+        // חוג נבחר כיחידה אחת, ולכן הסימון הוא של החוג ולא של מפגש בודד.
+        setClassSeats(Object.fromEntries([...new Set(rows.map((c) => c.group_id))].map((id) => [id, 1])));
+        setPickedIds([...new Set(rows.map((c) => c.group_id))]);
+      } else {
+        // ברירת המחדל היא רק מה שעוד לא מאויש — כדי שלא יישלח לצוות טופס שרובו
+        // משמרות שכבר סגורות.
+        setPickedIds(rows.filter((c) => c.staffed < c.capacity).map((c) => c.id));
+      }
     } catch (e) {
       setError(e.message);
       setCandidates(null);
@@ -136,9 +172,22 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
       : [...current, id]));
   };
 
-  const chosenSlots = source === 'calendar'
-    ? (candidates || []).filter((c) => pickedIds.includes(c.id))
-    : slots;
+  /** החוגים שנשלפו, שורה אחת לכל חוג במקום שורה לכל מפגש. */
+  const classRows = source !== 'classes' ? [] : [...new Map(
+    (candidates || []).map((c) => [c.group_id, c])
+  ).values()].map((c) => ({
+    group_id: c.group_id,
+    label: c.label,
+    sessions: (candidates || []).filter((x) => x.group_id === c.group_id),
+  }));
+
+  const chosenSlots = (() => {
+    if (source === 'pattern') return slots;
+    if (source === 'calendar') return (candidates || []).filter((c) => pickedIds.includes(c.id));
+    return (candidates || [])
+      .filter((c) => pickedIds.includes(c.group_id))
+      .map((c) => ({ ...c, capacity: Math.max(1, Number(classSeats[c.group_id]) || 1) }));
+  })();
 
   const create = async () => {
     setError('');
@@ -148,7 +197,13 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, role, work_type: workType, note, deadline: deadline || null, slots: chosenSlots,
+          title,
+          role,
+          work_type: workType,
+          note,
+          deadline: deadline || null,
+          audience: { mode: audienceMode, employee_ids: audienceIds },
+          slots: chosenSlots,
         }),
       });
       onCreated(created);
@@ -198,6 +253,65 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
       </div>
 
       <div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>למי לשלוח</div>
+        <div className="choice-row">
+          {[
+            { key: 'role', label: `מי שמסומן כ„${role}”`, accent: '#A78BFA', icon: UserPlus },
+            { key: 'all', label: 'כל הצוות', accent: '#38BDF8', icon: Users },
+            { key: 'wall', label: 'עובדי קיר', accent: '#34D399', icon: Users },
+            { key: 'external', label: 'עובדי חוץ', accent: '#FBBF24', icon: Users },
+            { key: 'names', label: 'בחירת שמות', accent: '#F472B6', icon: UserCheck },
+          ].map(({ key, label, accent, icon: Icon }) => (
+            <button
+              type="button"
+              key={key}
+              className={`choice-pill ${audienceMode === key ? 'active' : ''}`}
+              style={{ '--choice-accent': accent }}
+              onClick={() => setAudienceMode(key)}
+            >
+              <Icon size={15} /> {label}
+            </button>
+          ))}
+        </div>
+        {audienceMode === 'names' && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setAudienceIds(allStaff.map((e) => e.id))}>
+                סימון כולם
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setAudienceIds([])}>
+                <X size={13} /> ניקוי הבחירה
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 190, overflowY: 'auto' }}>
+              {allStaff.map((employee) => {
+                const on = audienceIds.includes(employee.id);
+                return (
+                  <button
+                    type="button"
+                    key={employee.id}
+                    className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setAudienceIds((current) => (on
+                      ? current.filter((id) => id !== employee.id)
+                      : [...current, employee.id]))}
+                  >
+                    {on && <Check size={12} />} {employee.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {reach && (
+          <div style={{ fontSize: 12, color: reach.length ? 'var(--text-3)' : 'var(--amber)', marginTop: 8 }}>
+            {reach.length
+              ? `הטופס יגיע ל-${reach.length} עובדים: ${reach.map((e) => e.name).join(', ')}`
+              : 'אף עובד לא נכלל בבחירה הזאת — אף אחד לא יוכל למלא את הטופס.'}
+          </div>
+        )}
+      </div>
+
+      <div>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>מאיפה המשמרות</div>
         <div className="choice-row">
           <button
@@ -207,6 +321,14 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
             onClick={() => { setSource('calendar'); resetPreview(); }}
           >
             <CalendarRange size={15} /> מהיומן
+          </button>
+          <button
+            type="button"
+            className={`choice-pill ${source === 'classes' ? 'active' : ''}`}
+            style={{ '--choice-accent': '#34D399' }}
+            onClick={() => { setSource('classes'); resetPreview(); }}
+          >
+            <GraduationCap size={15} /> מלוח החוגים
           </button>
           <button
             type="button"
@@ -270,6 +392,64 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
           placeholder="למשל: מי שמסמן מתחייב להגיע 15 דקות לפני"
         />
       </label>
+
+      {source === 'classes' && candidates !== null && (
+        <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+            {classRows.length === 0
+              ? `אין חוגים בטווח הזה שמתאימים ל„${role}”.`
+              : `${classRows.length} חוגים. סמנו אילו להציע, וכמה מקומות פנויים בכל אחד:`}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+            {classRows.map((row) => {
+              const on = pickedIds.includes(row.group_id);
+              return (
+                <div
+                  key={row.group_id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', borderRadius: 10,
+                    border: `1px solid ${on ? 'var(--green)' : 'var(--border)'}`,
+                    background: on ? 'rgba(52,211,153,0.08)' : 'transparent',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleCandidate(row.group_id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 9, flex: 1, minWidth: 0,
+                      background: 'none', border: 0, font: 'inherit', color: 'var(--text-1)',
+                      cursor: 'pointer', textAlign: 'right',
+                    }}
+                  >
+                    {on ? <Check size={14} style={{ color: 'var(--green)' }} /> : <Square size={14} style={{ color: 'var(--text-3)' }} />}
+                    <span style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {row.label}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-3)', flexShrink: 0 }}>
+                      {row.sessions.length} מפגשים
+                    </span>
+                  </button>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+                    מקומות
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      max={20}
+                      disabled={!on}
+                      value={classSeats[row.group_id] ?? 1}
+                      onChange={(e) => setClassSeats((current) => ({
+                        ...current, [row.group_id]: Math.max(1, Number(e.target.value) || 1),
+                      }))}
+                      style={{ width: 62, padding: '4px 6px', fontSize: 12 }}
+                    />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {source === 'calendar' && candidates !== null && (
         <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
@@ -335,9 +515,9 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
         <button className="btn btn-ghost btn-sm" onClick={onCancel} disabled={busy}>
           <X size={14} /> ביטול
         </button>
-        {source === 'calendar' ? (
+        {source !== 'pattern' ? (
           <button className="btn btn-ghost btn-sm" onClick={loadFromCalendar} disabled={busy}>
-            {busy ? <Loader2 size={14} className="spin" /> : <CalendarRange size={14} />} שליפה מהיומן
+            {busy ? <Loader2 size={14} className="spin" /> : <CalendarRange size={14} />} {source === 'classes' ? 'שליפה מלוח החוגים' : 'שליפה מהיומן'}
           </button>
         ) : (
           <button className="btn btn-ghost btn-sm" onClick={preview} disabled={busy}>

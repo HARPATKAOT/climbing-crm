@@ -8,6 +8,7 @@ import {
   findSlotAssignment,
   isSlotAssigned,
   isWindowOpen,
+  normalizeAudience,
   normalizeWindow,
   publicWindowView,
   signupBoard,
@@ -367,6 +368,71 @@ test('a placement is matched by what it staffs, not by the clock', () => {
     { id: 'w2', employee_id: 'e1', date: '2026-08-11', start_time: '16:00', group_id: 'g2' },
   ];
   assert.equal(findSlotAssignment(assignments, 'e1', slot).id, 'w1');
+});
+
+test('the two boards are fetched separately', () => {
+  const args = {
+    activities: CALENDAR,
+    groups: [{ id: 'g1', name: 'חוג', day: 2, time: '16:00', duration: 50 }],
+    rolesByType: ROLES_BY_TYPE,
+    classRoles: CLASS_ROLES,
+    role: 'עוזר מדריך',
+    from: '2026-08-10',
+    to: '2026-08-14',
+  };
+  const onlyCalendar = calendarSlotCandidates({ ...args, include: ['activities'] });
+  const onlyClasses = calendarSlotCandidates({ ...args, include: ['groups'] });
+  assert.deepEqual(onlyCalendar.candidates.map((c) => c.source), ['activity']);
+  assert.deepEqual(onlyClasses.candidates.map((c) => c.source), ['group']);
+});
+
+// ─── למי הטופס נשלח ─────────────────────────────────────────────────────────
+const STAFF = [
+  { id: 'e1', name: 'דנה', certifications: ['עוזר מדריך'] },
+  { id: 'e2', name: 'יואב', certifications: ['הדרכת חוג'] },
+  { id: 'e3', name: 'אורי', certifications: ['הדרכת סנפלינג'] },
+  { id: 'e4', name: 'בר', certifications: ['עוזר מדריך'], is_wall_staff: false },
+  { id: 'e5', name: 'גל', certifications: [], is_active: false },
+];
+
+test('by default the form reaches whoever is marked for the role', () => {
+  assert.deepEqual(eligibleEmployees(STAFF, 'עוזר מדריך').map((e) => e.name), ['בר', 'דנה']);
+});
+
+test('the audience can be widened to the whole team, or split wall from external', () => {
+  const names = (mode, ids) => eligibleEmployees(STAFF, 'עוזר מדריך', { mode, employee_ids: ids }).map((e) => e.name);
+  assert.deepEqual(names('all'), ['אורי', 'בר', 'דנה', 'יואב']);
+  // External: the rappel-only instructor, and anyone flagged off the wall crew.
+  assert.deepEqual(names('external'), ['אורי', 'בר']);
+  assert.deepEqual(names('wall'), ['דנה', 'יואב']);
+  assert.deepEqual(names('names', ['e2', 'e3']), ['אורי', 'יואב']);
+});
+
+test('an inactive employee is never in the audience, whatever the mode', () => {
+  for (const mode of ['role', 'all', 'wall', 'external']) {
+    assert.equal(eligibleEmployees(STAFF, '', { mode }).some((e) => e.name === 'גל'), false);
+  }
+  assert.deepEqual(eligibleEmployees(STAFF, '', { mode: 'names', employee_ids: ['e5'] }), []);
+});
+
+test('a hand-picked audience with nobody in it falls back to the role', () => {
+  assert.deepEqual(normalizeAudience({ mode: 'names', employee_ids: [] }), { mode: 'role', employee_ids: [] });
+  assert.deepEqual(normalizeAudience({ mode: 'nonsense' }).mode, 'role');
+  // Ids are only kept for the mode that uses them.
+  assert.deepEqual(normalizeAudience({ mode: 'all', employee_ids: ['e1'] }).employee_ids, []);
+});
+
+test('the audience travels with the window', () => {
+  const { window: row } = normalizeWindow({
+    title: 'א',
+    role: 'עוזר מדריך',
+    audience: { mode: 'wall' },
+    slots: [{ date: '2026-08-11', start_time: '16:00', end_time: '18:00' }],
+  });
+  assert.deepEqual(row.audience, { mode: 'wall', employee_ids: [] });
+  // An edit that says nothing about the audience keeps it.
+  const { window: edited } = normalizeWindow({ title: 'ב' }, { existing: row });
+  assert.deepEqual(edited.audience, { mode: 'wall', employee_ids: [] });
 });
 
 test('only active staff marked for the role are offered the form', () => {
