@@ -1213,11 +1213,20 @@ function requireKnownChild(parent, childName, studentId = '') {
   }
   const exactId = String(studentId || '').trim();
   const named = String(childName || '').trim();
-  const matches = exactId
+  let matches = exactId
     ? kids.filter((s) => String(s.id) === exactId)
     : (named
       ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
       : kids);
+  // An archived card is not a person anyone is asking about. Two cards for
+  // נעמי — one of them a merged-away shell — answered to the same name, and
+  // every placement attempt died on "יש כמה ילדים מתאימים" for three days.
+  // A staff member who archives a duplicate should not have to also delete it
+  // before the bot can work again.
+  if (matches.length > 1) {
+    const live = matches.filter((s) => !['archived', 'cancelled'].includes(String(s.status || '')));
+    if (live.length) matches = live;
+  }
   if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
   if (matches.length > 1) {
     return {

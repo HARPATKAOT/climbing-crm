@@ -956,6 +956,31 @@ test('רשום במתנ״ס ומשובץ בקבוצה — העברה בין קב
   });
 });
 
+test('כרטיס כפול שאוחד לארכיון אינו חוסם את השיבוץ', async () => {
+  // שתי רשומות של נעמי באותו תיק — אחת שאוחדה לארכיון — והבוט ענה שלושה ימים
+  // „יש כמה ילדים מתאימים”. מי שמסמן כפילות כארכיון לא אמור להידרש גם למחוק
+  // אותה כדי שהשיבוץ יחזור לעבוד.
+  await withSeed({
+    parents: [PARENT],
+    students: [
+      childYotam({ id: 's-live', name: 'נעמי כהן', status: 'details_completed' }),
+      childYotam({ id: 's-merged', name: 'נעמי כהן', status: 'archived' }),
+    ],
+    groups: [GROUP_GD],
+    health_declarations: [declarationFor('s-live')],
+    participation_waivers: [waiverFor('s-live')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: 'נעמי', grade: 'ג', frequency: 'פעם בשבוע',
+    });
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.שובץ, 'נעמי כהן');
+    assert.equal(student('s-live').groupId, GROUP_GD.id);
+    assert.equal(student('s-merged').groupId, null);
+  });
+});
+
 test('אח מהעבר בארכיון אינו הופך «נרשמנו» לשאלה על מי מדובר', async () => {
   // אפרת כתבה „נרשמתי גם במתנס וגם מילאתי כבר הכל”. בכרטיס שני ילדים — אחד
   // בארכיון משנה שעברה — והדיווח נפל על „יש כמה ילדים מתאימים”, כך שהיא קיבלה
