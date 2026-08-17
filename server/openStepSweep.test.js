@@ -17,7 +17,7 @@ const NOW = new Date('2026-08-16T09:00:00Z');
 const COLLECTIONS = [
   'parents', 'students', 'groups', 'enrollments', 'health_declarations',
   'participation_waivers', 'student_equipment', FOLLOWUP_COLLECTION,
-  OUTREACH_PAUSE_COLLECTION,
+  OUTREACH_PAUSE_COLLECTION, 'group_placement_holds',
 ];
 
 async function withSeed(data, run) {
@@ -223,6 +223,43 @@ test('a customer who asked us to stop, or has no number, is never swept', async 
       assert.equal(openStepCandidates(db, { now: NOW }).length, 0);
     });
   }
+});
+
+test('the three days we promised are not interrupted', async () => {
+  // "המקום שמור לשלושה ימים" and then, the next morning, "הספקתם להשלים את
+  // ההרשמה?". The hold carries its own reminder for the deadline morning —
+  // that is the message, and nothing else goes out before it.
+  const { declarations, waivers } = papers();
+  const seed = {
+    parents: [PARENT],
+    students: [placed()],
+    groups: [GROUP],
+    health_declarations: declarations,
+    participation_waivers: waivers,
+  };
+
+  await withSeed({
+    ...seed,
+    group_placement_holds: [{
+      id: 'hold-1', student_id: 's1', parent_id: PARENT.id, group_ids: [GROUP.id],
+      phase: 'awaiting_parent', status: 'active',
+      expires_at: '2026-08-18T20:59:59.000Z',
+    }],
+  }, async () => {
+    assert.equal(openStepCandidates(db, { now: NOW }).length, 0);
+  });
+
+  await withSeed({
+    ...seed,
+    group_placement_holds: [{
+      id: 'hold-1', student_id: 's1', parent_id: PARENT.id, group_ids: [GROUP.id],
+      phase: 'awaiting_parent', status: 'active',
+      expires_at: '2026-08-15T20:59:59.000Z',
+    }],
+  }, async () => {
+    // The three days are up and nobody registered — now it is ours again.
+    assert.equal(openStepCandidates(db, { now: NOW }).length, 1);
+  });
 });
 
 test('two children in one family are one message, not two', async () => {

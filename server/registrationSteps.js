@@ -39,6 +39,19 @@ export function hasLiveGroup(db, student) {
   return Boolean(activeHoldForStudent(db, student.id)?.group_ids?.length);
 }
 
+/**
+ * המתאמן בתוך שלושת הימים שהבטחנו לו.
+ *
+ * שמירת המקום נושאת תזכורת משלה לבוקר המועד האחרון, ואומרת בדיוק את מה
+ * שסוכם. כל נדנוד אחר בינתיים סותר את מה שנאמר לו: „המקום שמור לשלושה ימים”
+ * ולמחרת בבוקר „הספקתם להשלים את ההרשמה?”.
+ */
+export function holdIsCounting(db, student, now = new Date()) {
+  const hold = activeHoldForStudent(db, student?.id, now);
+  if (!hold?.expires_at) return false;
+  return new Date(hold.expires_at).getTime() > new Date(now).getTime();
+}
+
 function openEquipment(db, studentId) {
   return unpaidEquipmentItems((db?.get?.('student_equipment') || []).filter(
     (row) => String(row.student_id || row.studentId || '') === String(studentId)

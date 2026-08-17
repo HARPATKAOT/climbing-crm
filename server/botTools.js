@@ -26,7 +26,7 @@ import {
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { studentGroupIds } from './studentGroups.js';
-import { hasLiveGroup, registrationStep } from './registrationSteps.js';
+import { hasLiveGroup, holdIsCounting, registrationStep } from './registrationSteps.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
 import { upcomingTrainingBreaks } from './trainingBreaks.js';
@@ -948,6 +948,10 @@ const REGISTERED_STATUSES = new Set(['registered', 'active']);
 async function scheduleSignupCheck({ parent, phone, student, settings }) {
   if (!parent?.id) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
+  // We just told them the place is held for three days. A check-in tomorrow
+  // morning argues with that, and the hold already carries its own reminder
+  // for the deadline morning — one message, on the day we actually named.
+  if (holdIsCounting(db, student)) return;
   const plan = planFollowUp({
     days: 1,
     lastInboundAt: parent.last_inbound_whatsapp,
@@ -1014,6 +1018,9 @@ async function scheduleEquipmentCheck({ parent, phone, student }) {
   if (!parent?.id) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'equipment_unpaid' })) return;
+  // Same three days. Chasing the kit the morning after we asked them to go and
+  // register is the same nudge wearing a different subject.
+  if (holdIsCounting(db, student)) return;
   const plan = planFollowUp({
     days: 1,
     lastInboundAt: parent.last_inbound_whatsapp,

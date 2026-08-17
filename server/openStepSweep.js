@@ -22,7 +22,12 @@ import {
   FOLLOWUP_OPEN,
   newFollowUpId,
 } from './botFollowUps.js';
-import { hasLiveGroup, registrationStep, STEP_FOLLOWUP_REASON } from './registrationSteps.js';
+import {
+  hasLiveGroup,
+  holdIsCounting,
+  registrationStep,
+  STEP_FOLLOWUP_REASON,
+} from './registrationSteps.js';
 import { outreachPausedUntil } from './botOutreachPause.js';
 import { isOptedOut } from './whatsappBot.js';
 
@@ -79,6 +84,9 @@ export function openStepCandidates(db, { now = new Date() } = {}) {
     if (!parent?.phone) continue;
     if (isOptedOut(parent)) continue;
     if (!inClassProcess(db, student)) continue;
+    // Still inside the three days we promised. That clock has its own reminder
+    // on the morning it runs out, and this sweep must not pre-empt it.
+    if (holdIsCounting(db, student, now)) continue;
 
     const group = groups.find((row) => String(row.id) === String(student.groupId || ''));
     const progress = registrationStep(db, student, { group });
