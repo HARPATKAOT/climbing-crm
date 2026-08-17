@@ -152,23 +152,28 @@ test('payments report excludes optional open links but keeps real POS debts', ()
         id: 'wall-debt', parent_id: 'p2', amount: 180, status: 'pending',
         description: 'כניסה לקיר', pos_sale_id: 'wall-sale', created_at: '2026-08-13T10:00:00.000Z',
       },
+      // קישור מהדלפק בלי מקור מפורש — כך נראות שורות שקדמו לשדה `source`.
+      // גם הן חוב: קישור תשלום נשלח רק על דבר שכבר מחייב.
       {
-        id: 'harness-offer', parent_id: 'p1', amount: 350, status: 'pending',
+        id: 'harness-debt', parent_id: 'p1', amount: 350, status: 'pending',
         description: 'רתמת טיפוס', pos_sale_id: 'harness-sale', created_at: '2026-08-13T11:00:00.000Z',
       },
     ],
     posSales: [
       { id: 'quote-sale', parent_id: 'p1', total: 400, status: 'quoted' },
       { id: 'wall-sale', parent_id: 'p2', total: 180, status: 'pending_payment', payment_method: 'online', source: 'pos_debt' },
-      { id: 'harness-sale', parent_id: 'p1', total: 350, status: 'pending_payment', payment_method: 'online', source: 'pos_offer' },
+      { id: 'harness-sale', parent_id: 'p1', total: 350, status: 'pending_payment', payment_method: 'online' },
     ],
     parents: [{ id: 'p1', name: 'תהל' }, { id: 'p2', name: 'דנה' }],
   });
 
-  assert.deepEqual(report.rows.map((row) => row.payment_id), ['wall-debt']);
-  assert.equal(report.summary.open_count, 1);
-  assert.equal(report.summary.open_amount, 180);
-  assert.equal(report.rows[0].debt_reason, 'חוב שסומן בקופה');
+  assert.deepEqual(report.rows.map((row) => row.payment_id).sort(), ['harness-debt', 'wall-debt']);
+  assert.equal(report.summary.open_count, 2);
+  assert.equal(report.summary.open_amount, 530);
+  assert.equal(
+    report.rows.find((row) => row.payment_id === 'wall-debt').debt_reason,
+    'קישור תשלום מהקופה'
+  );
 });
 
 test('payments report finds an unpaid hosted event before the host opens its payment page', () => {

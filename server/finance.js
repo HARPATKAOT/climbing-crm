@@ -330,11 +330,11 @@ function openDebtClassification({ payment = {}, sale = null, registrations = [] 
   if (sale?.source === 'shop' || payment?.shop_item_id) {
     return { is_debt: false, debt_reason: 'רכישה שטרם הושלמה' };
   }
-  if (sale?.source === 'pos_offer') {
-    return { is_debt: false, debt_reason: 'אפשרות לרכישה מהקופה' };
-  }
+  // קישור תשלום מהדלפק נשלח רק על דבר שכבר מחייב. בעבר נשאל בקופה אם הקישור
+  // הוא חוב או „אפשרות לרכישה” (`pos_offer`); זו החלטה עסקית שהתבטלה —
+  // אפשרויות לרכישה נשלחות כהצעת מחיר, שממילא אינה חוב.
   if (sale?.source === 'pos_debt') {
-    return { is_debt: true, debt_reason: 'חוב שסומן בקופה' };
+    return { is_debt: true, debt_reason: 'קישור תשלום מהקופה' };
   }
   if (sale) return { is_debt: true, debt_reason: 'עסקה שנפתחה בקופה' };
   return { is_debt: true, debt_reason: 'דרישת תשלום יזומה' };
