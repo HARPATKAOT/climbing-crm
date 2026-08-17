@@ -61,7 +61,6 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
   const [weekdays, setWeekdays] = useState([0]);
   const [startTime, setStartTime] = useState('16:00');
   const [endTime, setEndTime] = useState('20:00');
-  const [capacity, setCapacity] = useState(1);
   const [note, setNote] = useState('');
   const [deadline, setDeadline] = useState('');
   const [slots, setSlots] = useState([]);
@@ -99,7 +98,7 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from, to, weekdays, start_time: startTime, end_time: endTime, capacity,
+          from, to, weekdays, start_time: startTime, end_time: endTime,
         }),
       });
       setSlots(body.slots || []);
@@ -116,7 +115,7 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
     setError('');
     setBusy(true);
     try {
-      const query = new URLSearchParams({ role, from, to, capacity: String(capacity) });
+      const query = new URLSearchParams({ role, from, to });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
       setCandidates(body.candidates || []);
       setWithoutHours(body.withoutHours || 0);
@@ -260,17 +259,6 @@ function NewWindowForm({ roleOptions, onCancel, onCreated }) {
             </label>
           </>
         )}
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
-          כמה אנשים צריך בכל משמרת
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={20}
-            value={capacity}
-            onChange={(e) => { setCapacity(Number(e.target.value) || 1); resetPreview(); }}
-          />
-        </label>
       </div>
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
@@ -468,7 +456,9 @@ function SignupBoard({ windowId, onChanged }) {
                 )}
               </div>
               <span className={`badge ${slot.missing === 0 ? 'badge-green' : 'badge-amber'}`}>
-                {slot.missing === 0 ? 'מאויש' : `שובצו ${slot.capacity - slot.missing} מתוך ${slot.capacity}`}
+                {slot.missing === 0
+                  ? 'מאויש'
+                  : (slot.capacity === 1 ? 'חסר עובד' : `שובצו ${slot.capacity - slot.missing} מתוך ${slot.capacity}`)}
               </span>
             </div>
 

@@ -216,11 +216,16 @@ export function calendarSlotCandidates({
   from,
   to,
   capacity = 1,
+  // מה נשלף. היומן ולוח החוגים הם שני מקורות שהמנהל חושב עליהם בנפרד: ביומן
+  // הוא בוחר אירועים, ובלוח החוגים הוא בוחר חוגים — ולכן גם שולף אותם בנפרד.
+  include = ['activities', 'groups'],
 } = {}) {
   const first = cleanDate(from);
   const last = cleanDate(to);
   if (!first || !last) return { error: 'צריך טווח תאריכים תקין' };
   if (last < first) return { error: 'תאריך הסיום מוקדם מתאריך ההתחלה' };
+  const wantActivities = include.includes('activities');
+  const wantGroups = include.includes('groups');
 
   const wantedRole = cleanText(role, 60);
   const defaultCapacity = Math.max(1, Math.min(20, Math.round(Number(capacity) || 1)));
@@ -229,7 +234,7 @@ export function calendarSlotCandidates({
   // shift without hours has nothing to sign up for. Reported rather than hidden.
   let withoutHours = 0;
 
-  for (const activity of activities) {
+  for (const activity of (wantActivities ? activities : [])) {
     const type = String(activity?.type || '').toLowerCase();
     if (type === 'training_vacation') continue;
     if (isCancelledActivity(activity)) continue;
@@ -268,7 +273,7 @@ export function calendarSlotCandidates({
   }
 
   const classesAllowed = classRoles.length === 0 || classRoles.includes(wantedRole);
-  if (classesAllowed) {
+  if (wantGroups && classesAllowed) {
     for (const group of groups) {
       const weekdays = getGroupDays(group);
       const start = cleanTime(group?.time);
@@ -369,6 +374,7 @@ export function normalizeWindow(body = {}, { existing = null } = {}) {
       status,
       deadline,
       note: cleanText(body.note !== undefined ? body.note : existing?.note, 400),
+      audience: normalizeAudience(body.audience !== undefined ? body.audience : existing?.audience),
       slots,
       token: existing?.token || newSignupToken(),
     },
@@ -461,19 +467,54 @@ export function applyResponse(windowRow, responses = [], payload = {}, { today =
   };
 }
 
+export const AUDIENCE_MODES = ['role', 'all', 'wall', 'external', 'names'];
+
 /**
- * Who the window is addressed to. The role lives on the employee's
- * `certifications` list — the same marks the roster already filters by — so a
- * window for "עוזר מדריך" reaches exactly the people the schedule screen would
- * have offered for that slot, and nobody has to keep a second list in step.
+ * Who gets the link.
+ *
+ * The default is "whoever is marked for the role" — the same marks the schedule
+ * screen filters by, so nobody keeps a second list in step. But the two are not
+ * always the same question: a wall-opening shift may be worth offering to the
+ * whole wall crew rather than only to the people already carrying that role, and
+ * sometimes the manager just means these four people. Hence a separate audience,
+ * which never changes what the shift *is* — only who is asked about it.
  */
-export function eligibleEmployees(employees = [], role) {
+export function normalizeAudience(raw = {}) {
+  const mode = AUDIENCE_MODES.includes(raw?.mode) ? raw.mode : 'role';
+  const ids = Array.isArray(raw?.employee_ids)
+    ? [...new Set(raw.employee_ids.map((id) => cleanText(id, 60)).filter(Boolean))]
+    : [];
+  // A hand-picked audience with nobody in it would silently reach no one.
+  if (mode === 'names' && ids.length === 0) return { mode: 'role', employee_ids: [] };
+  return { mode, employee_ids: mode === 'names' ? ids : [] };
+}
+
+/** Same rule the rest of the CRM uses: an explicit flag wins, roles decide otherwise. */
+function isWallStaff(employee) {
+  if (!employee || employee.is_active === false) return false;
+  if (typeof employee.is_wall_staff === 'boolean') return employee.is_wall_staff;
+  const roles = (Array.isArray(employee.certifications) ? employee.certifications : [])
+    .map((role) => cleanText(role, 60))
+    .filter(Boolean);
+  return !(roles.length > 0 && roles.every((role) => role.includes('סנפלינג')));
+}
+
+export function eligibleEmployees(employees = [], role, audience = { mode: 'role' }) {
+  const { mode, employee_ids: ids } = normalizeAudience(audience);
   const wanted = cleanText(role, 60);
+  const hasRole = (employee) => (Array.isArray(employee.certifications) ? employee.certifications : [])
+    .map((r) => cleanText(r, 60))
+    .includes(wanted);
+
   return (employees || [])
     .filter((employee) => employee?.is_active !== false && employee?.active !== false)
-    .filter((employee) => !wanted || (Array.isArray(employee.certifications) ? employee.certifications : [])
-      .map((r) => cleanText(r, 60))
-      .includes(wanted))
+    .filter((employee) => {
+      if (mode === 'all') return true;
+      if (mode === 'names') return ids.includes(String(employee.id));
+      if (mode === 'wall') return isWallStaff(employee);
+      if (mode === 'external') return !isWallStaff(employee);
+      return !wanted || hasRole(employee);
+    })
     .map((employee) => ({ id: employee.id, name: employee.name || 'עובד/ת' }))
     .sort((a, b) => a.name.localeCompare(b.name, 'he'));
 }

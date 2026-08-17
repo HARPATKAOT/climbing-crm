@@ -204,7 +204,9 @@ export default function PublicShiftSignup() {
                           {dayLabel(slot.date)}{slot.label ? ` · ${slot.label}` : ''}
                         </span>
                         <span className="shift-row-meta">
-                          {slot.start_time}–{slot.end_time} · דרושים {slot.capacity} · סימנו {slot.taken}
+                          {slot.start_time}–{slot.end_time}
+                          {slot.capacity > 1 ? ` · דרושים ${slot.capacity}` : ''}
+                          {' · '}סימנו {slot.taken}
                         </span>
                       </span>
                     </button>
