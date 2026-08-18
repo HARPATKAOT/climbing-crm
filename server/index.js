@@ -15079,7 +15079,10 @@ function employeeIdForKey(windowRow, key) {
 
 /** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
 function windowRowRoles(windowRow) {
-  return [...new Set((windowRow?.slots || [])
+  // טופס יומן מחזיק משמרות; טופס לוח חוגים מחזיק מושבים. התפקידים נאספים
+  // משניהם — בלי זה סינון התפקידים בשליחה פשוט לא פעל על טפסי חוגים.
+  const holders = [...(windowRow?.slots || []), ...(windowRow?.seats || [])];
+  return [...new Set(holders
     .flatMap((slot) => (slot.needs || []).map((need) => need.role))
     .filter(Boolean))];
 }
