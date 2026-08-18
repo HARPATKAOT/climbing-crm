@@ -88,3 +88,53 @@ export const ASKS_TO_CROSS_AGE_BANDS = [
   'למשל לצרף ילד לקבוצה של אח או חבר מכיתה אחרת, או לבקש חריגה מהגיל.',
   'שאלה „לאיזו קבוצה הוא מתאים?” אינה בקשה כזאת — היא שאלה רגילה.',
 ].join('\n');
+
+/**
+ * מה כרמית מהמתנ״ס כתבה, ועל מי.
+ *
+ * הערוץ הזה נשאר דטרמיניסטי בכל מה שקורה *אחרי* — מציאת המתאמן, חישוב תאריך
+ * החיוב, שינוי הסטטוס — כי תאריך שגוי הוא חיוב שגוי למשפחה. מה שעבר לכאן הוא
+ * רק הקריאה: „אלימלך קרני נרשם” חיפש ילד ששמו כולל את הפועל, „יאירי נטע”
+ * החזיר ארבעה ילדים בשם יאיר, ורשימת מילות הביטול לעולם אינה שלמה.
+ *
+ * @returns {Promise<{intent: string, name: string}>}
+ *   intent: registration | cancellation | start_question | greeting | other
+ */
+export async function readCentreMessage({ message, callModel, apiKey } = {}) {
+  const text = String(message || '').trim();
+  const unknown = { intent: 'other', name: '' };
+  if (!text || typeof callModel !== 'function') return unknown;
+
+  try {
+    const { content, error } = await callModel({
+      contents: [{ role: 'user', parts: [{ text }] }],
+      systemInstruction: [
+        'מזכירת המתנ״ס כותבת לנו על מתאמנים בחוגי טיפוס. סווג את ההודעה שלפניך.',
+        'ענה בשורה אחת בלבד בפורמט: כוונה|שם',
+        'הכוונות האפשריות:',
+        'registration — היא מודיעה שמתאמן נרשם או רשום אצלה.',
+        'cancellation — היא מודיעה שמתאמן ביטל, לא נרשם, או הפסיק.',
+        'start_question — היא שואלת ממתי מתאמן מתאמן אצלנו, לצורך חיוב.',
+        'greeting — ברכה בלבד, בלי שם ובלי בקשה.',
+        'other — כל דבר אחר, כולל שאלה שאינה על תאריך התחלה.',
+        'השם: שם המתאמן כפי שהוא מופיע, בלי פעלים ובלי מילות קישור.',
+        'סדר השמות כפי שנכתב, גם אם שם המשפחה ראשון. אין שם — השאר ריק.',
+        'בלי הסבר, בלי מרכאות, בלי שורות נוספות.',
+      ].join('\n'),
+      declarations: [],
+      apiKey,
+    });
+    if (error || !content) return unknown;
+
+    const line = firstText(content).split('\n')[0].trim();
+    const [rawIntent, ...rest] = line.split('|');
+    const intent = String(rawIntent || '').trim().toLowerCase();
+    const known = ['registration', 'cancellation', 'start_question', 'greeting', 'other'];
+    return {
+      intent: known.includes(intent) ? intent : 'other',
+      name: rest.join('|').trim().replace(/^["'«»]+|["'«»]+$/g, ''),
+    };
+  } catch {
+    return unknown;
+  }
+}

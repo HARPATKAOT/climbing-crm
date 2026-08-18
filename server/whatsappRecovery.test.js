@@ -2,12 +2,7 @@ process.env.LOCAL_DURABLE_STORAGE = '1';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  unansweredRecoveryCandidates,
-  centreStudentName,
-  isCentreGreeting,
-  greetingFor,
-} from './whatsapp.js';
+import { unansweredRecoveryCandidates, greetingFor } from './whatsapp.js';
 
 const NOW = Date.parse('2026-08-09T17:00:00.000Z');
 const at = (secondsAgo) => new Date(NOW - secondsAgo * 1000).toISOString();
@@ -103,22 +98,10 @@ test('a staff reply from the CRM holds the bot, even if only `messages` has it',
   }
 });
 
-test('what the centre types is read as a name, and a greeting is read as a greeting', () => {
-  // The verb rode along into the lookup, and the answer the secretary got was
-  // "לא מצאתי אצלנו מתאמן בשם אלימלך קרני נרשם".
-  assert.equal(centreStudentName('אלימלך קרני נרשם'), 'אלימלך קרני');
-  assert.equal(centreStudentName('נטע יאירי'), 'נטע יאירי');
-  assert.equal(centreStudentName('הוא נרשם במתנס'), '');
-  assert.equal(centreStudentName('מתי איתמר גיגי התחיל?'), 'איתמר גיגי');
-  // The length limit counts the name, not the sentence around it.
-  assert.equal(centreStudentName('נטע יאירי נרשמה אצלכם במתנ״ס'), 'נטע יאירי');
-  assert.equal(centreStudentName('נטע יאירי ביטל את ההרשמה'), 'נטע יאירי');
 
-  // "בוקר טוב" fell through to the ordinary customer flow, which asked the
-  // מתנ״ס secretary what her first name was.
-  assert.equal(centreStudentName('בוקר טוב'), '');
-  assert.equal(isCentreGreeting('בוקר טוב'), true);
-  assert.equal(isCentreGreeting('נטע יאירי'), false);
+test('a greeting is answered with the same greeting, so the hour stays right', () => {
+  // Which messages *are* greetings is the model's call now — see
+  // readCentreMessage. This is only the wording of the answer.
   assert.equal(greetingFor('בוקר טוב'), 'בוקר טוב');
   assert.equal(greetingFor('ערב טוב'), 'ערב טוב');
   assert.equal(greetingFor('אהלן'), 'היי');
