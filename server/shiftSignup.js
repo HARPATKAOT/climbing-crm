@@ -17,12 +17,16 @@
  *   without a second bookkeeping step.
  */
 
+import { randomBytes } from 'node:crypto';
 import {
   activityDateRange,
   getGroupDays,
   israelDateStr,
   isTrainingVacationDate,
 } from './attendanceUtils.js';
+
+const TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+const TOKEN_LENGTH = 12;
 
 export const SIGNUP_TABLE = 'shift_signup_windows';
 export const RESPONSE_TABLE = 'shift_signup_responses';
@@ -483,13 +487,14 @@ export function calendarSlotCandidates({
 
 /** Short, unguessable, and readable enough to be dictated over the phone. */
 export function newSignupToken() {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  // `randomBytes` ולא `Math.random`: המפתח הזה הוא כל מה שעומד בין קישור שהועבר
+  // בוואטסאפ לבין תשובה בשם מישהו אחר, ומחולל פסאודו-אקראי אפשר לנחש ממנו קדימה.
+  const bytes = randomBytes(TOKEN_LENGTH);
   let token = '';
-  for (let i = 0; i < 12; i += 1) {
-    token += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for (let i = 0; i < TOKEN_LENGTH; i += 1) token += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
   return token;
 }
+
 
 /**
  * מי מקבל את הקישור. רשימה ריקה פירושה „כל הצוות” — הטופס מציע לכל אחד את

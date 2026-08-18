@@ -14718,11 +14718,29 @@ const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
  * המפתח נוצר בשליחה, אחד לכל עובד, ונשמר על הטופס. הוא מזהה בלי סיסמה ובלי
  * בחירה מרשימה — וגם חוסם תשובה בשם מישהו אחר, מה שהבורר הפתוח אִפשר.
  */
+const EMPLOYEE_LINKS_TABLE = 'employee_links';
+
+/** הקישור האישי הקבוע של עובד, נוצר בפעם הראשונה שמבקשים אותו. */
+function employeeLinkToken(employeeId) {
+  const existing = db.getOne(EMPLOYEE_LINKS_TABLE, String(employeeId));
+  if (existing && !existing.revoked_at) return existing.token;
+  const token = newSignupToken();
+  if (existing) db.update(EMPLOYEE_LINKS_TABLE, existing.id, { token, revoked_at: null });
+  else db.insert(EMPLOYEE_LINKS_TABLE, { id: String(employeeId), token });
+  return token;
+}
+
 function employeeIdForKey(windowRow, key) {
   const wanted = String(key || '').trim();
   if (!wanted) return null;
   const keys = windowRow?.employee_keys || {};
-  return Object.keys(keys).find((employeeId) => keys[employeeId] === wanted) || null;
+  const onWindow = Object.keys(keys).find((employeeId) => keys[employeeId] === wanted);
+  if (onWindow) return onWindow;
+  // קישור אישי קבוע — אותו מפתח פותח כל טופס שהעובד קיבל, כך שקישור שמור בטלפון
+  // ממשיך לעבוד גם לטופס הבא.
+  const standing = (db.get(EMPLOYEE_LINKS_TABLE) || [])
+    .find((row) => row.token === wanted && !row.revoked_at);
+  return standing ? String(standing.id) : null;
 }
 
 /** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
@@ -14976,7 +14994,7 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
     // אפשר לענות בשם מישהו אחר גם אם הקישור הועבר הלאה.
     const keys = { ...(windowRow.employee_keys || {}) };
     for (const employee of targets) {
-      if (!keys[employee.id]) keys[employee.id] = newSignupToken();
+      if (!keys[employee.id]) keys[employee.id] = employeeLinkToken(employee.id);
     }
     const { sent, results } = await sendSignupInvites({
       windowRow,
@@ -14991,6 +15009,30 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+/**
+ * הקישור האישי של עובד לטופס.
+ *
+ * כפתור „העתקת קישור” חילק עד כה את הכתובת הכללית, וזו מפילה את מי שפותח אותה
+ * חזרה לבורר שמות פתוח — בדיוק מה שהמפתח האישי נועד למנוע.
+ */
+app.post('/api/shift-signup/windows/:id/link', (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const employee = db.getOne('employees', String(req.body?.employee_id || ''));
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const token = employeeLinkToken(employee.id);
+  const keys = { ...(windowRow.employee_keys || {}) };
+  if (!keys[employee.id]) {
+    keys[employee.id] = token;
+    db.update('shift_signup_windows', windowRow.id, { employee_keys: keys });
+  }
+  res.json({
+    employee_id: employee.id,
+    name: employee.name || '',
+    link: `${eventPublicBase()}/shift-signup/${windowRow.token}?u=${keys[employee.id]}`,
+  });
 });
 
 /**
@@ -15069,22 +15111,26 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
     const employees = db.get('employees') || [];
     const answers = responsesForWindow(responses, windowRow.id);
+    const me = employeeIdForKey(windowRow, req.query.u) || null;
     res.json({
       ...publicWindowView(windowRow, answers),
       // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
       // לענות בשם מישהו אחר — הקישור עובר בוואטסאפ ואפשר להעביר אותו הלאה.
-      me: employeeIdForKey(windowRow, req.query.u) || null,
+      me,
       // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
       // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
       eligible: eligibleEmployees(employees, windowRow.recipients),
-      // מה שכל אחד כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
+      // מה שאותו אדם כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
       // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
-      mine: answers.map((answer) => ({
-        employee_id: answer.employee_id,
-        picks: answer.picks || [],
-        wanted_count: answer.wanted_count || 0,
-        note: answer.note || '',
-      })),
+      // רק שלו: הקישור עובר בוואטסאפ, ומה שכל הצוות סימן אינו עניינו של מי
+      // שמחזיק בו.
+      mine: (me ? answers.filter((answer) => answer.employee_id === me) : [])
+        .map((answer) => ({
+          employee_id: answer.employee_id,
+          picks: answer.picks || [],
+          wanted_count: answer.wanted_count || 0,
+          note: answer.note || '',
+        })),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

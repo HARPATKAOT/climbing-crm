@@ -157,6 +157,9 @@ export const OPERATIONAL_TABLES = [
   // כמה אנשים ובאילו תפקידים חוג צריך. מקביל ל-activity_staff_needs, ומזהה
   // השורה הוא מזהה החוג — כך אין חיפוש ואין שתי שורות לחוג אחד.
   'class_staff_needs',
+  // הקישור האישי של עובד לטפסי שיבוץ. אחד לעובד ולא אחד לטופס, כי אותו אדם
+  // מקבל טופס אחרי טופס והקישור שלו צריך להישאר אותו קישור.
+  'employee_links',
   'safety_inspections',
   'safety_incidents',
   'safety_check_types',

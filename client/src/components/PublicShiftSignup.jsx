@@ -219,12 +219,20 @@ export default function PublicShiftSignup() {
                   {(data.eligible || []).find((e) => String(e.id) === String(data.me))?.name || ''}
                 </div>
               ) : (
-                <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
-                  <option value="">בחרו את השם שלכם...</option>
-                  {(data.eligible || []).map((employee) => (
-                    <option key={employee.id} value={employee.id}>{employee.name}</option>
-                  ))}
-                </AppSelect>
+                <>
+                  {/* בלי מפתח אישי הטופס אינו יודע מי פתח אותו, ולכן גם לא טוען
+                      תשובה קודמת — מה שכל הצוות סימן אינו עניינו של מי שמחזיק
+                      בקישור. שליחה כאן מחליפה, ולכן זה נאמר מראש. */}
+                  <p className="event-hint" style={{ marginTop: 0 }}>
+                    נפתח בלי קישור אישי — שליחה כאן מחליפה תשובה קודמת שלכם, אם הייתה.
+                  </p>
+                  <AppSelect value={employeeId} onChange={(e) => chooseEmployee(e.target.value)}>
+                    <option value="">בחרו את השם שלכם...</option>
+                    {(data.eligible || []).map((employee) => (
+                      <option key={employee.id} value={employee.id}>{employee.name}</option>
+                    ))}
+                  </AppSelect>
+                </>
               )}
               {(data.eligible || []).length === 0 && (
                 <p className="event-hint" style={{ marginTop: 10 }}>

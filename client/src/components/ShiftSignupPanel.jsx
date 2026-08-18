@@ -1045,6 +1045,7 @@ export default function ShiftSignupPanel() {
     () => new URLSearchParams(window.location.search).get('signup') || ''
   );
   const [copiedId, setCopiedId] = useState('');
+  const [linksFor, setLinksFor] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState([]);
@@ -1073,13 +1074,28 @@ export default function ShiftSignupPanel() {
 
   const linkOf = (row) => `${window.location.origin}/shift-signup/${row.token}`;
 
-  const copyLink = async (row) => {
+  /**
+   * קישור אישי לעובד אחד.
+   *
+   * הכתובת הכללית מפילה את מי שפותח אותה לבורר שמות פתוח — ומי שקיבל אותה
+   * בהעברה יכול לענות בשם כל אחד. לכן ההעתקה היא תמיד של קישור אישי.
+   */
+  const copyPersonalLink = async (row, employee) => {
     try {
-      await navigator.clipboard.writeText(linkOf(row));
-      setCopiedId(row.id);
-      setTimeout(() => setCopiedId(''), 2000);
-    } catch {
-      window.prompt('העתיקו את הקישור:', linkOf(row));
+      const body = await callApi(`/api/shift-signup/windows/${encodeURIComponent(row.id)}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employee.id }),
+      });
+      try {
+        await navigator.clipboard.writeText(body.link);
+        setCopiedId(`${row.id}:${employee.id}`);
+        setTimeout(() => setCopiedId(''), 2000);
+      } catch {
+        window.prompt(`הקישור של ${employee.name}:`, body.link);
+      }
+    } catch (e) {
+      setError(e.message);
     }
   };
 
@@ -1202,9 +1218,11 @@ export default function ShiftSignupPanel() {
                     {sendingId === row.id ? <Loader2 size={13} className="spin" /> : <Send size={13} />}
                     {row.sent_at ? 'שליחה חוזרת' : 'שליחה לצוות'}
                   </button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copyLink(row)}>
-                    {copiedId === row.id ? <Check size={13} /> : <Copy size={13} />}
-                    {copiedId === row.id ? 'הועתק' : 'העתקת קישור'}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setLinksFor(linksFor === row.id ? '' : row.id)}
+                  >
+                    <Copy size={13} /> קישורים אישיים
                   </button>
                   <button className="btn btn-ghost btn-sm" onClick={() => toggleStatus(row)}>
                     {row.status === 'open' ? <Lock size={13} /> : <Unlock size={13} />}
@@ -1238,6 +1256,29 @@ export default function ShiftSignupPanel() {
                       ✗ {r.name} — {r.reason}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {linksFor === row.id && (
+                <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>
+                    לחיצה על שם מעתיקה את הקישור האישי שלו. קישור אישי פותח את הטופס על שמו
+                    ואי אפשר לענות דרכו בשם מישהו אחר.
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {employees
+                      .filter((e) => !(row.recipients || []).length || (row.recipients || []).includes(e.id))
+                      .map((employee) => (
+                        <button
+                          key={employee.id}
+                          className={`btn btn-sm ${copiedId === `${row.id}:${employee.id}` ? 'btn-primary' : 'btn-ghost'}`}
+                          onClick={() => copyPersonalLink(row, employee)}
+                        >
+                          {copiedId === `${row.id}:${employee.id}` ? <Check size={12} /> : <Copy size={12} />}
+                          {employee.name}
+                        </button>
+                      ))}
+                  </div>
                 </div>
               )}
 
