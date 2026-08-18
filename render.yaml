@@ -4,7 +4,9 @@ services:
     name: climbing-crm-api
     runtime: node
     rootDir: server
-    buildCommand: npm install
+    # משיכת הבנק (israeli-bank-scrapers) מריצה דפדפן אמיתי. Chrome אינו חלק
+    # מחבילת npm — בלי ההתקנה הזאת המשיכה נכשלת ב"Could not find Chrome".
+    buildCommand: npm install && npx puppeteer browsers install chrome
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
