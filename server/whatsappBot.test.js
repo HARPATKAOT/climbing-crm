@@ -19,6 +19,7 @@ import {
   isHumanOutboundLog,
   shouldDeferToHumanStaff,
   withBotMark,
+  botReplyText,
   withStaffMark,
   wantsExplicitHumanStaff,
   normalizeHistoryLimit,
@@ -147,6 +148,20 @@ test('every bot reply is marked, and the mark never stacks', () => {
   // Nothing to mark stays nothing, so an empty reply is still not sent.
   assert.equal(withBotMark(''), '');
   assert.equal(withBotMark(null), '');
+});
+
+test('the two questions that open a conversation carry no mark', () => {
+  // Someone who asked "מאיזה גיל אפשר לטפס?" was answered with a robot icon and
+  // a request for their name. People stop replying once they see software, and
+  // these are the two answers we cannot afford to lose — so the badge comes off
+  // here and goes back on for everything after.
+  assert.equal(botReplyText('היי 🙂 מה השם הפרטי שלך?', { unmarked: true }), 'היי 🙂 מה השם הפרטי שלך?');
+  assert.equal(botReplyText('נעים מאוד רלי 🙂 ומה שם המשפחה?', { unmarked: true }), 'נעים מאוד רלי 🙂 ומה שם המשפחה?');
+  // Everything else is the bot, and says so.
+  assert.equal(botReplyText('היי דלק!'), '🤖🧗🏾 היי דלק!');
+  assert.equal(botReplyText('היי דלק!', { unmarked: false }), '🤖🧗🏾 היי דלק!');
+  assert.equal(botReplyText('', { unmarked: true }), '');
+  assert.equal(botReplyText(null, { unmarked: true }), '');
 });
 
 test('a bot reply is never also signed as a person', () => {

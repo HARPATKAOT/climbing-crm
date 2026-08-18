@@ -80,7 +80,10 @@ test('an unset capacity is unknown, never twelve', () => {
   assert.equal(unknown.isFull, false);
 });
 
-test('a soft placement does not take a seat before registration is verified', () => {
+test('a place held for three days is a real place, until the three days pass', () => {
+  // A hold that took no seat was not a hold: the same seat was offered to the
+  // next family while the first was still filling in the form. It takes the
+  // seat while it is live, and gives it back the moment it lapses.
   const group = { id: 'g1', maxSlots: 3 };
   const now = new Date('2026-08-11T09:00:00Z');
   const students = [
@@ -89,8 +92,9 @@ test('a soft placement does not take a seat before registration is verified', ()
     { id: 's3', groupId: 'g1', status: 'waitlist' },
     { id: 's4', groupId: 'g1', status: 'pending_signup', placement_hold_until: '2026-08-09T09:00:00Z' },
   ];
-  assert.equal(countEnrolled('g1', students, { now }), 1);
-  assert.equal(spotsLeft(group, students, { now }), 2);
+  // s1 is registered and s2 is holding; s3 is waitlisted and s4's hold expired.
+  assert.equal(countEnrolled('g1', students, { now }), 2);
+  assert.equal(spotsLeft(group, students, { now }), 1);
 });
 
 test('a price never lives inside prose', () => {

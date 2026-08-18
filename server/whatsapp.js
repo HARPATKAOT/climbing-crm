@@ -50,6 +50,7 @@ import {
 } from './botReplyClaims.js';
 import {
   mergeBotSettings,
+  botReplyText,
   withBotMark,
   withStaffMark,
   isClosingAcknowledgement,
@@ -1270,9 +1271,10 @@ export const whatsappService = {
     logType = '',
     replyKey = '',
     replyClaimed = false,
+    unmarked = false,
   } = {}) {
     if (!replyText) return { success: false };
-    const text = withBotMark(replyText);
+    const text = botReplyText(replyText, { unmarked });
     if (!isSimulator && replyKey && !replyClaimed) {
       const claim = await claimBotReply(db, replyKey, { phone });
       if (!claim.claimed) return { success: true, skipped: true, reason: 'duplicate_reply', replyKey };
@@ -1429,6 +1431,7 @@ export const whatsappService = {
             parent: currentParent,
             replyKey,
             replyClaimed: true,
+            unmarked: true,
             ...(nameCapture.handoff ? { source: 'bot_control' } : {}),
           });
           if (!sent?.success) {
@@ -1878,6 +1881,7 @@ export const whatsappService = {
         await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
           isSimulator,
           replyKey,
+          unmarked: true,
           ...(nameCapture.handoff ? { source: 'bot_control' } : {}),
         });
         // Asked twice and still not a name: the customer is asking us

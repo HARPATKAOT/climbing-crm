@@ -36,9 +36,10 @@ const LEGACY_BRAND_RE = /My Wall/gi;
 const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
 /**
- * Every automatic reply opens with this, so a customer can tell at a glance
- * whether they are reading a person or the bot — the same answer the bot gives
- * when asked outright. Staff replies are never marked: they really are people.
+ * Almost every automatic reply opens with this, so a customer can tell at a
+ * glance whether they are reading a person or the bot — the same answer the bot
+ * gives when asked outright. Staff replies are never marked: they really are
+ * people. The one exception is the identity gate — see botReplyText.
  *
  * The climber is the wall's own mark. It used to sit at the end of a few canned
  * messages as decoration, which would now put it twice in one message and stop
@@ -65,6 +66,20 @@ export const PRICE_SOURCE_RULE =
   'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד, דמי ההעשרה וכניסה בודדת מהמחירון. '
     + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום. '
     + 'אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה — הפנה להורה או לצוות.';
+
+/**
+ * The text as it goes out, marked unless the caller says otherwise.
+ *
+ * The one caller that says otherwise is the identity gate: the two questions
+ * asked before we know who is writing. Opening a conversation with a robot
+ * icon costs answers — people stop replying once they see they are talking to
+ * software, and those two questions are the ones we cannot afford to lose.
+ * Everything after them is marked again, and asked outright the bot still says
+ * it is a bot; what is dropped is the badge, not the honesty.
+ */
+export function botReplyText(text, { unmarked = false } = {}) {
+  return unmarked ? String(text || '').trim() : withBotMark(text);
+}
 
 export function withBotMark(text) {
   const body = String(text || '').trim();
