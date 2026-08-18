@@ -56,6 +56,7 @@ const PublicEmployeeOnboardForm  = lazy(() => import('./components/PublicEmploye
 const WhatsAppRedirect           = lazy(() => import('./public-site/components/WhatsAppRedirect.jsx'));
 const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy.jsx'));
 const PublicActivityRegistration = lazy(() => import('./components/PublicActivityRegistration.jsx'));
+const PublicActivityDetailsConfirm = lazy(() => import('./components/PublicActivityDetailsConfirm.jsx'));
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
@@ -123,6 +124,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/join" element={<WhatsAppRedirect />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
+            {/* אישור פרטי הפעילות — טופס נפרד לרשומים, לא נגיעה בהצהרות שנחתמו. */}
+            <Route path="/event/:slug/confirm" element={<PublicActivityDetailsConfirm />} />
             <Route path="/event-host/:token" element={<PublicHostPayment />} />
             <Route path="/equipment/:token" element={<PublicEquipmentPayment />} />
             <Route path="/shop" element={<PublicShop />} />

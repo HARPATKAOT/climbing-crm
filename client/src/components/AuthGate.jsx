@@ -8,6 +8,7 @@ import { isPublicPath } from '../publicPaths.js';
 // Lazy — these heavy public forms must not be bundled into the CRM shell.
 // They render here only as defense in depth when a public URL hits the catch-all.
 const PublicActivityRegistration = lazy(() => import('./PublicActivityRegistration.jsx'));
+const PublicActivityDetailsConfirm = lazy(() => import('./PublicActivityDetailsConfirm.jsx'));
 const PublicHostPayment          = lazy(() => import('./PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./PublicEquipmentPayment.jsx'));
 const PublicOnboardingForm       = lazy(() => import('./PublicOnboardingForm.jsx'));
@@ -327,6 +328,7 @@ export default function AuthGate({ children }) {
     if (['/register', '/health'].some((p) => path === p || path.startsWith(`${p}/`))) publicPage = <PublicOnboardingForm />;
     else if (path === '/onboard' || path.startsWith('/onboard/')) publicPage = <PublicOnboardingForm />;
     else if (path === '/privacy') publicPage = <PrivacyPolicy />;
+    else if (/^\/event\/[^/]+\/confirm\/?$/.test(path)) publicPage = <PublicActivityDetailsConfirm />;
     else if (path.startsWith('/event/')) publicPage = <PublicActivityRegistration />;
     else if (path.startsWith('/event-host/')) publicPage = <PublicHostPayment />;
     else if (path.startsWith('/equipment/')) publicPage = <PublicEquipmentPayment />;

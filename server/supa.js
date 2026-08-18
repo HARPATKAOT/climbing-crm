@@ -198,6 +198,9 @@ export const OPERATIONAL_TABLES = [
   'activity_interest',
   'activity_attendance',
   'participation_reminders',
+  // אישורי "קראתי את פרטי הפעילות" — מסמך חתום נפרד לכל הורה לכל אירוע,
+  // כדי לא לגעת בהצהרות שכבר נחתמו כשמוסיפים את תוכנית הטיול לאישור.
+  'activity_detail_confirmations',
   // Append-only cryptographic journal for public signatures and their PDFs.
   'signature_evidence',
   'ai_suggestions',
