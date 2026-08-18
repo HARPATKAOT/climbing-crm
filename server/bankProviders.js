@@ -102,8 +102,17 @@ async function fetchSmeAccountData({ credentials, since }) {
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null),
     ]);
 
-    // ההוכחה לכניסה היא היכולת לקרוא נתונים, לא כתובת עמוד הבית — היא
-    // משתנה בין גרסאות של הבנק. נכשל? קוראים את הודעת השגיאה מהעמוד.
+    const landedUrl = await page.url();
+    if (landedUrl.includes('LOGIN_PAGE')) {
+      const pageError = await page.evaluate(() => document.querySelector('#general-error, .error-message, [class*="error"]')?.textContent?.trim() || '');
+      const error = new Error(pageError || 'הכניסה לחשבון העסקי נדחתה — נשארנו בעמוד הכניסה');
+      error.code = 'auth_required';
+      throw error;
+    }
+
+    // אפליקציית העסקים נטענת ואז מושכת נתונים בעצמה; ממתינים שתסיים כדי
+    // שנוכל גם לקרוא את אותו API וגם לזהות את הכתובות שלו ברשת.
+    await new Promise((resolve) => setTimeout(resolve, 8000));
     const fromDate = String(since || '').replace(/-/g, '') || undefined;
     const accountsInfo = await page.evaluate(async () => {
       try {
@@ -113,10 +122,16 @@ async function fetchSmeAccountData({ credentials, since }) {
       } catch (error) { return { fetchError: String(error) }; }
     });
     if (!accountsInfo?.UserAccountsData) {
-      const pageError = await page.evaluate(() => document.querySelector('#general-error, .error-message, [class*="error"]')?.textContent?.trim() || '');
-      const url = await page.url();
-      const error = new Error(pageError || `הכניסה לחשבון העסקי לא הושלמה (${url.includes('LOGIN_PAGE') ? 'נשארנו בעמוד הכניסה' : url})`);
-      error.code = url.includes('LOGIN_PAGE') ? 'auth_required' : 'scrape_failed';
+      // אבחון: אילו כתובות נתונים האפליקציה עצמה קראה — הכתובת הנכונה
+      // נמצאת ביניהן, והסבב הבא של הקוד ישתמש בה.
+      const resources = await page.evaluate(() => [...new Set(
+        performance.getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .filter((name) => /gateway|api|titan|account|transaction/i.test(name))
+          .map((name) => name.replace(/^https:\/\/start\.telebank\.co\.il/, '').split('?')[0]),
+      )].slice(0, 25));
+      const error = new Error(`הכניסה הצליחה (${landedUrl}) אבל קריאת הנתונים לא: ${JSON.stringify(accountsInfo).slice(0, 120)} | רשת: ${resources.join(' ; ')}`);
+      error.code = 'scrape_failed';
       throw error;
     }
 
