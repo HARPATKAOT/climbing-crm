@@ -9,6 +9,7 @@ import {
   normalizeClassWindow,
   planClassStaffing,
   publicClassBoardView,
+  resolveClassWindow,
 } from './classSignup.js';
 
 const TODAY = '2026-08-17';
@@ -244,4 +245,29 @@ test('the message names the classes without pretending to know a date', () => {
   assert.match(text, /ילדים ג'-ד' · עוזר מדריך/);
   assert.match(text, /השיבוץ קבוע/);
   assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}/);
+});
+
+test('a sent form follows the board as it is now, not as it was', () => {
+  // הטופס נוצר כשחוג ביקש מדריך בלבד; מאז נפתחו בו שני כיסאות עוזר.
+  const { window: stale } = normalizeClassWindow({
+    title: 'טופס ישן',
+    seats: [{ group_id: 'g1', label: 'חוג', day: 2, time: '16:00', duration: 50,
+      needs: [{ role: 'הדרכת חוג', count: 1 }] }],
+  }, { classRoles: CLASS_ROLES });
+  const resolved = resolveClassWindow({ ...stale, id: 'w9' }, {
+    classNeedsByGroup: {},
+    classRoles: CLASS_ROLES,
+  });
+  assert.deepEqual(resolved.seats[0].needs, [
+    { role: 'הדרכת חוג', count: 1 },
+    { role: 'עוזר מדריך', count: 2 },
+  ]);
+  // מה שנכתב על החוג בלוח גובר גם על ברירת המחדל.
+  const custom = resolveClassWindow({ ...stale, id: 'w9' }, {
+    classNeedsByGroup: { g1: [{ role: 'עוזר מדריך', count: 3 }] },
+    classRoles: CLASS_ROLES,
+  });
+  assert.deepEqual(custom.seats[0].needs, [{ role: 'עוזר מדריך', count: 3 }]);
+  // הצילום שבאחסון לא נגוע.
+  assert.deepEqual(stale.seats[0].needs, [{ role: 'הדרכת חוג', count: 1 }]);
 });

@@ -94,6 +94,25 @@ export function normalizeClassWindow(body = {}, { existing = null, classRoles = 
 }
 
 /**
+ * הדרישות של הטופס, מהלוח החי.
+ *
+ * מושב נשמר עם צילום הדרישה מרגע היצירה — אבל שיבוץ לחוג הוא שנתי, והמנהל
+ * מעדכן את „מה החוג צריך” בלוח עצמו גם אחרי שהטופס נשלח. טופס שמציג דרישה
+ * ישנה חוסם עובדים על כיסאות שכבר נפתחו, ולכן בזמן ריצה הדרישה נקראת מהלוח,
+ * והצילום נשאר רק כעדות למה שנשאל.
+ */
+export function resolveClassWindow(windowRow, { classNeedsByGroup = {}, classRoles = [] } = {}) {
+  if (!windowRow || windowRow.kind !== CLASS_WINDOW_KIND || !classRoles.length) return windowRow;
+  return {
+    ...windowRow,
+    seats: (windowRow.seats || []).map((seat) => ({
+      ...seat,
+      needs: classNeedsFor(classNeedsByGroup[seat.group_id], classRoles),
+    })),
+  };
+}
+
+/**
  * טופס חוגים נסגר על הסטטוס ועל התאריך האחרון לענות בלבד. אין לו „המשמרת
  * האחרונה עברה” — השיבוץ הוא לשנה, ואין תאריך שאחריו השאלה מתיישנת מעצמה.
  */

@@ -50,6 +50,7 @@ import {
 import {
   CLASS_WINDOW_KIND,
   applyClassResponse,
+  resolveClassWindow,
   classAssignmentMessageText,
   classSignupBoard,
   isClassWindowOpen,
@@ -15079,6 +15080,15 @@ function employeeIdForKey(windowRow, key) {
 }
 
 /** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
+/** טופס חוגים, עם הדרישות החיות מהלוח במקום הצילום מרגע היצירה. */
+function resolvedSignupWindow(windowRow) {
+  if (!windowRow || windowRow.kind !== CLASS_WINDOW_KIND) return windowRow;
+  return resolveClassWindow(windowRow, {
+    classNeedsByGroup: classNeedsByGroupMap(),
+    classRoles: signupClassRoles(),
+  });
+}
+
 /** מדריך יכול לאייש מושב של עוזר מדריך — לא להפך. */
 function signupRoleFallbacks() {
   const [trainerRole, assistantRole] = signupClassRoles();
@@ -15181,6 +15191,7 @@ function signupWindowSummary(windowRow, responses, today, assignments = null) {
   // טופס לוח חוגים אינו נמדד בתאריכים: המושבים שלו הם חוגים, והשיבוץ נקרא
   // מלוח החוגים עצמו ולא מיומן העבודה.
   if (windowRow.kind === CLASS_WINDOW_KIND) {
+    windowRow = resolvedSignupWindow(windowRow);
     const seats = windowRow.seats || [];
     const board = classSignupBoard(windowRow, responses, db.get('employees') || [],
       db.get('groups') || [], signupClassRoles());
@@ -15309,10 +15320,11 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
     const pendingOf = () => eligibleEmployees(employees, windowRow.recipients)
       .filter((person) => !answers.some((answer) => answer.employee_id === person.id));
     if (windowRow.kind === CLASS_WINDOW_KIND) {
+      const resolved = resolvedSignupWindow(windowRow);
       return res.json({
-        ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
-        seats: windowRow.seats || [],
-        board: classSignupBoard(windowRow, responses, employees, db.get('groups') || [], signupClassRoles()),
+        ...signupWindowSummary(resolved, responses, israelDateStr(), assignments),
+        seats: resolved.seats || [],
+        board: classSignupBoard(resolved, responses, employees, db.get('groups') || [], signupClassRoles()),
         pending: pendingOf(),
       });
     }
@@ -15420,7 +15432,7 @@ app.post('/api/shift-signup/windows/:id/assign-class', async (req, res) => {
     return res.status(400).json({ error: 'הטופס הזה אינו טופס לוח חוגים' });
   }
   const employees = db.get('employees') || [];
-  const { groups: plans, skipped } = planClassStaffing(windowRow, req.body?.picks || [], {
+  const { groups: plans, skipped } = planClassStaffing(resolvedSignupWindow(windowRow), req.body?.picks || [], {
     groups: db.get('groups') || [],
     employees,
     classRoles: signupClassRoles(),
@@ -15575,7 +15587,7 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     }));
     if (windowRow.kind === CLASS_WINDOW_KIND) {
       return res.json({
-        ...publicClassBoardView(windowRow, responses, israelDateStr()),
+        ...publicClassBoardView(resolvedSignupWindow(windowRow), responses, israelDateStr()),
         me,
         eligible: eligibleEmployees(employees, windowRow.recipients),
         role_fallbacks: signupRoleFallbacks(),
@@ -15643,7 +15655,7 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     const payload = { ...(req.body || {}), employee_id: employeeId };
     const roleFallbacks = signupRoleFallbacks();
     const { record, existing, error } = windowRow.kind === CLASS_WINDOW_KIND
-      ? applyClassResponse(windowRow, responses, payload, { today: israelDateStr(), employee, roleFallbacks })
+      ? applyClassResponse(resolvedSignupWindow(windowRow), responses, payload, { today: israelDateStr(), employee, roleFallbacks })
       : applyResponse(windowRow, responses, payload, { employee, roleFallbacks });
     if (error) return res.status(400).json({ error });
     const saved = existing
