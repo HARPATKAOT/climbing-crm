@@ -24,6 +24,7 @@ import { outreachPausedUntil } from './botOutreachPause.js';
 import { registrationStep, STEP_GROUP } from './registrationSteps.js';
 import { runOpenStepSweep } from './openStepSweep.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
+import { sendManagerAlert } from './staffNotify.js';
 import {
   FOLLOWUP_COLLECTION,
   claimFollowUpSend,
@@ -698,11 +699,8 @@ export const automationsService = {
     let notified = 0;
     for (const staffPhone of phones) {
       try {
-        const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-          source: 'staff_notify',
-          clip: false,
-        });
-        if (result?.success) notified += 1;
+        const result = await sendManagerAlert(staffPhone, body);
+        if (result?.sent) notified += 1;
       } catch (err) {
         console.error('abandoned reply notice failed:', err.message);
       }
@@ -910,11 +908,8 @@ export const automationsService = {
       ].filter(Boolean).join('\n');
       for (const staffPhone of phones) {
         try {
-          const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-            source: 'staff_notify',
-            clip: false,
-          });
-          if (result?.success) staffNotified += 1;
+          const result = await sendManagerAlert(staffPhone, body);
+          if (result?.sent) staffNotified += 1;
         } catch (err) {
           console.error('bot follow-up staff notice failed:', err.message);
         }
@@ -971,11 +966,8 @@ export const automationsService = {
     let sent = 0;
     for (const phone of staffPhones) {
       try {
-        const result = await whatsappService.sendTextMessage(phone, body, false, {
-          source: 'staff_notify',
-          clip: false,
-        });
-        if (result?.success) sent += 1;
+        const result = await sendManagerAlert(phone, body);
+        if (result?.sent) sent += 1;
       } catch (err) {
         console.error('Stalled signup notice failed:', err.message);
       }

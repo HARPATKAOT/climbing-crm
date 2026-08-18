@@ -84,6 +84,7 @@ import {
 } from './whatsappBot.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
 import { alertRecipients } from './staffAlerts.js';
+import { sendManagerAlert } from './staffNotify.js';
 import { replyOffersForm } from './formFollowUp.js';
 import { scheduleFormCheck } from './botTools.js';
 import { recordBotAction } from './botActivityLog.js';
@@ -484,11 +485,10 @@ export async function notifyStaffOfHandoff({
     if (!staffPhone) continue;
     if (customerPhone && phonesMatch(staffPhone, customerPhone)) continue;
     try {
-      const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-        source: 'staff_notify',
-        clip: false,
-      });
-      if (result?.success) sent += 1;
+      // Free text only reaches somebody who wrote to us in the last day; an
+      // approved template carries it the rest of the time. See sendManagerAlert.
+      const result = await sendManagerAlert(staffPhone, body);
+      if (result?.sent) sent += 1;
     } catch (err) {
       console.error('Staff handoff notify failed:', err.message);
     }
@@ -537,11 +537,10 @@ export async function notifyStaffOfPlacement({
     if (!staffPhone) continue;
     if (customerPhone && phonesMatch(staffPhone, customerPhone)) continue;
     try {
-      const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-        source: 'staff_notify',
-        clip: false,
-      });
-      if (result?.success) sent += 1;
+      // Free text only reaches somebody who wrote to us in the last day; an
+      // approved template carries it the rest of the time. See sendManagerAlert.
+      const result = await sendManagerAlert(staffPhone, body);
+      if (result?.sent) sent += 1;
     } catch (err) {
       console.error('Staff placement notify failed:', err.message);
     }
@@ -814,6 +813,11 @@ export const whatsappService = {
         source: options.source || (isAi ? 'ai' : 'crm'),
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        // Without this a failure is a red mark on somebody's phone and nothing
+        // else: fifteen staff alerts were lost over two days and the rows said
+        // only "failed". Meta's own words are what tell a closed 24-hour window
+        // apart from a blocked number.
+        meta: { ...(options.meta || {}), error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }
@@ -879,6 +883,7 @@ export const whatsappService = {
         message_type: 'interactive',
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        meta: { error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }
@@ -992,6 +997,7 @@ export const whatsappService = {
         source: options.source || 'crm',
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        meta: { error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }
