@@ -478,3 +478,23 @@ test('an invoice with no payment detail is not guessed into collections', () => 
   assert.equal(report.kpis.collected, 0);
   assert.equal(report.kpis.revenue_net, 769.23);
 });
+
+test('a credit note is never a receivable', () => {
+  assert.equal(documentOpenBalance({
+    doctype: 'refund', total_gross: 44493, remaining_sum: 44493, payment_status_known: true, client_name: 'מתנס',
+  }), 0);
+});
+
+test('the overview shows open debt as stock: a month filter never hides it', () => {
+  const documents = [{
+    id: 'icount:invoice:2010', doctype: 'invoice', docnum: '2010', document_date: '2026-07-10',
+    total_gross: 3068, total_net: 2600, remaining_sum: 3068, payment_status_known: true, client_name: 'לב השרון',
+  }];
+  const august = buildDashboard({ documents, from: '2026-08-01', to: '2026-08-31' });
+  const july = buildDashboard({ documents, from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(august.kpis.open_debt, 3068);
+  assert.equal(july.kpis.open_debt, 3068);
+  // ...אך ההכנסה עצמה נשארת תזרים ושייכת לחודש המסמך בלבד
+  assert.equal(august.kpis.revenue_net, 0);
+  assert.equal(july.kpis.revenue_net, 2600);
+});

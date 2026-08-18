@@ -40,6 +40,9 @@ export function classifyDocument(doctype, { isStorno = false, total = 0 } = {}) 
 export function documentOpenBalance(document = {}) {
   if (document.is_cancelled || document.is_storno) return 0;
   const doctype = cleanText(document.doctype).replace(/ /g, '_');
+  // תעודת זיכוי אינה חוב של הלקוח כלפינו — יתרה פתוחה בה היא כסף שאנחנו
+  // חייבים לו, וספירתה כגבייה הוסיפה 44,493 ש״ח דמיוניים לחוב הפתוח.
+  if (CREDIT_DOC_TYPES.has(doctype)) return 0;
   if (SELF_SETTLED_DOC_TYPES.has(doctype)) return 0;
   // מסמך שלא נמשכו עבורו פרטי פירעון אינו ראיה לחוב. בשורות ישנות השדה
   // חסר לגמרי, ולכן חוסר ראיה מזוהה גם דרך העדרם של פרטי המסמך.
@@ -202,7 +205,11 @@ export function buildDashboard({ documents = [], expenses = [], payments = [], f
 
   const recognizedDocs = docs.filter((doc) => classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).recognized);
   const customerIds = new Set(recognizedDocs.map((doc) => doc.client_id).filter(Boolean));
-  const openDebt = recognizedDocs.reduce((sum, doc) => sum + documentOpenBalance(doc), 0);
+  // חוב פתוח הוא מלאי ולא תזרים: סינון של חודש אחד אינו מבטל חוב שנוצר
+  // לפניו. מרכז ההכנסות כבר מציג אותו כך, והסקירה חייבת להסכים איתו.
+  const openDebt = documents
+    .filter((doc) => classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).recognized)
+    .reduce((sum, doc) => sum + documentOpenBalance(doc), 0);
   const mapped = reconciledPeriod.filter((row) => row.reconciliation_status === 'matched').length;
   const needsReview = reconciledPeriod.filter((row) => row.reconciliation_status === 'review').length;
 
