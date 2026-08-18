@@ -9,6 +9,9 @@ import { useBusinessProfile } from './BusinessProfileContext.jsx';
 import { isPublicPath } from './publicPaths.js';
 import GlobalSearch from './components/GlobalSearch.jsx';
 import AgentDock from './components/AgentDock.jsx';
+import { buildLeadEntryScopes } from './utils/leadUtils.js';
+import { buildFamilyRows } from './utils/leadHouseholds.js';
+import { isHandedToStaff } from './components/communicationQueue.js';
 
 // Code-splitting: each screen is downloaded only when first visited,
 // which keeps the initial bundle (and first paint) small.
@@ -407,6 +410,16 @@ export default function App() {
     .sort((a, b) => leadTs(b) - leadTs(a));
   const newLeadsCount = newLeads.length;
 
+  // The sidebar badge must show the same number as the „ממתינים לטיפול” tab
+  // in the customers screen — families the bot handed to staff, not every
+  // student still sitting in the lead_new status.
+  const awaitingHandlingCount = useMemo(() => {
+    const waitingStudents = buildLeadEntryScopes(students, parents).archiveInclusive
+      .filter(({ parent }) => isHandedToStaff(parent))
+      .map(({ student }) => student);
+    return buildFamilyRows(waitingStudents, parents, students).length;
+  }, [students, parents]);
+
   // מונה תיבת הנכנס הפיננסית על פריט הניווט של הדוחות (FINANCE_SPEC 5.4).
   const [financeInboxCount, setFinanceInboxCount] = useState(0);
   useEffect(() => {
@@ -461,8 +474,8 @@ export default function App() {
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
-                {n.key === 'leads' && newLeadsCount > 0 && (
-                  <span className="nav-badge">{newLeadsCount}</span>
+                {n.key === 'leads' && awaitingHandlingCount > 0 && (
+                  <span className="nav-badge">{awaitingHandlingCount}</span>
                 )}
                 {n.key === 'reports' && financeInboxCount > 0 && (
                   <span className="nav-badge">{financeInboxCount}</span>
