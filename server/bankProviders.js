@@ -73,6 +73,83 @@ export function normalizeScrapedTransaction(txn = {}) {
   };
 }
 
+const SME_BASE_URL = 'https://start.telebank.co.il';
+
+/**
+ * חשבון עסקי במרכנתיל נכנס בעמוד נפרד (LOGIN_PAGE_SME) עם שני שדות בלבד —
+ * ולכן הזרימה של israeli-bank-scrapers, שממלאה גם קוד מזהה, נכשלת בו.
+ * אותם מזהי שדות ואותו API פנימי (Titan/gatewayAPI), רק בלי השדה השלישי,
+ * אז ההתחברות ממומשת כאן ישירות מעל puppeteer.
+ */
+async function fetchSmeAccountData({ credentials, since }) {
+  let puppeteer;
+  try {
+    puppeteer = (await import('puppeteer')).default;
+  } catch {
+    const error = new Error('puppeteer אינו מותקן — משיכה חיה ממתינה להתקנה');
+    error.code = 'scraper_not_installed';
+    throw error;
+  }
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${SME_BASE_URL}/login/?multilang=he&bank=m&t=s`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.waitForSelector('#tzId', { timeout: 30000 });
+    await page.type('#tzId', credentials.id);
+    await page.type('#tzPassword', credentials.password);
+    await Promise.all([
+      page.click('.sendBtn'),
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null),
+    ]);
+
+    // ההוכחה לכניסה היא היכולת לקרוא נתונים, לא כתובת עמוד הבית — היא
+    // משתנה בין גרסאות של הבנק. נכשל? קוראים את הודעת השגיאה מהעמוד.
+    const fromDate = String(since || '').replace(/-/g, '') || undefined;
+    const accountsInfo = await page.evaluate(async () => {
+      try {
+        const response = await fetch('/Titan/gatewayAPI/userAccountsData', { credentials: 'include' });
+        if (!response.ok) return { httpStatus: response.status };
+        return await response.json();
+      } catch (error) { return { fetchError: String(error) }; }
+    });
+    if (!accountsInfo?.UserAccountsData) {
+      const pageError = await page.evaluate(() => document.querySelector('#general-error, .error-message, [class*="error"]')?.textContent?.trim() || '');
+      const url = await page.url();
+      const error = new Error(pageError || `הכניסה לחשבון העסקי לא הושלמה (${url.includes('LOGIN_PAGE') ? 'נשארנו בעמוד הכניסה' : url})`);
+      error.code = url.includes('LOGIN_PAGE') ? 'auth_required' : 'scrape_failed';
+      throw error;
+    }
+
+    const accounts = (accountsInfo.UserAccountsData.UserAccounts || [])
+      .map((account) => account?.NewAccountInfo?.AccountID)
+      .filter(Boolean);
+    const rawTxns = [];
+    for (const accountNumber of accounts) {
+      const data = await page.evaluate(async (acc, from) => {
+        const query = `IsCategoryDescCode=True&IsTransactionDetails=True&IsEventNames=True&IsFutureTransactionFlag=True${from ? `&FromDate=${from}` : ''}`;
+        const response = await fetch(`/Titan/gatewayAPI/lastTransactions/${acc}/Date?${query}`, { credentials: 'include' });
+        if (!response.ok) return { httpStatus: response.status };
+        return response.json();
+      }, accountNumber, fromDate);
+      const block = data?.CurrentAccountLastTransactions;
+      if (!block) continue;
+      const toRaw = (entry, pending) => ({
+        identifier: entry.OperationNumber,
+        date: String(entry.OperationDate || ''),
+        processedDate: String(entry.ValueDate || entry.OperationDate || ''),
+        chargedAmount: Number(entry.OperationAmount) || 0,
+        description: entry.OperationDescriptionToDisplay || '',
+        status: pending ? 'pending' : 'completed',
+      });
+      for (const entry of block.OperationEntry || []) rawTxns.push({ ...toRaw(entry, false), accountNumber });
+      for (const entry of block.FutureTransactionsBlock?.FutureTransactionEntry || []) rawTxns.push({ ...toRaw(entry, true), accountNumber });
+    }
+    return rawTxns;
+  } finally {
+    await browser.close();
+  }
+}
+
 /**
  * Provider אמיתי מעל israeli-bank-scrapers, בטעינה דינמית: החבילה כבדה
  * (דפדפן מלא) ומותקנת רק אחרי אישור (PROGRESS.md חסם B1). בלעדיה —
@@ -85,6 +162,23 @@ export function createScraperProvider(providerKey, { credentials } = {}) {
     key: providerKey,
     accountType: spec.accountType,
     async fetchTransactions(since) {
+      if (providerKey === 'mercantile') {
+        const resolvedSme = credentials ?? credentialsFromEnv(providerKey);
+        if (!resolvedSme) {
+          const error = new Error(`חסרים פרטי גישה ל${spec.label} (env ${spec.envPrefix}_*)`);
+          error.code = 'credentials_missing';
+          throw error;
+        }
+        const rows = await fetchSmeAccountData({ credentials: resolvedSme, since: dateOnly(since) });
+        return rows.map((txn) => ({
+          ...normalizeScrapedTransaction({
+            ...txn,
+            date: txn.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
+            processedDate: txn.processedDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
+          }),
+          accountNumber: String(txn.accountNumber || ''),
+        }));
+      }
       let scrapers;
       try {
         scrapers = await import('israeli-bank-scrapers');
