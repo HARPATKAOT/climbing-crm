@@ -32,6 +32,10 @@ function withMessages(rows, run) {
   }
 }
 
+const templateLine = (message, hours, template) => ({
+  id: `t${hours}`, phone: PHONE, channel: 'whatsapp', direction: 'outbound',
+  is_ai: false, source: 'crm', template_name: template, message, created_at: ago(hours),
+});
 const staffLine = (message, hours) => ({
   id: `s${hours}`, phone: PHONE, channel: 'whatsapp', direction: 'outbound',
   is_ai: false, source: 'crm', message, created_at: ago(hours),
@@ -45,16 +49,37 @@ const customerLine = (message, hours) => ({
   is_ai: false, source: 'customer', message, created_at: ago(hours),
 });
 
-test('a person who wrote here is still holding the thread a day later', () => {
+test('a person who wrote here last is still holding the thread a day later', () => {
   withMessages([
     customerLine('אני רוצה לשריין יום הולדת', 26),
     staffLine('כן, אפשר לשריין. איזו שעה?', 25),
-    // The bot barging in is the bug — it must not hand the thread back to itself.
-    botLine('🤖🧗🏾 מעביר לצוות שלנו, יחזרו אלייך בהקדם.', 24),
+    customerLine('אחרי בית ספר', 24),
   ], () => {
     const handler = staffHandlingThread(PHONE);
     assert.ok(handler, 'ציפינו שהשיחה תיחשב בטיפול של אדם');
     assert.match(handler.text, /אפשר לשריין/);
+  });
+});
+
+test('a conversation that moved on since is ours to answer again', () => {
+  // A season-opening announcement went out from the CRM to everybody, so it
+  // reads exactly like a staff reply. Four days later, after a whole exchange
+  // with the bot in between, a father wrote "בר שולם" — and the hold that was
+  // meant for a live human thread swallowed it. Nothing answered him.
+  withMessages([
+    staffLine('שמחים לעדכן שההרשמה לעונה נפתחה!', 96),
+    customerLine('מה לגבי קישור להרשמה לבר?', 25),
+    botLine('🤖🧗🏾 בר משובץ לקבוצת נבחרת תיכון, והמקום שמור עבורו ל-3 ימים.', 25),
+  ], () => {
+    assert.equal(staffHandlingThread(PHONE), null);
+  });
+});
+
+test('an announcement sent to everybody is not somebody handling the thread', () => {
+  // It goes out under the CRM's name, so only the approved template it carries
+  // tells it apart from a staff reply — and a person typing never sends one.
+  withMessages([templateLine('שמחים לעדכן שההרשמה נפתחה!', 3, 'openregister')], () => {
+    assert.equal(staffHandlingThread(PHONE), null);
   });
 });
 

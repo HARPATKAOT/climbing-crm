@@ -30,7 +30,7 @@ export const USAGE_KINDS = {
 /** meta_name → סוג השולח. המקור לכל שורה בהערה שלידה. */
 export const TEMPLATE_SENDERS = {
   bot_followup_v1: 'bot',                       // botCapabilities.js · scheduleFollowUp
-  phone_verification_code: 'otp',               // whatsappBot.js · SYSTEM_TEMPLATE_NAMES
+  phone_verification_code: 'otp',
   event_host_payment_v4: 'event',               // eventWhatsappTemplates.js
   event_participant_link_v4: 'event',           // eventWhatsappTemplates.js
   event_host_payment_v3: 'event',               // fallback אם v4 תאבד אישור

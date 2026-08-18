@@ -471,17 +471,6 @@ export function isOptedOut(parent) {
   return !!parent?.bot_opted_out;
 }
 
-/**
- * Templates only an automation ever sends. A staff member picking a template in
- * the conversation panel is a real human turn and still counts as one.
- */
-export const SYSTEM_TEMPLATE_NAMES = new Set([
-  'phone_verification_code',
-  'onboarding_completed_v1',
-  'onboarding_completed_self_v1',
-  'my_agenda_v1',
-]);
-
 /** Outbound that came from a person (CRM / phone), not from the customer bot. */
 export function isHumanOutboundLog(log) {
   if (!log || log.direction !== 'outbound') return false;
@@ -499,15 +488,14 @@ export function isHumanOutboundLog(log) {
   ) {
     return false;
   }
+  // A person typing a reply does not send an approved template. The season
+  // announcement went out to everybody under the CRM's name, carrying the
+  // template `openregister` — and four days later it was still being read as
+  // "somebody is handling this conversation", so a father's "בר שולם" was
+  // answered by nobody. Whatever a template is, it is the system talking.
   const template = String(log.template_name || log.template_id || '');
-  if (template === 'phone_verification_code') return false;
+  if (template) return false;
   if (/קוד האימות שלך/.test(String(log.message || ''))) return false;
-  // An automation's own templates are the system talking. A customer filled the
-  // health form, the confirmation template went out under the CRM's name, and
-  // the bot fell silent on "מילאתי" for two hours because that row looked like
-  // a staff member taking the thread. Senders now tag themselves 'automation',
-  // and these names are the backstop for any sender that forgets to.
-  if (SYSTEM_TEMPLATE_NAMES.has(template)) return false;
   // crm / phone / empty source on a non-AI outbound = staff
   return true;
 }
@@ -550,13 +538,37 @@ export const STAFF_THREAD_HOURS = 24 * 7;
  */
 export function staffHandlingThread(phone, { resumedAt = null, now = Date.now() } = {}) {
   const rows = conversationRows(phone).filter((l) => l.direction === 'outbound');
+  // The newest thing we sent, whoever sent it. Reading past it to find the last
+  // human message meant a season-opening announcement from four days earlier —
+  // sent from the CRM, so indistinguishable from a staff reply — still counted
+  // as somebody handling the thread. A father wrote "בר שולם" into that silence
+  // and got no answer at all. If anything has gone out since a person wrote,
+  // the conversation has moved on and it is ours to answer again.
+  const newest = rows[0];
+  if (!newest || !isHumanOutboundLog(newest)) return null;
   const resumedTs = resumedAt ? new Date(resumedAt).getTime() : 0;
-  const human = rows.find((l) => isHumanOutboundLog(l));
-  if (!human) return null;
-  const at = new Date(human.created_at || 0).getTime();
+  const at = new Date(newest.created_at || 0).getTime();
   if (resumedTs && at <= resumedTs) return null;
   if (now - at > STAFF_THREAD_HOURS * 60 * 60 * 1000) return null;
-  return { at: human.created_at || '', text: String(human.message || '') };
+  return { at: newest.created_at || '', text: String(newest.message || '') };
+}
+
+/**
+ * The customer wrote and nothing has gone back to them.
+ *
+ * „בר שולם” sat unanswered for an hour, and what finally arrived was a
+ * scheduled reminder that his equipment was not sorted. Whatever went wrong
+ * with the answer, an errand of ours is not what a waiting customer should get
+ * — the reminder waits until the conversation is level again.
+ *
+ * Capped at a day: an older unanswered message is its own problem, and letting
+ * it block every reminder for ever would be a second one.
+ */
+export function customerAwaitingReply(phone, { now = Date.now(), withinHours = 24 } = {}) {
+  const newest = conversationRows(phone)[0];
+  if (!newest || newest.direction !== 'inbound') return false;
+  const at = new Date(newest.created_at || 0).getTime();
+  return now - at <= withinHours * 60 * 60 * 1000;
 }
 
 /**

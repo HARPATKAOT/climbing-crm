@@ -15,7 +15,10 @@ export const EQUIPMENT_ITEM_TYPES = ['shoes', 'shirt', 'chalk_bag'];
 export const EQUIPMENT_ITEM_LABELS = {
   shoes: 'נעלי טיפוס',
   shirt: 'חולצת חוג',
-  chalk_bag: 'שק מגנזיום ומגנזיום',
+  // „שק מגנזיום ומגנזיום” went out to customers, in a list of three items,
+  // twice in one message. The bag is sold with the chalk in it; its name is
+  // the name everybody uses for it.
+  chalk_bag: 'שק מגנזיום',
 };
 
 /**

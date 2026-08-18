@@ -19,6 +19,7 @@ import {
   isBotPaused,
   parentFirstName,
   withBotMark,
+  customerAwaitingReply,
 } from './whatsappBot.js';
 import { outreachPausedUntil } from './botOutreachPause.js';
 import { registrationStep, STEP_GROUP } from './registrationSteps.js';
@@ -838,6 +839,15 @@ export const automationsService = {
       if (hasOpenBotHandoff(parent, phone, { withinMs: HANDOFF_QUIET_MS })) {
         const nextDay = new Date(new Date(now).getTime() + 24 * 60 * 60 * 1000).toISOString();
         for (const item of rowGroup) await postponeFollowUp(item, nextDay);
+        postponed += 1;
+        continue;
+      }
+      // The customer wrote and is still waiting for us. „בר שולם” went
+      // unanswered, and an hour later the reminder that arrived told the father
+      // his equipment was not sorted. Our errand waits for their answer.
+      if (customerAwaitingReply(phone, { now: new Date(now).getTime() })) {
+        const later = new Date(new Date(now).getTime() + 3 * 60 * 60 * 1000).toISOString();
+        for (const item of rowGroup) await postponeFollowUp(item, later);
         postponed += 1;
         continue;
       }
