@@ -1247,6 +1247,36 @@ function pickSingleGroup({ groupId = '', grade, band, day, time, frequency } = {
   return { group: groups[0] };
 }
 
+/** Cards that describe somebody who is no longer with us. */
+const CLOSED_STUDENT_STATUSES = ['archived', 'cancelled'];
+
+/**
+ * The same name on two cards is one child, not two.
+ *
+ * A merged-away shell keeps answering to the name it was created with, and
+ * every tool that has to pick one child then reports an ambiguity nobody can
+ * resolve. נעמי had two cards: her placement died on it for three days, and
+ * once that was patched in one tool the *equipment* link died on it too —
+ * asked "תרצו שאשלח את הקישור?", told "כן", and answered with a handoff.
+ *
+ * Archived cards are dropped only when a live card answers to the same name, so
+ * a family whose only card is archived can still be looked up. Fixing this per
+ * tool is what let it come back, so it lives here and every tool calls it.
+ */
+export function dropArchivedDuplicates(matches = []) {
+  if (matches.length < 2) return matches;
+  const live = matches.filter((s) => !CLOSED_STUDENT_STATUSES.includes(String(s.status || '')));
+  return live.length ? live : matches;
+}
+
+/** The children in a family a typed name can mean. */
+export function kidsNamedLike(kids = [], childName = '') {
+  const named = String(childName || '').trim();
+  if (!named) return [];
+  const first = named.split(/\s+/)[0];
+  return dropArchivedDuplicates(kids.filter((s) => String(s.name || '').includes(first)));
+}
+
 /**
  * A trainee record is created by signing the health declaration, never by the
  * bot — so any placement needs an existing child who already has one. Without a
@@ -1264,18 +1294,7 @@ function requireKnownChild(parent, childName, studentId = '') {
   const named = String(childName || '').trim();
   let matches = exactId
     ? kids.filter((s) => String(s.id) === exactId)
-    : (named
-      ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-      : kids);
-  // An archived card is not a person anyone is asking about. Two cards for
-  // נעמי — one of them a merged-away shell — answered to the same name, and
-  // every placement attempt died on "יש כמה ילדים מתאימים" for three days.
-  // A staff member who archives a duplicate should not have to also delete it
-  // before the bot can work again.
-  if (matches.length > 1) {
-    const live = matches.filter((s) => !['archived', 'cancelled'].includes(String(s.status || '')));
-    if (live.length) matches = live;
-  }
+    : (named ? kidsNamedLike(kids, named) : dropArchivedDuplicates(kids));
   if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
   if (matches.length > 1) {
     return {
@@ -1816,9 +1835,7 @@ export function buildCustomerTools({
       // it may be a friend or a sibling nobody registered yet.
       const kids = studentsForParent(parent);
       const named = String(participantName || '').trim();
-      const child = named
-        ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : null;
+      const child = named ? kidsNamedLike(kids, named)[0] || null : null;
       const name = child?.name || named || parent.name || '';
       if (!name) return { error: 'חסר שם משתתף — יש לשאול את הלקוח' };
 
@@ -1884,9 +1901,7 @@ export function buildCustomerTools({
       if (!kids.length) return { error: 'אין מתאמן בכרטיס — יש להעביר לצוות' };
 
       const named = String(childName || '').trim();
-      let matches = named
-        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : kids;
+      let matches = named ? kidsNamedLike(kids, named) : kids;
       if (!named && matches.length > 1) {
         // „נרשמתי גם במתנ״ס” from a family with an archived sibling read as an
         // ambiguity, and the report was dropped. A child who left last year is
@@ -2341,9 +2356,7 @@ export function buildCustomerTools({
       if (!kids.length) return { קישור: '', הערה: 'אין מתאמנים בכרטיס — יש להעביר לצוות' };
 
       const named = String(childName || '').trim();
-      const matches = named
-        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : kids;
+      const matches = named ? kidsNamedLike(kids, named) : dropArchivedDuplicates(kids);
       if (!matches.length) {
         return { קישור: '', הערה: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
       }
@@ -2426,7 +2439,7 @@ export function buildCustomerTools({
       if (!parent) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const named = String(childName || '').trim().split(/\s+/)[0];
       const kids = studentsForParent(parent);
-      const matches = named ? kids.filter((s) => String(s.name || '').includes(named)) : kids;
+      const matches = named ? kidsNamedLike(kids, named) : dropArchivedDuplicates(kids);
       if (matches.length !== 1) {
         return {
           error: matches.length ? 'יש כמה מתאמנים מתאימים — צריך לציין שם' : 'המתאמן לא נמצא בכרטיס',
@@ -2731,8 +2744,8 @@ export function buildCustomerTools({
 
       const named = String(childName || '').trim();
       const matches = named
-        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : kids.filter((s) => s.groupId && !isRegisteredTrainee(s));
+        ? kidsNamedLike(kids, named)
+        : dropArchivedDuplicates(kids.filter((s) => s.groupId && !isRegisteredTrainee(s)));
       if (!matches.length) {
         return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
       }
@@ -2957,7 +2970,7 @@ export function buildCustomerTools({
       const student = exactId
         ? kids.find((s) => String(s.id) === exactId)
         : (named
-          ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+          ? kidsNamedLike(kids, named)[0] || null
           : (kids.length === 1 ? kids[0] : null));
       const documents = student
         ? participationEligibility(db, { studentId: student.id })

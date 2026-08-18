@@ -351,7 +351,7 @@ test('לקוח חדש: שואלים שם פרטי, ורק אחר כך שם מש�
 
     const first = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי, כמה עולה החוג?');
     assert.equal(first.done, false);
-    assert.match(first.reply, /השם הפרטי/);
+    assert.match(first.reply, /איך קוראים לך/);
     // שתי השאלות בנשימה אחת הן מה שגרם לשם ולשם המשפחה להתחלף בכרטיס.
     assert.doesNotMatch(first.reply, /שם המשפחה/);
 
@@ -1650,5 +1650,33 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
     assert.equal(alma.סטטוס, 'details_completed');
     assert.match(alma.הערת_סטטוס, /אין להציג/);
     assert.match(card.הערה, /אין לחשב גיל/);
+  });
+});
+
+test('כרטיס כפול שהועבר לארכיון אינו חוסם את קישור הציוד', async () => {
+  // תמר נשאלה „תרצו שאשלח את הקישור להסדרת הציוד?”, ענתה „כן”, וקיבלה העברה
+  // לצוות. בכרטיס של נעמי היו שני רישומים באותו שם — אחד מהם קליפה שנשארה
+  // אחרי איחוד — והכלי דיווח על ריבוי מתאמנים. אותה כפילות כבר חסמה לה את
+  // השיבוץ שלושה ימים קודם, ותוקנה שם בלבד.
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [
+      childYotam({ status: 'awaiting_centre_confirmation', groupId: 'g-gd' }),
+      { id: 's-yotam-shell', name: 'יותם כהן', parentId: PARENT.id, status: 'archived', groupId: null },
+    ],
+    ...signedFormFor(['s-yotam']),
+    student_equipment: [
+      { id: 'se-shoes', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
+    ],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+
+    const link = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
+    assert.ok(link.קישור, link.הערה || 'ציפינו לקישור ציוד');
+    assert.equal(link.מתאמן, 'יותם כהן');
+
+    // אותה כפילות לא תחסום גם את הכלים האחרים שבוחרים ילד לפי שם.
+    const eligibility = await tools.getPlacementEligibility({ childName: 'יותם' });
+    assert.equal(eligibility.error, undefined);
   });
 });

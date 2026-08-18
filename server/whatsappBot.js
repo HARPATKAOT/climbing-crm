@@ -1057,7 +1057,7 @@ async function askAgainOrHandOff(phone, prior, question) {
       reply: 'רגע — אני מעביר אתכם לצוות שלנו, מישהו יחזור אליכם ממש בקרוב 🙏',
     };
   }
-  return { done: false, reply: `סליחה, לא הבנתי 🙂 ${question}` };
+  return { done: false, reply: `סליחה, לא הבנתי. ${question}` };
 }
 
 /**
@@ -1106,7 +1106,7 @@ async function completeOrOfferTraineeLink(phone, parent, parsedName, pendingMess
     const familyFirst = String(link.family.name).trim().split(/\s+/)[0];
     return {
       done: false,
-      reply: `נעים מאוד ${parsedName.firstName} 🙂 רגע — יש אצלנו מתאמן/ת בדיוק בשם הזה. ההורה שלך זה ${familyFirst}?`,
+      reply: `נעים מאוד ${parsedName.firstName}. רגע, יש אצלנו מתאמן/ת בדיוק בשם הזה — ההורה שלך זה ${familyFirst}?`,
     };
   }
   const saved = await updateCustomerFullName(parent, parsedName);
@@ -1145,7 +1145,7 @@ async function handleTraineeLinkAnswer(phone, parent, incomingText, prior) {
       }
       return {
         done: false,
-        reply: `מעולה! חיברתי את המספר שלך לתיק של ${student.name} 🙂 מעכשיו אפשר פשוט לכתוב לי כרגיל.`,
+        reply: `מעולה, חיברתי את המספר שלך לתיק של ${student.name}. מעכשיו אפשר פשוט לכתוב לי.`,
       };
     }
     // הרשומות נעלמו בינתיים — ממשיכים כליד רגיל עם השם שנאסף.
@@ -1163,7 +1163,7 @@ async function handleTraineeLinkAnswer(phone, parent, incomingText, prior) {
     };
   }
 
-  return askAgainOrHandOff(phone, prior, `רק כדי לוודא — ההורה שלך רשום אצלנו? (כן / לא)`);
+  return askAgainOrHandOff(phone, prior, `רק לוודא — ההורה שלך רשום אצלנו?`);
 }
 
 /**
@@ -1200,10 +1200,11 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
       done: false,
       // These lines run before the model, so the system prompt cannot set their
       // tone — it has to be written here. Somebody who just said hello is being
-      // asked a question, not filling in a form.
+      // asked a question by a person, not filling in a form: no smiley, no
+      // "השם הפרטי", nothing that reads as a field on a screen.
       reply: existing.firstName
-        ? `היי ${existing.firstName} 🙂 מה שם המשפחה שלך?`
-        : 'היי 🙂 מה השם הפרטי שלך?',
+        ? `היי ${existing.firstName}, מה שם המשפחה שלך?`
+        : 'היי, איך קוראים לך?',
     };
   }
 
@@ -1215,7 +1216,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   if (prior.step !== 'tools_parent_last_name') {
     const words = customerNameWords(text);
     if (!words.length) {
-      return askAgainOrHandOff(phone, prior, 'מה השם הפרטי שלך?');
+      return askAgainOrHandOff(phone, prior, 'איך קוראים לך?');
     }
     if (words.length === 1) {
       await setIntake(phone, {
@@ -1223,7 +1224,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
         step: 'tools_parent_last_name',
         parentFirstName: words[0],
       });
-      return { done: false, reply: `נעים מאוד ${words[0]} 🙂 ומה שם המשפחה?` };
+      return { done: false, reply: `נעים מאוד ${words[0]}, ומה שם המשפחה?` };
     }
     // Both names in one answer anyway — nobody is asked to repeat themselves.
     return completeOrOfferTraineeLink(phone, parent, {
@@ -1237,7 +1238,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
   if (!firstName) {
     await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
-    return { done: false, reply: 'היי 🙂 מה השם הפרטי שלך?' };
+    return { done: false, reply: 'היי, איך קוראים לך?' };
   }
   return completeOrOfferTraineeLink(phone, parent, {
     firstName,

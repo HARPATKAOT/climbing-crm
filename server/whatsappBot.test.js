@@ -151,12 +151,13 @@ test('every bot reply is marked, and the mark never stacks', () => {
 });
 
 test('the two questions that open a conversation carry no mark', () => {
-  // Someone who asked "מאיזה גיל אפשר לטפס?" was answered with a robot icon and
-  // a request for their name. People stop replying once they see software, and
-  // these are the two answers we cannot afford to lose — so the badge comes off
-  // here and goes back on for everything after.
-  assert.equal(botReplyText('היי 🙂 מה השם הפרטי שלך?', { unmarked: true }), 'היי 🙂 מה השם הפרטי שלך?');
-  assert.equal(botReplyText('נעים מאוד רלי 🙂 ומה שם המשפחה?', { unmarked: true }), 'נעים מאוד רלי 🙂 ומה שם המשפחה?');
+  // Someone who asked "מאיזה גיל אפשר לטפס?" was answered with a robot icon, a
+  // climber, a smiley and a request for their "first name". People stop replying
+  // once they see software, and these are the two answers we cannot afford to
+  // lose — so the badge comes off here, the wording is what a person would type,
+  // and both go back to normal for everything after.
+  assert.equal(botReplyText('היי, איך קוראים לך?', { unmarked: true }), 'היי, איך קוראים לך?');
+  assert.equal(botReplyText('נעים מאוד רלי, ומה שם המשפחה?', { unmarked: true }), 'נעים מאוד רלי, ומה שם המשפחה?');
   // Everything else is the bot, and says so.
   assert.equal(botReplyText('היי דלק!'), '🤖🧗🏾 היי דלק!');
   assert.equal(botReplyText('היי דלק!', { unmarked: false }), '🤖🧗🏾 היי דלק!');
