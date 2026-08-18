@@ -146,13 +146,32 @@ function automationPayload() {
 
 financeRouter.get('/dashboard', (req, res) => {
   const { from, to } = period(req);
-  res.json(buildDashboard({
+  const dashboard = buildDashboard({
     documents: db.get('finance_documents'),
     expenses: db.get('finance_expenses'),
     payments: db.get('finance_payment_events'),
     from,
     to,
-  }));
+  });
+  // „חוב פתוח” אחד לשני המסכים: לא רק יתרות חשבוניות, גם התחייבויות שטרם
+  // הונפקה עליהן חשבונית (אירוע בהתחייבות המזמין, חוב שסומן בקופה). אחרת
+  // הסקירה ומרכז ההכנסות מציגים שני מספרים שונים לאותה שאלה.
+  const receivables = buildPaymentsReport({
+    documents: db.get('finance_documents'),
+    lines: db.get('finance_document_lines'),
+    paymentEvents: db.get('finance_payment_events'),
+    payments: db.get('payments'),
+    posSales: db.get('pos_sales'),
+    registrations: db.get('activity_registrations'),
+    activities: db.get('activities'),
+    parents: db.get('parents'),
+    students: db.get('students'),
+    customerPasses: db.get('customer_passes'),
+    from,
+    to,
+  });
+  dashboard.kpis.open_debt = receivables.summary.open_amount;
+  res.json(dashboard);
 });
 
 financeRouter.get('/transactions', (req, res) => {
