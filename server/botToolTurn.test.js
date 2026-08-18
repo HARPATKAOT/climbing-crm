@@ -367,6 +367,14 @@ test('only the current message can report completed community-centre registratio
   assert.equal(isExplicitCentreRegistrationReport('השלמתי את ההרשמה'), true);
   assert.equal(isExplicitCentreRegistrationReport('בוצע התשלום על הציוד'), false);
   assert.equal(isExplicitCentreRegistrationReport('איך נרשמים במתנ״ס?'), false);
+  // The shortest answer there is, and the one the bot's own message asks for.
+  // A mother who wrote exactly this was told her placement was being handed
+  // to the team, because the word מתנ״ס was missing.
+  assert.equal(isExplicitCentreRegistrationReport('נרשמנו'), true);
+  assert.equal(isExplicitCentreRegistrationReport('נרשמתי'), true);
+  // Longer than a confirmation, so the subject still has to be named.
+  assert.equal(isExplicitCentreRegistrationReport('מתי נרשמים לחוג של יום שלישי בבוקר'), false);
+  assert.equal(isExplicitCentreRegistrationReport('נירשם בשבוע הבא'), false);
 
   const turn = await runCustomerToolTurn({
     history: [

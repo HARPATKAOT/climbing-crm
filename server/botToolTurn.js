@@ -527,9 +527,17 @@ async function recordReportedRegistration({ incoming, tools, allowed, successful
 
 export function isExplicitCentreRegistrationReport(text) {
   const value = String(text || '').trim();
-  if (!/(?:מתנ[״"']?ס|הרשמ)/u.test(value)) return false;
-  return /(?:נרש(?:ם|מ(?:תי|נו|ה|ו))|השלמ(?:תי|נו|ה|ו).{0,30}הרשמ|הרשמ.{0,30}(?:הושלמ|בוצע|סודר)|רשמנו\s+(?:אותו|אותה|את))/u
+  const reportsPast = /(?:נרש(?:ם|מ(?:תי|נו|ה|ו))|השלמ(?:תי|נו|ה|ו).{0,30}הרשמ|הרשמ.{0,30}(?:הושלמ|בוצע|סודר)|רשמנו\s+(?:אותו|אותה|את))/u
     .test(value);
+  if (!reportsPast) return false;
+  if (/(?:מתנ[״"']?ס|הרשמ)/u.test(value)) return true;
+  // „נרשמנו”, on its own, right after we asked them to register and tell us.
+  // Requiring the word מתנ״ס or הרשמ missed the shortest and most natural
+  // answer there is — the one the bot's own message asks for — and a mother
+  // who wrote exactly that was told her group placement was being handed to
+  // the team. A bare past-tense verb only counts as a report when it is
+  // practically the whole message; anything longer needs the subject named.
+  return value.replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).length <= 3;
 }
 
 function directEligibilityInstruction(eligibility) {
