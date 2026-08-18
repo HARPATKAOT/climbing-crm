@@ -432,3 +432,49 @@ test('an open balance never exceeds the document total', () => {
     doctype: 'invoice', total_gross: 300, remaining_sum: 5000, payment_status_known: true,
   }), 300);
 });
+
+test('collections follow the day the money moved, not the document date', () => {
+  // חשבונית של סוף יולי שנפרעה בתחילת אוגוסט: הגבייה שייכת לאוגוסט.
+  const documents = [{
+    id: 'icount:invrec:700', doctype: 'invrec', docnum: '700', document_date: '2026-07-31',
+    total_gross: 1000, total_net: 1000, paid_amount: 1000, payment_status_known: true,
+  }];
+  const payments = [{ document_id: 'icount:invrec:700', payment_date: '2026-08-02', amount: 1000, method: 'credit_card' }];
+  const july = buildDashboard({ documents, payments, from: '2026-07-01', to: '2026-07-31' });
+  const august = buildDashboard({ documents, payments, from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(july.kpis.revenue_net, 1000);
+  assert.equal(july.kpis.collected, 0);
+  assert.equal(august.kpis.collected, 1000);
+});
+
+test('a document is counted once: its payment lines, or its own paid amount', () => {
+  const documents = [
+    { id: 'a', doctype: 'invrec', docnum: '1', document_date: '2026-08-05', total_gross: 500, total_net: 500, paid_amount: 500, payment_status_known: true },
+    { id: 'b', doctype: 'invrec', docnum: '2', document_date: '2026-08-06', total_gross: 300, total_net: 300, paid_amount: 300, payment_status_known: true },
+  ];
+  // רק ל-a יש שורות תשלום; b נספר דרך הסכום שנפרע בו, בלי כפילות.
+  const payments = [{ document_id: 'a', payment_date: '2026-08-05', amount: 500, method: 'cash' }];
+  const report = buildDashboard({ documents, payments, from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(report.kpis.collected, 800);
+});
+
+test('an invoice-receipt with no payment detail still counts as collected', () => {
+  const documents = [{
+    id: 'icount:invrec:800', doctype: 'invrec', docnum: '800', document_date: '2026-08-10',
+    total_gross: 250, total_net: 250, paid_amount: 0, payment_status_known: false,
+  }];
+  const report = buildDashboard({ documents, payments: [], from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(report.kpis.collected, 250);
+  // ...אך לעולם אינה חוב
+  assert.equal(report.kpis.open_debt, 0);
+});
+
+test('an invoice with no payment detail is not guessed into collections', () => {
+  const documents = [{
+    id: 'icount:invoice:801', doctype: 'invoice', docnum: '801', document_date: '2026-08-10',
+    total_gross: 900, total_net: 769.23, paid_amount: 0, payment_status_known: false,
+  }];
+  const report = buildDashboard({ documents, payments: [], from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(report.kpis.collected, 0);
+  assert.equal(report.kpis.revenue_net, 769.23);
+});

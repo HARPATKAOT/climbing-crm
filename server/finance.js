@@ -162,17 +162,23 @@ export function buildDashboard({ documents = [], expenses = [], payments = [], f
   }
 
   let collected = 0;
-  const documentPayments = docs
+  // הכסף עצמו יושב בשורות התשלום של המסמך: תאריך הפירעון האמיתי והסכום
+  // שנגבה. הנגזרת מן המסמך מתארכת גבייה לפי תאריך המסמך — ולא לפי היום שבו
+  // הכסף נכנס — ולכן היא משמשת רק כשלמסמך אין שורות תשלום כלל. כך כל מסמך
+  // נספר בדיוק פעם אחת.
+  const documentsWithEvents = new Set(payments.map((row) => String(row.document_id)));
+  const unattributedPayments = docs
     .filter((doc) => classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).recognized)
-    .filter((doc) => Number(doc.paid_amount) !== 0 || doc.doctype === 'invrec')
+    .filter((doc) => !documentsWithEvents.has(String(doc.id)))
     .map((doc) => ({
       payment_date: doc.document_date,
-      amount: Number(doc.paid_amount) || Number(doc.total_gross) || 0,
-    }));
-  // doc/info's totalpaid is the authoritative aggregate. Detailed events are
-  // retained for payment-method analysis, but old cancellation documents do
-  // not always expose every reversing event and must not distort collections.
-  const effectivePayments = documentPayments.length ? documentPayments : periodPayments;
+      // „חשבונית מס קבלה” נפרעת ברגע ההנפקה; כשלא נמשכו פרטיה זה כל מה
+      // שידוע עליה. לכל שאר סוגי המסמכים לא ננחש פירעון שלא דווח.
+      amount: Number(doc.paid_amount)
+        || (doc.doctype === 'invrec' && doc.payment_status_known !== true ? Number(doc.total_gross) || 0 : 0),
+    }))
+    .filter((row) => Number(row.amount) !== 0);
+  const effectivePayments = [...periodPayments, ...unattributedPayments];
   for (const payment of effectivePayments) {
     collected += Number(payment.amount) || 0;
     const month = String(payment.payment_date || '').slice(0, 7);
