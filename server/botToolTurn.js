@@ -338,7 +338,10 @@ export function unbackedReplyClaims(text, successfulCalls = []) {
   // was written anywhere, and the mother has every reason to believe her
   // request is on file. A note the customer will rely on has to leave a trace:
   // a follow-up the bot scheduled, or a handoff so a person holds it.
-  if (/(?:רשמתי|רשמנו)\s+(?:לפניי|לפנינו|אצלי|אצלנו)|(?:רשום|נרשם|מתועד|תיעדתי|תיעדנו)\s+(?:לפניי|לפנינו|אצלי|אצלנו|במערכת שלנו)/.test(reply)
+  // „רשמתי לעצמי ונבדוק איתכם שוב בשבוע הבא” was sent to a father who had said
+  // he was abroad — and no reminder was set, so nobody ever checked. A promise
+  // to come back is the same claim as a note on file.
+  if (/(?:רשמתי|רשמנו)\s+(?:לפניי|לפנינו|אצלי|אצלנו|לעצמי|לעצמנו)|(?:רשום|נרשם|מתועד|תיעדתי|תיעדנו)\s+(?:לפניי|לפנינו|אצלי|אצלנו|במערכת שלנו)|(?:נבדוק|נחזור|אחזור|אבדוק)\s+(?:איתכם|אליכם|איתך|אלייך)\s+(?:שוב\s+)?(?:בשבוע|בעוד|מחר|בהמשך|ב[א-ת]+)/.test(reply)
       && !names.has('scheduleFollowUp')
       && !names.has('addActivityInterest')
       && !names.has('joinWaitlist')

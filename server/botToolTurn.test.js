@@ -451,6 +451,19 @@ test('a completed action claim is blocked unless a write tool succeeded this tur
     []
   );
   assert.deepEqual(unbackedReplyClaims('העברתי את זה לצוות'), []);
+  // "רשמתי לעצמי ונבדוק איתכם שוב בשבוע הבא" went to a father who had said he
+  // was abroad, and no reminder was ever set. A promise to come back is the
+  // same claim as a note on file.
+  assert.deepEqual(unbackedReplyClaims('רשמתי לעצמי ונבדוק איתכם שוב בשבוע הבא'), ['noted_request']);
+  assert.deepEqual(unbackedReplyClaims('נחזור אליכם בשבוע הבא עם תשובה'), ['noted_request']);
+  assert.deepEqual(
+    unbackedReplyClaims('רשמתי לעצמי ונבדוק איתכם בשבוע הבא', [
+      { name: 'scheduleFollowUp', result: { נקבע: '2026-08-25' } },
+    ]),
+    []
+  );
+  // Ordinary warmth is not a promise.
+  assert.deepEqual(unbackedReplyClaims('תיהנו בחו״ל! הקישור מחכה לכם למעלה.'), []);
   assert.deepEqual(unbackedReplyClaims('שקד שובצה בקבוצה החדשה'), ['placement']);
   assert.deepEqual(unbackedReplyClaims('העברתי את שקד לארכיון'), ['archive']);
   assert.deepEqual(

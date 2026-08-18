@@ -2308,6 +2308,10 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
   });
   if (!resolved) return res.status(404).json({ error: 'הקישור אינו תקף או שפג תוקפו' });
   try {
+    // Every save sent a confirmation, so a customer who ticked, untucked and
+    // ticked again got three in two minutes — twice saying the opposite of
+    // what they had just chosen. The confirmation belongs to a change.
+    const before = mailingPreferencesSnapshot(db, resolved.parent);
     const snapshot = await updateMailingPreferences(
       db,
       resolved.parent,
@@ -2321,11 +2325,13 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
     // אם חלון 24 השעות סגור, ההודעה פשוט לא תישלח והשמירה עצמה תקינה.
     try {
       const confirmation = mailingConfirmationMessage(snapshot);
-      whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
-        parentId: resolved.parent.id,
-        source: 'mailing_preferences',
-        clip: false,
-      }).catch(() => {});
+      if (confirmation !== mailingConfirmationMessage(before)) {
+        whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
+          parentId: resolved.parent.id,
+          source: 'mailing_preferences',
+          clip: false,
+        }).catch(() => {});
+      }
     } catch { /* אישור הוא תוספת — לא מכשיל שמירה */ }
     res.set('Cache-Control', 'no-store');
     return res.json({ success: true, ...snapshot });
