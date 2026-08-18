@@ -647,7 +647,20 @@ export function getBroadcastJob(jobId) {
   const listLabel = (db.getBroadcastListDefs?.() || [])
     .find((l) => l.key === job.list_name)?.label || job.list_name || '';
 
-  return { ...job, recipients, stats, failureReasons, buttonLabels, list_label: listLabel };
+  // ההודעה כפי שנשלחה — גוף התבנית (עם המשתנים כסימוני מקום) או הטקסט החופשי.
+  const sentMessage = template
+    ? {
+      header: template.header || '',
+      body: template.body || '',
+      footer: template.footer || '',
+      buttons: (template.buttons || []).map((b) => String(b?.text || '').trim()).filter(Boolean),
+    }
+    : { header: '', body: job.message_text || '', footer: '', buttons: [] };
+
+  return {
+    ...job, recipients, stats, failureReasons, buttonLabels,
+    list_label: listLabel, sent_message: sentMessage,
+  };
 }
 
 export function listBroadcastJobs() {

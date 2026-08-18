@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   XCircle, PauseCircle, PlayCircle, StopCircle, RefreshCw,
-  CheckCircle, Clock, Send, RotateCcw,
+  CheckCircle, Clock, Send, RotateCcw, Sparkles,
 } from 'lucide-react';
 
 const ACTIVE_STATUSES = new Set(['countdown', 'scheduled', 'sending', 'paused', 'stopping']);
@@ -77,6 +77,22 @@ export default function BroadcastSendFlow({ jobId, onExit }) {
     const interval = setInterval(tick, 250);
     return () => clearInterval(interval);
   }, [job?.status, job?.undo_until]);
+
+  const [showMessage, setShowMessage] = useState(false);
+  const [showReplies, setShowReplies] = useState(false);
+  const [repliesSummary, setRepliesSummary] = useState({ busy: false, text: '', error: '' });
+
+  const summarizeReplies = async () => {
+    setRepliesSummary({ busy: true, text: '', error: '' });
+    try {
+      const res = await fetch(`/api/broadcast/jobs/${activeJobId}/summarize-replies`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הסיכום נכשל');
+      setRepliesSummary({ busy: false, text: data.summary, error: '' });
+    } catch (err) {
+      setRepliesSummary({ busy: false, text: '', error: err.message });
+    }
+  };
 
   const act = async (action) => {
     setBusy(action);
@@ -260,6 +276,69 @@ export default function BroadcastSendFlow({ jobId, onExit }) {
               {(stats.replied || 0) > 0 && (
                 <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
                   «הגיבו» = כל הודעה נכנסת מהנמען עד 72 שעות אחרי השליחה. התשובות עצמן — בשיחות שבכרטיסי הלקוח.
+                </div>
+              )}
+            </div>
+          )}
+
+          {job.sent_message && (
+            <div style={{ marginBottom: 14 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowMessage((v) => !v)}>
+                {showMessage ? 'הסתר את ההודעה' : 'הצג את ההודעה שנשלחה'}
+              </button>
+              {showMessage && (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                  {job.sent_message.header && <div style={{ fontWeight: 700 }}>{job.sent_message.header}</div>}
+                  <div>{job.sent_message.body}</div>
+                  {job.sent_message.footer && (
+                    <div style={{ color: 'var(--text-3)', fontSize: 11, marginTop: 4 }}>{job.sent_message.footer}</div>
+                  )}
+                  {(job.sent_message.buttons || []).length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      {job.sent_message.buttons.map((label) => (
+                        <span key={label} className="badge badge-blue">{label}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ color: 'var(--text-3)', fontSize: 10, marginTop: 6 }}>
+                    {'{{1}}'} וכדומה הם המשתנים — כל נמען קיבל אותם עם הנתונים שלו.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(stats.replied || 0) > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowReplies((v) => !v)}>
+                  {showReplies ? 'הסתר תגובות' : `הצג את ${stats.replied} התגובות`}
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" disabled={repliesSummary.busy} onClick={summarizeReplies}>
+                  <Sparkles size={13} /> {repliesSummary.busy ? 'מסכם…' : 'סיכום AI של התגובות'}
+                </button>
+              </div>
+              {repliesSummary.error && (
+                <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{repliesSummary.error}</div>
+              )}
+              {repliesSummary.text && (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.6, background: 'rgba(56,189,248,0.05)' }}>
+                  {repliesSummary.text}
+                </div>
+              )}
+              {showReplies && (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, marginTop: 8, maxHeight: 260, overflowY: 'auto' }}>
+                  {(job.recipients || []).filter((r) => r.replied).map((r) => (
+                    <div key={r.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <strong>{r.name || 'ללא שם'}</strong>
+                        {r.button_reply && <span className="badge badge-green">לחצו על הכפתור</span>}
+                      </div>
+                      {r.reply_text && (
+                        <div style={{ color: 'var(--text-2)', marginTop: 3, whiteSpace: 'pre-wrap' }}>{r.reply_text}</div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

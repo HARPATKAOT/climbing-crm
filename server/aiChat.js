@@ -886,7 +886,8 @@ export async function callGeminiChat({
         body: JSON.stringify({
           contents,
           systemInstruction: { parts: [{ text: systemInstruction }] },
-          tools: [{ functionDeclarations: declarations }],
+          // קריאת סיכום נטו — בלי כלים — לא שולחת functionDeclarations ריק.
+          ...(declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
           generationConfig: { temperature: 0.2 },
         }),
       });

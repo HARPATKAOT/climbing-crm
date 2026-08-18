@@ -3061,6 +3061,38 @@ app.post('/api/broadcast/jobs/:id/resend-failed', requireOwner, (req, res) => {
   }
 });
 
+// סיכום AI של התגובות לדיוור: מה עונים, מה חוזר על עצמו, מה דורש טיפול.
+app.post('/api/broadcast/jobs/:id/summarize-replies', requireOwner, async (req, res) => {
+  const job = getBroadcastJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+  const replies = (job.recipients || [])
+    .filter((r) => r.replied && String(r.reply_text || '').trim())
+    .slice(0, 150)
+    .map((r) => `${r.name || 'לקוח'}: ${String(r.reply_text).trim()}`);
+  if (!replies.length) return res.status(400).json({ error: 'אין עדיין תגובות לסכם' });
+  try {
+    const { content, error } = await callGeminiChat({
+      systemInstruction:
+        'אתה מסכם תגובות לקוחות לדיוור וואטסאפ של קיר טיפוס. סכם בעברית, עד חמש '
+        + 'שורות: כמה מתעניינים, מה השאלות החוזרות, מי ביקש הסרה, ומה דורש טיפול '
+        + 'של הצוות. הסתמך רק על התגובות שסופקו — בלי להמציא.',
+      contents: [{ role: 'user', parts: [{ text: replies.join('\n') }] }],
+      declarations: [],
+    });
+    const summary = content?.parts?.map((p) => p.text || '').join('').trim();
+    if (!summary) {
+      return res.status(502).json({
+        error: error === 'quota'
+          ? 'מכסת המודל מוצתה כרגע — נסו שוב מאוחר יותר'
+          : 'המודל לא החזיר סיכום — נסו שוב',
+      });
+    }
+    res.json({ summary, replyCount: replies.length });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // שליחת בדיקה: ההודעה כפי שתישלח באמת, עם נתוני נמען אמיתי, למספר שבחרת.
 app.post('/api/broadcast/test-send', requireOwner, async (req, res) => {
   try {
