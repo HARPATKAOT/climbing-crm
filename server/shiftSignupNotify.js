@@ -89,14 +89,22 @@ export async function sendSignupInvites({ windowRow, employees = [], link, linkF
  *
  * @param {object} args `byEmployee` — מפה של employee_id למשמרות שאושרו לו
  */
-export async function sendAssignmentSummaries({ windowRow, byEmployee = new Map(), employees = [] } = {}) {
+export async function sendAssignmentSummaries({
+  windowRow,
+  byEmployee = new Map(),
+  employees = [],
+  // נוסח חלופי, לטופס שאין למשמרות שלו תאריך. הנפילה לתבנית משותפת בכוונה:
+  // חלון 24 השעות של וואטסאפ הוא אותו חלון בשני סוגי הטפסים.
+  textFor = null,
+} = {}) {
   const employeeById = new Map((employees || []).map((e) => [String(e.id), e]));
   const results = [];
   for (const [employeeId, seats] of byEmployee) {
     const employee = employeeById.get(String(employeeId));
     if (!employee) continue;
     const first = seats[0]?.slot || {};
-    const result = await sendWithTemplateFallback(employee, assignmentMessageText(windowRow, seats), {
+    const body = textFor ? textFor(seats) : assignmentMessageText(windowRow, seats);
+    const result = await sendWithTemplateFallback(employee, body, {
       // התבנית מדברת על אירוע אחד, ולכן היא נושאת את הראשון בלבד. זו נפילה
       // מכוונת: עדיף שהעובד יידע על משמרת אחת ויתקשר, מאשר שלא יידע כלום.
       templateKind: 'shift_assigned',

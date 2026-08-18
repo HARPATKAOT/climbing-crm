@@ -46,6 +46,16 @@ import {
   responsesForWindow,
   signupBoard,
 } from './shiftSignup.js';
+import {
+  CLASS_WINDOW_KIND,
+  applyClassResponse,
+  classAssignmentMessageText,
+  classSignupBoard,
+  isClassWindowOpen,
+  normalizeClassWindow,
+  planClassStaffing,
+  publicClassBoardView,
+} from './classSignup.js';
 import { sendAssignmentSummaries, sendSignupInvites } from './shiftSignupNotify.js';
 import {
   DENOMINATIONS,
@@ -12795,6 +12805,17 @@ async function writeRoleCatalog(catalog) {
 }
 
 /**
+ * אותה תווית, בלי המתנה. הקטלוג נשמר מקומית ברגע שנקרא, ולכן מסלול שכבר קרא
+ * אותו יכול לשאול שוב באופן סינכרוני — וברירת המחדל תמיד קיימת.
+ */
+function systemRoleLabelSync(key) {
+  const local = db.getAppSettingLocal?.(ROLE_CATALOG_KEY);
+  const catalog = local ? normalizeCatalog(local) : blankCatalog();
+  const found = catalog.system.find((r) => r.key === key);
+  return found?.label || DEFAULT_SYSTEM_ROLES.find((r) => r.key === key)?.label || '';
+}
+
+/**
  * התווית הנוכחית של תפקיד מערכת. הקוד שכותב שורות עבודה חייב לעבור דרך כאן —
  * אחרת שינוי שם היה יוצר שורות עם השם הישן לצד נתונים שכבר הומרו.
  */
@@ -14824,8 +14845,42 @@ async function signupRoleCatalog() {
 }
 
 /** רשומת טופס עם הספירות שהרשימה מציגה, בלי גוף המשמרות. */
+/** התפקידים שחוג מאויש בהם: הראשון הוא ההדרכה עצמה. */
+function signupClassRoles() {
+  return [
+    systemRoleLabelSync(SYSTEM_ROLE_KEYS.TRAINER),
+    systemRoleLabelSync(SYSTEM_ROLE_KEYS.ASSISTANT),
+  ].filter(Boolean);
+}
+
 function signupWindowSummary(windowRow, responses, today, assignments = null) {
   const answers = responsesForWindow(responses, windowRow.id);
+  // טופס לוח חוגים אינו נמדד בתאריכים: המושבים שלו הם חוגים, והשיבוץ נקרא
+  // מלוח החוגים עצמו ולא מיומן העבודה.
+  if (windowRow.kind === CLASS_WINDOW_KIND) {
+    const seats = windowRow.seats || [];
+    const board = classSignupBoard(windowRow, responses, db.get('employees') || [],
+      db.get('groups') || [], signupClassRoles());
+    return {
+      id: windowRow.id,
+      kind: CLASS_WINDOW_KIND,
+      title: windowRow.title,
+      roles: [...new Set(seats.flatMap((seat) => (seat.needs || []).map((n) => n.role)).filter(Boolean))],
+      status: windowRow.status,
+      deadline: windowRow.deadline || null,
+      note: windowRow.note || '',
+      token: windowRow.token,
+      recipients: windowRow.recipients || [],
+      sent_at: windowRow.sent_at || null,
+      slot_count: seats.length,
+      first_date: null,
+      last_date: null,
+      missing: board.reduce((sum, seat) => sum + seat.missing, 0),
+      respondents: answers.length,
+      open: isClassWindowOpen(windowRow, today),
+      created_at: windowRow.created_at || null,
+    };
+  }
   const slots = windowRow.slots || [];
   const dates = slots.map((slot) => slot.date).sort();
   // כמה שיבוצים עוד חסרים בטופס כולו. מחושב מהרוסטר ולא נשמר, מאותה סיבה
@@ -14909,7 +14964,12 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
 });
 
 app.post('/api/shift-signup/windows', (req, res) => {
-  const { window: record, error } = normalizeWindow(req.body || {});
+  // שני סוגי טפסים על אותה טבלה: מהיומן, שמושביו נושאים תאריך, ומלוח החוגים,
+  // שמושביו הם חוגים ואין להם תאריך כלל.
+  const isClass = req.body?.kind === CLASS_WINDOW_KIND;
+  const { window: record, error } = isClass
+    ? normalizeClassWindow(req.body || {}, { classRoles: signupClassRoles() })
+    : normalizeWindow(req.body || {});
   if (error) return res.status(400).json({ error });
   const created = db.insert('shift_signup_windows', record);
   res.status(201).json(created);
@@ -14923,6 +14983,16 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
     const employees = db.get('employees') || [];
     const assignments = db.get('work_assignments') || [];
     const answers = responsesForWindow(responses, windowRow.id);
+    const pendingOf = () => eligibleEmployees(employees, windowRow.recipients)
+      .filter((person) => !answers.some((answer) => answer.employee_id === person.id));
+    if (windowRow.kind === CLASS_WINDOW_KIND) {
+      return res.json({
+        ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
+        seats: windowRow.seats || [],
+        board: classSignupBoard(windowRow, responses, employees, db.get('groups') || [], signupClassRoles()),
+        pending: pendingOf(),
+      });
+    }
     res.json({
       ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
       slots: windowRow.slots || [],
@@ -14941,7 +15011,9 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
 app.put('/api/shift-signup/windows/:id', (req, res) => {
   const existing = db.getOne('shift_signup_windows', req.params.id);
   if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
-  const { window: record, error } = normalizeWindow(req.body || {}, { existing });
+  const { window: record, error } = existing.kind === CLASS_WINDOW_KIND
+    ? normalizeClassWindow(req.body || {}, { existing, classRoles: signupClassRoles() })
+    : normalizeWindow(req.body || {}, { existing });
   if (error) return res.status(400).json({ error });
   res.json(db.update('shift_signup_windows', existing.id, record));
 });
@@ -15009,6 +15081,66 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+/**
+ * אישור שיבוץ לחוגים.
+ *
+ * מסלול נפרד מ-`/assign` בכוונה: זה לא כותב שורות ליומן העבודה אלא את השיבוץ
+ * הקבוע על החוג, ומשם הנוכחות והשכר מתגלגלים כמו לכל מדריך אחר. הפרדה גם
+ * שומרת על המסלול שנוגע בשכר עם בדיקות ההרשאה שלו, בלי ענף נוסף בתוכו.
+ */
+app.post('/api/shift-signup/windows/:id/assign-class', async (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  if (windowRow.kind !== CLASS_WINDOW_KIND) {
+    return res.status(400).json({ error: 'הטופס הזה אינו טופס לוח חוגים' });
+  }
+  const employees = db.get('employees') || [];
+  const { groups: plans, skipped } = planClassStaffing(windowRow, req.body?.picks || [], {
+    groups: db.get('groups') || [],
+    employees,
+    classRoles: signupClassRoles(),
+    replace: req.body?.replace || [],
+  });
+
+  const updated = [];
+  for (const plan of plans) {
+    try {
+      // אותה בדיקה שעוברת שמירה ידנית של חוג: אי אפשר לשבץ עובד שהושבת בינתיים.
+      requireActiveEmployees([plan.trainer, ...plan.assistants].filter(Boolean));
+    } catch (error) {
+      skipped.push({ group_id: plan.group_id, reason: 'inactive_employee', error: error.message });
+      continue;
+    }
+    // רק שני השדות האלה: כל שדה אחר שיישלח לכאן ייעלם במיפוי של הקבוצה.
+    db.update('groups', plan.group_id, { trainer: plan.trainer, assistants: plan.assistants });
+    updated.push(plan);
+  }
+
+  // הודעה אחת לעובד עם כל החוגים שקיבל, ולא הודעה לכל חוג.
+  const byEmployee = new Map();
+  for (const plan of updated) {
+    for (const item of plan.placed) {
+      const list = byEmployee.get(item.employee_id) || [];
+      list.push({ label: plan.group_name || item.label, role: item.role });
+      byEmployee.set(item.employee_id, list);
+    }
+  }
+  let notified = 0;
+  try {
+    const result = await sendAssignmentSummaries({
+      windowRow,
+      byEmployee,
+      employees,
+      textFor: (placed) => classAssignmentMessageText(windowRow, placed),
+    });
+    notified = result?.sent || 0;
+  } catch (error) {
+    console.error('class assignment notify failed:', error.message);
+  }
+
+  res.json({ updated, skipped, notified });
 });
 
 /**
@@ -15112,6 +15244,20 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     const employees = db.get('employees') || [];
     const answers = responsesForWindow(responses, windowRow.id);
     const me = employeeIdForKey(windowRow, req.query.u) || null;
+    const mineOf = () => (me ? answers.filter((a) => a.employee_id === me) : []).map((answer) => ({
+      employee_id: answer.employee_id,
+      picks: answer.picks || [],
+      wanted_count: answer.wanted_count || 0,
+      note: answer.note || '',
+    }));
+    if (windowRow.kind === CLASS_WINDOW_KIND) {
+      return res.json({
+        ...publicClassBoardView(windowRow, responses, israelDateStr()),
+        me,
+        eligible: eligibleEmployees(employees, windowRow.recipients),
+        mine: mineOf(),
+      });
+    }
     res.json({
       ...publicWindowView(windowRow, answers),
       // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
@@ -15157,7 +15303,10 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // העובד עצמו נמסר לבדיקת הכשירות: מושב בתפקיד שהוא לא מסומן בו נדחה כאן,
     // ולא רק מוסתר במסך — הקישור עובר בוואטסאפ ואפשר לשלוח בקשה בלי המסך.
     const employee = employees.find((e) => String(e.id) === employeeId) || null;
-    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {}, { employee });
+    const payload = { ...(req.body || {}), employee_id: employeeId };
+    const { record, existing, error } = windowRow.kind === CLASS_WINDOW_KIND
+      ? applyClassResponse(windowRow, responses, payload, { today: israelDateStr(), employee })
+      : applyResponse(windowRow, responses, payload, { employee });
     if (error) return res.status(400).json({ error });
     const saved = existing
       ? db.update('shift_signup_responses', existing.id, record)

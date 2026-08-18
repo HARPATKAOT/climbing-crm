@@ -49,7 +49,7 @@ const WORK_TYPE_BY_ACTIVITY_TYPE = {
 const HM = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function cleanText(value, max = 200) {
+export function cleanText(value, max = 200) {
   return String(value ?? '').trim().slice(0, max);
 }
 
