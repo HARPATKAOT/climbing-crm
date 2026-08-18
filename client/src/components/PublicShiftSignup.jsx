@@ -15,6 +15,7 @@ import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import AppSelect from './AppSelect.jsx';
 import PublicClassBoardSignup from './PublicClassBoardSignup.jsx';
+import PublicCalendarSignup from './PublicCalendarSignup.jsx';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -266,113 +267,21 @@ export default function PublicShiftSignup() {
                 error={error}
               />
             ) : (
-              <>
-            <section>
-              <h2 style={{ padding: 0 }}>מה מתאים לכם?</h2>
-              <p className="event-hint">
-                {employeeId
-                  ? 'לכל משמרת בחרו באיזה תפקיד תבואו. אפשר לסמן יותר ממה שצריך — זו זמינות, לא שיבוץ.'
-                  : 'קודם בחרו את השם שלכם, ואז יוצגו התפקידים שאתם יכולים לקחת בכל משמרת.'}
-              </p>
-              <div className="shift-rows">
-                {slots.map((slot) => {
-                  const claim = claimOf(slot.id);
-                  // תפקיד שהעובד לא מסומן בו מוצג ולא נעלם: „למה אני לא רואה את
-                  // יום שלישי” היא שאלה גרועה יותר מ„למה אני לא יכול לקחת אותו”.
-                  const mine = (slot.needs || []).filter((need) => canTake(need.role));
-                  return (
-                    <div key={slot.id} className={`shift-row-card ${claim ? 'is-on' : ''}`}>
-                      <div className="shift-row-day">
-                        {dayLabel(slot.date)}{slot.label ? ` · ${slot.label}` : ''}
-                      </div>
-                      <div className="shift-row-meta">{slot.start_time}–{slot.end_time}</div>
-                      <div className="seat-row">
-                        {(slot.needs || []).map((need) => {
-                          const on = claim?.role === (need.role || '');
-                          const allowed = canTake(need.role);
-                          const Icon = roleIcon(need.role);
-                          return (
-                            <button
-                              type="button"
-                              key={need.role || 'any'}
-                              className={`seat-pill ${on ? 'is-on' : ''} ${allowed ? '' : 'is-off'}`}
-                              // גוון התפקיד, אותו אחד שבכרטיס העובד. כשמסמנים,
-                              // הוא הופך לרקע — כך רואים מרחוק מה נבחר.
-                              style={{ '--seat-accent': roleColor(need.role) }}
-                              disabled={!allowed || !employeeId}
-                              aria-pressed={on}
-                              title={allowed
-                                ? undefined
-                                : `התפקיד „${need.role}” לא מסומן אצלכם בכרטיס העובד`}
-                              onClick={() => claimSeat(slot.id, need.role || '')}
-                            >
-                              {on ? <Check size={13} /> : <Icon size={13} aria-hidden="true" />}
-                              {need.role || 'משמרת'}
-                              <span className="seat-count">
-                                {need.taken > 0 ? `${need.taken}/${need.count}` : `דרושים ${need.count}`}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {employeeId && mine.length === 0 && (
-                        <div className="shift-row-meta">אין כאן תפקיד שמסומן אצלכם.</div>
-                      )}
-                    </div>
-                  );
-                })}
-                {slots.length === 0 && (
-                  <p className="event-hint">אין משמרות פתוחות בטופס הזה.</p>
-                )}
-              </div>
-            </section>
-
-            {/* כמה מהסימונים הם באמת בקשה. רוב האנשים מסמנים כל מה שהם *יכולים*,
-                וזה נקרא כמו בקשה לכל אחת מהן — כאן הם אומרים כמה הם רוצים. */}
-            {picked.length > 1 && (
-              <section>
-                <h2 style={{ padding: 0 }}>כמה מהן אתם רוצים?</h2>
-                <p className="event-hint">
-                  סימנתם {picked.length} משמרות אפשריות. כמה מהן אתם רוצים בפועל?
-                </p>
-                <div className="want-row">
-                  {Array.from({ length: picked.length }, (_, index) => index + 1).map((n) => (
-                    <button
-                      type="button"
-                      key={n}
-                      className={`want-pill ${wanted === n ? 'is-on' : ''}`}
-                      onClick={() => setWanted(wanted === n ? 0 : n)}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className={`want-pill ${wanted === 0 ? 'is-on' : ''}`}
-                    onClick={() => setWanted(0)}
-                  >
-                    כמה שיש
-                  </button>
-                </div>
-              </section>
-            )}
-
-            <section>
-              <label className="event-field">
-                <span>הערה למנהל (לא חובה)</span>
-                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="למשל: אוכל להישאר גם אחרי" />
-              </label>
-            </section>
-
-            {error && <div className="event-error">{error}</div>}
-
-            <div className="event-actions">
-              <button type="submit" className="event-primary" disabled={submitting}>
-                {submitting ? <Loader2 size={17} className="spin" /> : <CalendarCheck size={17} />}
-                {submitting ? 'שולח...' : 'שליחת הזמינות'}
-              </button>
-            </div>
-              </>
+              <PublicCalendarSignup
+                data={data}
+                picks={picked}
+                employee={employeeId}
+                canFill={canTake}
+                note={note}
+                onNote={setNote}
+                onClaim={claimSeat}
+                onClear={clearSeat}
+                onSubmit={submit}
+                submitting={submitting}
+                error={error}
+                wanted={wanted}
+                onWanted={setWanted}
+              />
             )}
           </form>
         )}

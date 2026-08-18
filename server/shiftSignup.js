@@ -163,6 +163,9 @@ export function normalizeSlot(raw = {}) {
       // חוג ובניית מסלולים אינם אותו סוג שורה ביומן העבודה. כשהמשמרת נבחרה
       // מהיומן היא יודעת מה היא, וזה גובר על ברירת המחדל של הטופס.
       work_type: SIGNUP_WORK_TYPES.includes(raw.work_type) ? raw.work_type : null,
+      // סוג הרשומה ביומן. נשמר כדי שהטופס יוכל לצבוע את המשמרת בצבע שלה
+      // ביומן — „הנקיק השחור” לבדו לא אומר אם זה טיול או שעות פתיחה.
+      source_type: cleanText(raw.source_type, 40) || null,
     },
   };
 }

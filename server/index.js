@@ -15258,8 +15258,20 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
         mine: mineOf(),
       });
     }
+    const typeCatalog = await readActivityTypes();
+    // חוג אינו סוג ביומן אלא מסך אחר, ולכן הוא נושא צבע משלו.
+    const CLASS_META = { label: 'חוג', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' };
+    const typeMeta = (id) => (id === 'class' ? CLASS_META : typeCatalog.find((t) => t.id === id))
+      || { label: '', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' };
+    const view = publicWindowView(windowRow, answers);
     res.json({
-      ...publicWindowView(windowRow, answers),
+      ...view,
+      // הצבע והתווית של סוג הפעילות נוסעים עם המשמרת: הקטלוג עצמו נמצא מאחורי
+      // אימות, והטופס הזה נפתח בלי התחברות.
+      slots: (view.slots || []).map((slot) => {
+        const meta = typeMeta(slot.source_type);
+        return { ...slot, type_label: meta.label, type_color: meta.color, type_bg: meta.bg };
+      }),
       // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
       // לענות בשם מישהו אחר — הקישור עובר בוואטסאפ ואפשר להעביר אותו הלאה.
       me,
