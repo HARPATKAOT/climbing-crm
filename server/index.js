@@ -30,6 +30,20 @@ import { ensureGroupSignupWhatsappTemplate } from './groupSignupWhatsappTemplate
 import { runOneTimeBotDataMigrations } from './oneTimeBotDataMigrations.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
+  SIGNUP_TABLE,
+  RESPONSE_TABLE,
+  applyResponse,
+  calendarSlotCandidates,
+  eligibleEmployees,
+  expandWeeklySlots,
+  isWindowOpen,
+  normalizeWindow,
+  publicWindowView,
+  respondentSummary,
+  responsesForWindow,
+  signupBoard,
+} from './shiftSignup.js';
+import {
   DENOMINATIONS,
   sessionSnapshot,
   openSession,
@@ -10595,8 +10609,27 @@ app.get('/api/payments', async (req, res) => {
         // from here — a partial credit, for example.
         const refs = paymentDocRefs(db, payment);
         const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+        const student = payment.student_id ? db.getOne('students', payment.student_id) : null;
+        const sale = payment.pos_sale_id ? db.getOne('pos_sales', payment.pos_sale_id) : null;
+        const activity = payment.activity_id ? db.getOne('activities', payment.activity_id) : null;
+        const equipmentItems = Array.isArray(payment.equipment_allocations)
+          ? payment.equipment_allocations.map((allocation) => ({
+              name: allocation.description || allocation.student_name || payment.description || 'ציוד',
+              quantity: 1,
+              total: Number(allocation.charge_amount ?? allocation.total) || 0,
+            }))
+          : [];
         return {
           ...payment,
+          customer_name: parent?.name || sale?.customer_name || student?.name || 'לקוח',
+          customer_phone: parent?.phone || sale?.customer_phone || student?.phone || '',
+          customer_email: parent?.email || sale?.customer_email || student?.email || '',
+          student_name: student?.name || '',
+          sale_id: sale?.id || payment.pos_sale_id || null,
+          items: Array.isArray(sale?.items) && sale.items.length ? sale.items : equipmentItems,
+          payment_method: payment.payment_method || sale?.payment_method || (payment.payment_url ? 'online' : ''),
+          sold_by: payment.created_by || sale?.sold_by || '',
+          activity_name: activity?.name || '',
           icount_doc_app_url: icount.docAppUrl({
             doctype: refs.charge.doctype,
             docnum: refs.charge.docnum,
@@ -10610,6 +10643,7 @@ app.get('/api/payments', async (req, res) => {
           has_passes: payment.pos_sale_id
             ? passesOfSale(db.get('customer_passes') || [], payment.pos_sale_id).length > 0
             : false,
+          equipment_policy_refund: !!payment.equipment_checkout_token,
         };
       });
     res.json(payments);
@@ -14128,6 +14162,185 @@ app.delete('/api/work-assignments/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── הרשמה למשמרות ──────────────────────────────────────────────────────────
+// The WhatsApp poll, as a form: a manager opens a window of concrete shifts for
+// one role, staff tick what suits them through a public link, and the answers
+// sit next to the roster. Turning a tick into a placement stays a deliberate
+// act — it goes through POST /api/work-assignments like any other shift.
+
+function signupWindowsOf() {
+  return db.get(SIGNUP_TABLE) || [];
+}
+
+function signupResponsesOf() {
+  return db.get(RESPONSE_TABLE) || [];
+}
+
+/** Placements that could match this window's shifts — the range it covers. */
+function assignmentsForWindow(windowRow) {
+  const dates = new Set((windowRow.slots || []).map((slot) => slot.date));
+  return (db.get('work_assignments') || []).filter(
+    (row) => dates.has(String(row.date || '').slice(0, 10))
+  );
+}
+
+function windowSummary(windowRow) {
+  const responses = responsesForWindow(signupResponsesOf(), windowRow.id);
+  const board = signupBoard(windowRow, responses, db.get('employees') || [], assignmentsForWindow(windowRow));
+  return {
+    id: windowRow.id,
+    title: windowRow.title,
+    role: windowRow.role,
+    work_type: windowRow.work_type,
+    status: windowRow.status,
+    deadline: windowRow.deadline || null,
+    note: windowRow.note || '',
+    audience: windowRow.audience || { mode: 'role', employee_ids: [] },
+    token: windowRow.token,
+    open: isWindowOpen(windowRow),
+    created_at: windowRow.created_at || null,
+    slot_count: (windowRow.slots || []).length,
+    first_date: board[0]?.date || null,
+    last_date: board[board.length - 1]?.date || null,
+    respondents: responses.length,
+    // What is still unstaffed is the only number a manager acts on.
+    missing: board.reduce((sum, slot) => sum + slot.missing, 0),
+  };
+}
+
+app.get('/api/shift-signup/windows', requireOwner, (_req, res) => {
+  const rows = signupWindowsOf()
+    .map(windowSummary)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  res.json(rows);
+});
+
+/** Preview a weekly pattern before it becomes a window — no writes. */
+app.post('/api/shift-signup/expand-slots', requireOwner, (req, res) => {
+  const { slots, error } = expandWeeklySlots(req.body || {});
+  if (error) return res.status(400).json({ error });
+  res.json({ slots });
+});
+
+/**
+ * The shifts already in the calendar (or on the class board), offered as
+ * candidates for a new window. Which calendar types a role may staff is the
+ * same setting the schedule screen uses, so a role is never offered work it is
+ * not marked for.
+ */
+app.get('/api/shift-signup/calendar-slots', requireOwner, async (req, res) => {
+  const catalog = await readRoleCatalog();
+  const rolesByType = {};
+  for (const type of Object.keys(catalog.activityRoles || {})) {
+    rolesByType[type] = await rolesForActivityType(type);
+  }
+  const result = calendarSlotCandidates({
+    activities: db.get('activities') || [],
+    groups: db.get('groups') || [],
+    assignments: db.get('work_assignments') || [],
+    rolesByType,
+    classRoles: [
+      await systemRoleLabel(SYSTEM_ROLE_KEYS.TRAINER),
+      await systemRoleLabel(SYSTEM_ROLE_KEYS.ASSISTANT),
+    ].filter(Boolean),
+    role: req.query.role || '',
+    from: req.query.from,
+    to: req.query.to,
+    capacity: req.query.capacity,
+    include: req.query.include ? String(req.query.include).split(',') : ['activities', 'groups'],
+  });
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+/** The staff a window would reach, for the audience picker in the form. */
+app.get('/api/shift-signup/audience', requireOwner, (req, res) => {
+  res.json({
+    employees: eligibleEmployees(db.get('employees') || [], req.query.role || '', {
+      mode: req.query.mode || 'role',
+      employee_ids: req.query.employee_ids ? String(req.query.employee_ids).split(',') : [],
+    }),
+  });
+});
+
+app.post('/api/shift-signup/windows', requireOwner, (req, res) => {
+  const { window: normalized, error } = normalizeWindow(req.body || {});
+  if (error) return res.status(400).json({ error });
+  const created = db.insert(SIGNUP_TABLE, normalized);
+  res.status(201).json(windowSummary(created));
+});
+
+app.put('/api/shift-signup/windows/:id', requireOwner, (req, res) => {
+  const existing = db.getOne(SIGNUP_TABLE, req.params.id);
+  if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const { window: normalized, error } = normalizeWindow(req.body || {}, { existing });
+  if (error) return res.status(400).json({ error });
+  res.json(windowSummary(db.update(SIGNUP_TABLE, existing.id, normalized)));
+});
+
+app.delete('/api/shift-signup/windows/:id', requireOwner, (req, res) => {
+  const existing = db.getOne(SIGNUP_TABLE, req.params.id);
+  if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  db.delete(SIGNUP_TABLE, existing.id);
+  // The answers belong to the question — leaving them behind would keep names
+  // on a board nobody can open again.
+  for (const response of responsesForWindow(signupResponsesOf(), existing.id)) {
+    db.delete(RESPONSE_TABLE, response.id);
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/shift-signup/windows/:id', requireOwner, (req, res) => {
+  const windowRow = db.getOne(SIGNUP_TABLE, req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const employees = db.get('employees') || [];
+  const responses = responsesForWindow(signupResponsesOf(), windowRow.id);
+  const assignments = assignmentsForWindow(windowRow);
+  res.json({
+    ...windowSummary(windowRow),
+    slots: windowRow.slots || [],
+    board: signupBoard(windowRow, responses, employees, assignments),
+    respondents_detail: respondentSummary(windowRow, responses, employees, assignments),
+    eligible: eligibleEmployees(employees, windowRow.role, windowRow.audience),
+  });
+});
+
+// ─── The link the staff get ─────────────────────────────────────────────────
+app.get('/api/public/shift-signup/:token', publicFormRateLimit, (req, res) => {
+  const windowRow = signupWindowsOf().find((row) => row.token === req.params.token);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const responses = responsesForWindow(signupResponsesOf(), windowRow.id);
+  res.json({
+    ...publicWindowView(windowRow, responses),
+    eligible: eligibleEmployees(db.get('employees') || [], windowRow.role, windowRow.audience),
+    // Re-opening the link shows what you already answered, so a correction
+    // replaces a choice instead of guessing at it from memory.
+    mine: responses.map((r) => ({ employee_id: r.employee_id, slot_ids: r.slot_ids || [], note: r.note || '' })),
+  });
+});
+
+app.post('/api/public/shift-signup/:token', publicFormRateLimit, (req, res) => {
+  const windowRow = signupWindowsOf().find((row) => row.token === req.params.token);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+
+  const eligible = eligibleEmployees(db.get('employees') || [], windowRow.role, windowRow.audience);
+  const employee = eligible.find((e) => String(e.id) === String(req.body?.employee_id));
+  if (!employee) return res.status(403).json({ error: 'הטופס הזה לא פונה אליך — בדקו עם המנהל' });
+
+  const { record, existing, error } = applyResponse(
+    windowRow,
+    signupResponsesOf(),
+    { ...req.body, employee_name: employee.name },
+    {}
+  );
+  if (error) return res.status(400).json({ error });
+
+  const saved = existing
+    ? db.update(RESPONSE_TABLE, existing.id, record)
+    : db.insert(RESPONSE_TABLE, record);
+  res.status(existing ? 200 : 201).json({ success: true, slot_ids: saved.slot_ids });
+});
+
 // Safety check types, inspections & incidents
 app.get('/api/safety/check-types', (req, res) => {
   const includeInactive = req.query.includeInactive === '1' || req.query.includeInactive === 'true';
@@ -16890,17 +17103,10 @@ app.post('/api/pos/payment-link', async (req, res) => {
       walkInEmail,
       sendWhatsapp = false,
       couponCode,
-      collectionIntent,
     } = req.body || {};
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
-    if (!['debt', 'offer'].includes(collectionIntent)) {
-      return res.status(400).json({
-        error: 'יש לבחור אם הקישור הוא לחוב קיים או רק אפשרות לרכישה',
-        code: 'collection_intent_required',
-      });
-    }
     const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -16942,7 +17148,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
         recordCounterPolicyAcceptances(req, cancellationPolicies, sale, payerId),
       soldBy: seller.name,
       soldByEmployeeId: seller.employee_id,
-      source: collectionIntent === 'offer' ? 'pos_offer' : 'pos_debt',
+      source: 'pos',
     });
 
     const delivery = sendWhatsapp

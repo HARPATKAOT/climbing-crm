@@ -4,7 +4,7 @@ import {
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check, ChevronLeft, CalendarRange,
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
-, Pencil , Bell , Shield } from 'lucide-react';
+, Pencil , Bell , Shield , CalendarPlus } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import EntityLink, { takeOpenParam } from '../utils/entityLinks.jsx';
 import { PaymentMethodBadge } from '../utils/paymentMethod.jsx';
@@ -44,6 +44,7 @@ import {
   AVATAR_ICON_OPTIONS, travelColor,
 } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
+import ShiftSignupPanel from './ShiftSignupPanel.jsx';
 import EmployeePayrollPeriods from './EmployeePayrollPeriods.jsx';
 import PayrollTracking from './PayrollTracking.jsx';
 import WallShiftOperationsJournal from './WallShiftOperationsJournal.jsx';
@@ -2573,7 +2574,13 @@ function ShiftDuration({ clockIn }) {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function Employees({ canViewHr = true, canEditEmployees = true, canViewShifts = true }) {
+export default function Employees({
+  canViewHr = true,
+  canEditEmployees = true,
+  canViewShifts = true,
+  // פתיחת טופס הרשמה למשמרות היא פעולה של בעל העסק — ה-API עצמו חסום למנהל בלבד.
+  canManageSignups = true,
+}) {
   const navigate = useNavigate();
   // התפקידים שהמסך מציג נגזרים מהקטלוג, כדי שמחיקה או שינוי שם יופיעו כאן מיד.
   // הקטלוג נטען פעם אחת; עריכה מהחלון שמכאן מחליפה אותו בלי לטעון מחדש.
@@ -3719,6 +3726,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
           ...(canViewHr ? [{ key: 'certs', label: 'תעודות והסמכות', icon: Award }] : []),
           ...(canViewHr ? [{ key: 'wages', label: 'הסכמי שכר', icon: Coins }] : []),
           ...(canViewShifts ? [{ key: 'shifts', label: 'משמרות', icon: Clock }] : []),
+          ...(canManageSignups ? [{ key: 'shift-signup', label: 'הרשמה למשמרות', icon: CalendarPlus }] : []),
           ...(canViewHr ? [{ key: 'payroll', label: 'תשלום חודשי', icon: Banknote }] : []),
           ...(canViewHr ? [{ key: 'settings', label: 'הגדרות', icon: Settings2 }] : []),
           ...(canViewHr ? [{ key: 'onboard-link', label: 'קישור קליטה', icon: Link2 }] : []),
@@ -3751,6 +3759,9 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
       )}
 
       {/* ─── Tab: Onboarding link ───────────────────────────────────────────── */}
+      {/* ─── Tab: Shift signup ─────────────────────────────────────────────── */}
+      {activeTab === 'shift-signup' && <ShiftSignupPanel />}
+
       {activeTab === 'settings' && (
         <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520 }}>
           <div>

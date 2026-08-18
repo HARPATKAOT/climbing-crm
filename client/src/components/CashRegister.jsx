@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent, Ban, Mountain } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, History, Wallet, BadgePercent, Ban, Mountain, Send, ChevronDown, MoreHorizontal } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
+import {
+  downloadPaymentDocument,
+  printPaymentDocument,
+  refundPayment,
+  sendPaymentDocument,
+} from '../utils/paymentActions.js';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 import AppSelect from './AppSelect.jsx';
-import CashShiftPanel from './CashShiftPanel.jsx';
 import CashManagerPanel from './CashManagerPanel.jsx';
-import PosCheckoutLinks from './PosCheckoutLinks.jsx';
 import DiscountCenter from './DiscountCenter.jsx';
 import ActivityPriceBook from './ActivityPriceBook.jsx';
 
@@ -79,6 +82,27 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
+function paymentStatusLabel(status) {
+  return {
+    paid: 'שולם',
+    pending: 'ממתין לתשלום',
+    open: 'חיוב פתוח',
+    quoted: 'הצעת מחיר',
+    partial_refund: 'זוכה חלקית',
+    refunded: 'זוכה',
+    cancelled: 'בוטל',
+    failed: 'נכשל',
+  }[status] || status || 'לא ידוע';
+}
+
+function paymentStatusBadge(status) {
+  if (status === 'paid') return 'badge badge-green';
+  if (status === 'pending' || status === 'open') return 'badge badge-amber';
+  if (status === 'partial_refund') return 'badge badge-purple';
+  if (status === 'refunded' || status === 'failed') return 'badge badge-red';
+  return 'badge badge-gray';
+}
+
 const israelDay = (value = new Date()) => {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -106,7 +130,6 @@ function cashClosureDateTime(shift) {
 }
 
 export default function CashRegister({ isOwner = true, canResetCash = isOwner, sharedStation = false, initialTab = null }) {
-  const navigate = useNavigate();
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -115,7 +138,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
   const [activeTab, setActiveTab] = useState(() => {
-    const sharedTabs = ['sale', 'links', 'close', 'history'];
+    const sharedTabs = ['sale', 'history'];
     const ownerTabs = ['products', 'activity-prices', 'discounts', 'manager', 'icount'];
     if (sharedTabs.includes(initialTab)) return initialTab;
     if (isOwner && ownerTabs.includes(initialTab)) return initialTab;
@@ -145,6 +168,9 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [reports, setReports] = useState(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [syncInventoryMsg, setSyncInventoryMsg] = useState('');
+  const [expandedPaymentId, setExpandedPaymentId] = useState('');
+  const [paymentActionBusyKey, setPaymentActionBusyKey] = useState('');
+  const [paymentActionMessage, setPaymentActionMessage] = useState({ type: '', text: '' });
 
   const refreshRegister = useCallback(async () => {
     try {
@@ -425,6 +451,49 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     }
   }, []);
 
+  const runPaymentAction = async (key, action, successText) => {
+    setPaymentActionBusyKey(key);
+    setPaymentActionMessage({ type: '', text: '' });
+    try {
+      const result = await action();
+      if (result === false) return;
+      setPaymentActionMessage({ type: 'success', text: successText });
+      await Promise.all([refreshIcount(), refreshSales()]);
+    } catch (err) {
+      setPaymentActionMessage({
+        type: 'error',
+        text: err.message || 'הפעולה נכשלה',
+      });
+    } finally {
+      setPaymentActionBusyKey('');
+    }
+  };
+
+  const copySystemPaymentLink = async (payment) => {
+    if (!payment?.payment_url) throw new Error('לא נשמר קישור תשלום');
+    await navigator.clipboard.writeText(payment.payment_url);
+  };
+
+  const cancelLinkedPayment = async (payment) => {
+    const saleId = payment?.sale_id || payment?.pos_sale_id;
+    if (!saleId) {
+      throw new Error('את בקשת התשלום הזו מבטלים מתוך האירוע או תיק הלקוח שממנו נוצרה');
+    }
+    const confirmed = window.confirm(
+      `לבטל את בקשת התשלום בסך ₪${Number(payment.amount || 0).toLocaleString()}?\n`
+        + 'לא עבר כסף ולא יצאה חשבונית, לכן זו סגירת בקשה ולא זיכוי.',
+    );
+    if (!confirmed) return false;
+    const response = await fetch(`/api/pos/sales/${encodeURIComponent(saleId)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: `ביטול מחלונית סליקה · ${payment.id}` }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || 'ביטול בקשת התשלום נכשל');
+    return body;
+  };
+
   useEffect(() => {
     refreshRegister();
     refreshSales();
@@ -458,13 +527,10 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     // לקבוצה עם מינימום ומדרגות.
     ...(isOwner ? [{ k: 'activity-prices', label: 'מחירון פעילויות', icon: Mountain }] : []),
     ...(isOwner ? [{ k: 'discounts', label: 'הטבות והנחות', icon: BadgePercent }] : []),
-    { k: 'links', label: 'קישורים ללקוח', icon: Link2 },
-    { k: 'close', label: 'פתיחה / סגירה', icon: Calculator },
     ...(isOwner ? [{ k: 'manager', label: 'מסוף מנהל', icon: Wallet }] : []),
     { k: 'history', label: 'עסקאות היום', icon: History },
     ...(isOwner
       ? [
-          { k: 'reports', label: 'כל התשלומים', icon: BarChart3, route: '/reports?tab=payments' },
           { k: 'icount', label: 'סליקה ומסמכים', icon: ReceiptText },
         ]
       : []),
@@ -620,11 +686,11 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       )}
 
       <div className="tab-bar">
-        {tabs.map(({ k, label, icon: Icon, route }) => (
+        {tabs.map(({ k, label, icon: Icon }) => (
           <button
             key={k}
             className={`tab-pill ${activeTab === k ? 'active' : ''}`}
-            onClick={() => route ? navigate(route) : setActiveTab(k)}
+            onClick={() => setActiveTab(k)}
           >
             <Icon size={14} /> {label}
           </button>
@@ -645,12 +711,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       {activeTab === 'activity-prices' && isOwner && <ActivityPriceBook />}
 
       {activeTab === 'discounts' && isOwner && <DiscountCenter />}
-
-      {activeTab === 'links' && <PosCheckoutLinks />}
-
-      {activeTab === 'close' && (
-        <CashShiftPanel employees={employees} isOwner={isOwner} />
-      )}
 
       {activeTab === 'manager' && isOwner && (
         <CashManagerPanel employees={employees} canResetCash={canResetCash} />
@@ -1382,55 +1442,352 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
             </div>
           </div>
 
-          {payments.length > 0 && (
-            <div className="card">
-              <div className="section-title" style={{ padding: '14px 16px 0' }}>תשלומים במערכת</div>
-              <div className="table-wrap">
-                <table className="crm-table">
-                  <thead>
-                    <tr>
-                      <th>תאריך</th>
-                      <th>תיאור</th>
-                      <th>סכום</th>
-                      <th>סטטוס</th>
-                      <th>מס׳ מסמך</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.slice(0, 30).map((p) => (
-                      <tr key={p.id}>
-                        <td>
-                          {p.created_at
-                            ? new Date(p.created_at).toLocaleDateString('he-IL')
-                            : '—'}
-                        </td>
-                        <td>{p.description}</td>
-                        <td>₪{Number(p.amount).toLocaleString()}</td>
-                        <td>
-                          <span
-                            className={
-                              p.status === 'paid'
-                                ? 'badge badge-green'
-                                : p.status === 'pending'
-                                  ? 'badge badge-amber'
-                                  : 'badge badge-gray'
-                            }
-                          >
-                            {p.status === 'paid'
-                              ? 'שולם'
-                              : p.status === 'pending'
-                                ? 'ממתין'
-                                : p.status}
-                          </span>
-                        </td>
-                        <td>{p.icount_doc_number || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="card">
+            <div style={{ padding: '14px 16px 10px' }}>
+              <div className="section-title" style={{ marginBottom: 4 }}>תשלומים במערכת</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                לחיצה על כל שורה פותחת את פרטי העסקה ואת הפעולות הזמינות עבורה
               </div>
+              {paymentActionMessage.text && (
+                <div
+                  className={`alert alert-${paymentActionMessage.type}`}
+                  style={{ marginTop: 12 }}
+                >
+                  {paymentActionMessage.text}
+                </div>
+              )}
             </div>
-          )}
+            <div className="table-wrap finance-payment-table-wrap">
+              <table className="crm-table finance-payment-table">
+                <thead>
+                  <tr>
+                    <th>תאריך</th>
+                    <th>לקוח</th>
+                    <th>תיאור</th>
+                    <th>אמצעי תשלום</th>
+                    <th>סכום</th>
+                    <th>סטטוס</th>
+                    <th>מסמך</th>
+                    <th aria-label="פירוט" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.length === 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                        {icountLoading ? 'טוען תשלומים...' : 'לא נמצאו תשלומים במערכת'}
+                      </td>
+                    </tr>
+                  )}
+                  {payments.slice(0, 30).map((payment) => {
+                    const expanded = expandedPaymentId === payment.id;
+                    const items = Array.isArray(payment.items) ? payment.items : [];
+                    const canDownloadCharge = !!(
+                      payment.icount_doc_url ||
+                      payment.icount_doc_number ||
+                      payment.icount_doc_id
+                    );
+                    const canDownloadRefund = !!(
+                      payment.refund_doc_url || payment.refund_doc_number
+                    );
+                    const canRefund =
+                      ['paid', 'partial_refund'].includes(payment.status) &&
+                      !!payment.icount_doc_number;
+                    const canCancel =
+                      ['pending', 'open', 'quoted'].includes(payment.status) &&
+                      !!(payment.sale_id || payment.pos_sale_id) &&
+                      !payment.icount_doc_number;
+                    const busyPrefix = `${payment.id}:`;
+                    return (
+                      <Fragment key={payment.id}>
+                        <tr
+                          className={expanded ? 'is-expanded' : ''}
+                          onClick={() => setExpandedPaymentId(expanded ? '' : payment.id)}
+                          title="לחיצה לפירוט ופעולות"
+                        >
+                          <td>
+                            <strong>
+                              {payment.created_at
+                                ? new Date(payment.created_at).toLocaleDateString('he-IL')
+                                : '—'}
+                            </strong>
+                            <small>
+                              {payment.created_at
+                                ? new Date(payment.created_at).toLocaleTimeString('he-IL', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : ''}
+                            </small>
+                          </td>
+                          <td>
+                            {payment.parent_id || payment.student_id ? (
+                              <span onClick={(event) => event.stopPropagation()}>
+                                <EntityLink
+                                  kind="customer"
+                                  id={payment.student_id || `parent:${payment.parent_id}`}
+                                  title="מעבר לתיק הלקוח"
+                                >
+                                  <strong>{payment.customer_name || payment.student_name || 'לקוח'}</strong>
+                                </EntityLink>
+                              </span>
+                            ) : (
+                              <strong>{payment.customer_name || 'לקוח'}</strong>
+                            )}
+                            <small>{payment.customer_phone || payment.customer_email || ''}</small>
+                          </td>
+                          <td>
+                            <strong>{payment.description || 'תשלום'}</strong>
+                            <small>{payment.activity_name || payment.sold_by || ''}</small>
+                          </td>
+                          <td>
+                            <span className={payMethodBadge(payment.payment_method)}>
+                              {payMethodLabel(payment.payment_method)}
+                            </span>
+                          </td>
+                          <td><strong>₪{Number(payment.amount || 0).toLocaleString()}</strong></td>
+                          <td>
+                            <span className={paymentStatusBadge(payment.status)}>
+                              {paymentStatusLabel(payment.status)}
+                            </span>
+                          </td>
+                          <td><strong>{payment.icount_doc_number || '—'}</strong></td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-sm"
+                              aria-label={expanded ? 'סגירת פירוט' : 'פתיחת פירוט'}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setExpandedPaymentId(expanded ? '' : payment.id);
+                              }}
+                            >
+                              <ChevronDown
+                                size={16}
+                                style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}
+                              />
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr className="finance-payment-detail-row">
+                            <td colSpan={8}>
+                              <div className="finance-payment-detail">
+                                <div className="finance-payment-detail-grid">
+                                  <div><span>מספר תשלום</span><strong>{payment.id}</strong></div>
+                                  <div><span>מסמך חיוב</span><strong>{payment.icount_doc_number || 'טרם הופק'}</strong></div>
+                                  <div><span>מסמך זיכוי</span><strong>{payment.refund_doc_number || '—'}</strong></div>
+                                  <div><span>אמצעי תשלום</span><strong>{payMethodLabel(payment.payment_method)}</strong></div>
+                                  <div><span>אישור סליקה</span><strong>{payment.cc_confirmation_code || '—'}</strong></div>
+                                  <div><span>כרטיס</span><strong>{payment.cc_last4 ? `••••${payment.cc_last4}` : '—'}</strong></div>
+                                </div>
+
+                                <div className="finance-payment-items">
+                                  <h3>פירוט פריטים</h3>
+                                  {items.length ? items.map((item, index) => {
+                                    const quantity = Number(item.quantity) || 1;
+                                    const total = Number(
+                                      item.total ??
+                                      ((item.unitprice ?? item.unit_price) * quantity),
+                                    );
+                                    return (
+                                      <div key={`${payment.id}-item-${index}`}>
+                                        <span>
+                                          {item.name || item.description || 'פריט'}
+                                          {quantity > 1 ? ` × ${quantity}` : ''}
+                                        </span>
+                                        <strong>{Number.isFinite(total) ? `₪${total.toLocaleString()}` : '—'}</strong>
+                                      </div>
+                                    );
+                                  }) : <p>{payment.description || 'אין פירוט פריטים'}</p>}
+                                </div>
+
+                                {payment.refund_reason && (
+                                  <div className="finance-payment-note">
+                                    <strong>סיבת זיכוי:</strong> {payment.refund_reason}
+                                  </div>
+                                )}
+
+                                <div className="finance-payment-actions">
+                                  {payment.payment_url && ['pending', 'open', 'quoted'].includes(payment.status) && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:copy`,
+                                          () => copySystemPaymentLink(payment),
+                                          'קישור התשלום הועתק',
+                                        )}
+                                      >
+                                        <Copy size={14} />העתקת קישור תשלום
+                                      </button>
+                                      <a
+                                        className="btn btn-ghost btn-sm"
+                                        href={payment.payment_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        <ExternalLink size={14} />פתיחת קישור תשלום
+                                      </a>
+                                    </>
+                                  )}
+                                  {canDownloadCharge && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={paymentActionBusyKey === `${payment.id}:download`}
+                                      onClick={() => runPaymentAction(
+                                        `${payment.id}:download`,
+                                        () => downloadPaymentDocument(payment),
+                                        'החשבונית הורדה',
+                                      )}
+                                    >
+                                      {paymentActionBusyKey === `${payment.id}:download`
+                                        ? <Loader2 size={14} className="spin" />
+                                        : <Download size={14} />}
+                                      הורדת חשבונית
+                                    </button>
+                                  )}
+                                  {canDownloadCharge && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => {
+                                        try {
+                                          printPaymentDocument(payment);
+                                          setPaymentActionMessage({ type: 'success', text: 'החשבונית נפתחה להדפסה' });
+                                        } catch (err) {
+                                          setPaymentActionMessage({ type: 'error', text: err.message });
+                                        }
+                                      }}
+                                    >
+                                      <Printer size={14} />הדפסת חשבונית
+                                    </button>
+                                  )}
+                                  {canDownloadCharge && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={paymentActionBusyKey === `${payment.id}:send`}
+                                      onClick={() => runPaymentAction(
+                                        `${payment.id}:send`,
+                                        () => sendPaymentDocument(payment),
+                                        'החשבונית נשלחה ללקוח',
+                                      )}
+                                    >
+                                      <Send size={14} />שליחה ללקוח
+                                    </button>
+                                  )}
+                                  {payment.icount_doc_app_url && (
+                                    <a
+                                      className="btn btn-ghost btn-sm"
+                                      href={payment.icount_doc_app_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <ReceiptText size={14} />מסמך ב־iCount
+                                    </a>
+                                  )}
+                                  {payment.icount_client_app_url && (
+                                    <a
+                                      className="btn btn-ghost btn-sm"
+                                      href={payment.icount_client_app_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <ExternalLink size={14} />תיק לקוח ב־iCount
+                                    </a>
+                                  )}
+                                  {canDownloadRefund && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:refund-download`,
+                                          () => downloadPaymentDocument(payment, 'refund'),
+                                          'מסמך הזיכוי הורד',
+                                        )}
+                                      >
+                                        <Download size={14} />מסמך זיכוי
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:refund-send`,
+                                          () => sendPaymentDocument(payment, 'refund'),
+                                          'מסמך הזיכוי נשלח ללקוח',
+                                        )}
+                                      >
+                                        <Send size={14} />שליחת זיכוי
+                                      </button>
+                                    </>
+                                  )}
+                                  {canRefund && (
+                                    <>
+                                      <span className="finance-payment-actions-spacer" />
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm is-danger"
+                                        disabled={paymentActionBusyKey.startsWith(busyPrefix)}
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:refund`,
+                                          () => refundPayment(payment),
+                                          'ביטול העסקה והזיכוי המלא בוצעו',
+                                        )}
+                                      >
+                                        <RotateCcw size={14} />ביטול עסקה / זיכוי מלא
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm is-danger"
+                                        disabled={paymentActionBusyKey.startsWith(busyPrefix)}
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:partial`,
+                                          () => refundPayment(payment, { partial: true }),
+                                          'הזיכוי החלקי בוצע',
+                                        )}
+                                      >
+                                        <MoreHorizontal size={14} />זיכוי חלקי
+                                      </button>
+                                    </>
+                                  )}
+                                  {canCancel && (
+                                    <>
+                                      <span className="finance-payment-actions-spacer" />
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm is-danger"
+                                        disabled={paymentActionBusyKey.startsWith(busyPrefix)}
+                                        onClick={() => runPaymentAction(
+                                          `${payment.id}:cancel`,
+                                          () => cancelLinkedPayment(payment),
+                                          'בקשת התשלום בוטלה',
+                                        )}
+                                      >
+                                        <Ban size={14} />ביטול בקשת תשלום
+                                      </button>
+                                    </>
+                                  )}
+                                  {!payment.payment_url && !canDownloadCharge && !canDownloadRefund && !canRefund && !canCancel && (
+                                    <span style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                                      אין פעולות כספיות זמינות לרשומה במצב זה
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
     </div>

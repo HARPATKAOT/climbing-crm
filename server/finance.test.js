@@ -105,7 +105,7 @@ test('sales breakdown counts a duplicated accounting document only once', () => 
   assert.equal(report.deals[0].source_url, 'https://example.test/doc');
 });
 
-test('payments report combines open operational payments with accounting-only history', () => {
+test('payments report excludes a standalone payment link while keeping accounting history', () => {
   const report = buildPaymentsReport({
     from: '2026-08-01',
     to: '2026-08-31',
@@ -113,7 +113,7 @@ test('payments report combines open operational payments with accounting-only hi
       id: 'pay-open',
       parent_id: 'parent-1',
       amount: 180,
-      description: 'כניסה לקיר, נעליים',
+      description: 'קישור שהבוט שלח',
       status: 'pending',
       payment_url: 'https://pay.test/open',
       created_at: '2026-08-13T15:00:00.000Z',
@@ -127,15 +127,15 @@ test('payments report combines open operational payments with accounting-only hi
     paymentEvents: [{ document_id: 'doc-1', method: 'cash', amount: 35 }],
   });
 
-  assert.equal(report.rows.length, 2);
-  assert.equal(report.summary.open_count, 1);
-  assert.equal(report.summary.open_amount, 180);
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.summary.open_count, 0);
+  assert.equal(report.summary.open_amount, 0);
   assert.equal(report.summary.gross_collected, 35);
-  assert.equal(report.rows.find((row) => row.payment_id === 'pay-open').customer_name, 'דנה צפוני');
+  assert.equal(report.rows.find((row) => row.payment_id === 'pay-open'), undefined);
   assert.equal(report.rows.find((row) => row.accounting_only).payment_method_label, 'מזומן');
 });
 
-test('payments report excludes optional open links but keeps real POS debts', () => {
+test('payments report excludes optional links but keeps every real POS sale as debt', () => {
   const report = buildPaymentsReport({
     from: '2026-08-13',
     to: '2026-08-13',
@@ -165,10 +165,10 @@ test('payments report excludes optional open links but keeps real POS debts', ()
     parents: [{ id: 'p1', name: 'תהל' }, { id: 'p2', name: 'דנה' }],
   });
 
-  assert.deepEqual(report.rows.map((row) => row.payment_id), ['wall-debt']);
-  assert.equal(report.summary.open_count, 1);
-  assert.equal(report.summary.open_amount, 180);
-  assert.equal(report.rows[0].debt_reason, 'חוב שסומן בקופה');
+  assert.deepEqual(report.rows.map((row) => row.payment_id), ['harness-offer', 'wall-debt']);
+  assert.equal(report.summary.open_count, 2);
+  assert.equal(report.summary.open_amount, 530);
+  assert.ok(report.rows.every((row) => row.debt_reason === 'עסקת קופה שלא שולמה'));
 });
 
 test('payments report finds an unpaid hosted event before the host opens its payment page', () => {
@@ -212,6 +212,28 @@ test('payments report excludes a pending registration that only becomes confirme
   assert.equal(report.rows.length, 0);
   assert.equal(report.summary.open_count, 0);
   assert.equal(report.summary.open_amount, 0);
+});
+
+test('payments report keeps a confirmed event registration as debt until it is paid', () => {
+  const report = buildPaymentsReport({
+    from: '2026-08-13',
+    to: '2026-08-13',
+    payments: [{
+      id: 'confirmed-event-debt', parent_id: 'p1', amount: 220, status: 'pending',
+      activity_id: 'event-1', activity_registration_order_id: 'order-1',
+      created_at: '2026-08-13T10:00:00.000Z',
+    }],
+    registrations: [{
+      id: 'reg-1', activity_id: 'event-1', payment_id: 'confirmed-event-debt', status: 'confirmed',
+    }],
+    activities: [{ id: 'event-1', name: 'פעילות מאושרת', date: '2026-08-20' }],
+    parents: [{ id: 'p1', name: 'משפחת ישראלי' }],
+  });
+
+  assert.equal(report.rows.length, 1);
+  assert.equal(report.rows[0].payment_id, 'confirmed-event-debt');
+  assert.equal(report.rows[0].debt_reason, 'השתתפות שאושרה');
+  assert.equal(report.summary.open_amount, 220);
 });
 
 test('payments report never duplicates a linked iCount receipt', () => {

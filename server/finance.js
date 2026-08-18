@@ -299,9 +299,10 @@ function paymentSource(payment, sale, linkedActivities) {
 const OPEN_PAYMENT_STATUSES = new Set(['pending', 'open', 'quoted']);
 
 /**
- * A live payment link is only a collection task when there is already a
- * business obligation behind it. Product browsing, quotes and reservations
- * that become real only after payment must never inflate receivables.
+ * Debt has two deliberate sources: an unpaid counter sale, or an event that
+ * already carries a payment obligation. Every other pending payment row is a
+ * link/offer only — including links sent proactively by the bot — and must not
+ * inflate receivables merely because the customer can choose to pay it.
  */
 function openDebtClassification({ payment = {}, sale = null, registrations = [] } = {}) {
   if (payment?.activity_host_payment) {
@@ -330,14 +331,11 @@ function openDebtClassification({ payment = {}, sale = null, registrations = [] 
   if (sale?.source === 'shop' || payment?.shop_item_id) {
     return { is_debt: false, debt_reason: 'רכישה שטרם הושלמה' };
   }
-  if (sale?.source === 'pos_offer') {
-    return { is_debt: false, debt_reason: 'אפשרות לרכישה מהקופה' };
-  }
-  if (sale?.source === 'pos_debt') {
-    return { is_debt: true, debt_reason: 'חוב שסומן בקופה' };
-  }
-  if (sale) return { is_debt: true, debt_reason: 'עסקה שנפתחה בקופה' };
-  return { is_debt: true, debt_reason: 'דרישת תשלום יזומה' };
+  // `pos_offer` / `pos_debt` are short-lived legacy values. The source no
+  // longer changes the accounting meaning: if the row became a counter sale,
+  // it remains a debt until it is paid or cancelled.
+  if (sale) return { is_debt: true, debt_reason: 'עסקת קופה שלא שולמה' };
+  return { is_debt: false, debt_reason: 'קישור תשלום ללא חוב' };
 }
 
 function unpaidHostActivityDebt(activity, registrations = []) {
