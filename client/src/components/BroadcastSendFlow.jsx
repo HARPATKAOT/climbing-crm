@@ -331,7 +331,26 @@ export default function BroadcastSendFlow({ jobId, onExit }) {
                   {(job.recipients || []).filter((r) => r.replied).map((r) => (
                     <div key={r.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <strong>{r.name || 'ללא שם'}</strong>
+                        {/* התיק נפתח בלשונית נפרדת — הדוח נשאר פתוח בדיוק כאן,
+                            ואפשר לחזור לסיכום אחרי הטיפול בלקוח. */}
+                        <button
+                          type="button"
+                          onClick={() => r.parent_id && window.open(`/leads?open=${encodeURIComponent(`parent:${r.parent_id}`)}`, '_blank')}
+                          title="פתיחת תיק הלקוח בלשונית חדשה — הדוח נשאר פתוח"
+                          style={{
+                            padding: 0,
+                            border: 'none',
+                            background: 'none',
+                            color: 'var(--blue)',
+                            font: 'inherit',
+                            fontWeight: 700,
+                            cursor: r.parent_id ? 'pointer' : 'default',
+                            textDecoration: r.parent_id ? 'underline' : 'none',
+                            textUnderlineOffset: 3,
+                          }}
+                        >
+                          {r.name || 'ללא שם'}
+                        </button>
                         {r.button_reply && <span className="badge badge-green">לחצו על הכפתור</span>}
                       </div>
                       {r.reply_text && (
