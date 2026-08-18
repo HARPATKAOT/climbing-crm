@@ -6,7 +6,7 @@ import {
   Mail, FileUp, Send, ShieldCheck, Sparkles, Building2, Link2,
   CalendarDays, CalendarRange, LayoutList, ShoppingBag, UsersRound, Search,
   ChevronDown, Download, Printer, ExternalLink, Copy, RotateCcw,
-  Clock3, XCircle, MoreHorizontal,
+  Clock3, XCircle, MoreHorizontal, Info,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { icountClientUrl } from '../utils/icountLinks.js';
@@ -51,13 +51,18 @@ async function fetchJson(url, options) {
   return body;
 }
 
-function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false, onClick }) {
+function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = false, onClick, info }) {
   return <article
     className={`finance-metric ${onClick ? 'is-clickable' : ''}`}
     style={{ '--metric': color }}
     onClick={onClick}
     role={onClick ? 'button' : undefined}
     title={onClick ? 'לחיצה מציגה את העסקאות שמאחורי המספר' : undefined}>
+    {info && <>
+      <button type="button" className="finance-metric-info" aria-label={`מה זה ${label}?`}
+        onClick={(event) => event.stopPropagation()}><Info size={14} /></button>
+      <span className="finance-metric-tip" onClick={(event) => event.stopPropagation()}><b>{label}</b>{info}</span>
+    </>}
     <span className="finance-metric-icon"><Icon size={18} /></span><span className="finance-metric-label">{label}</span>
     <strong>{plain ? number.format(value || 0) : money.format(value || 0)}</strong>{note && <small>{note}</small>}
   </article>;
@@ -421,10 +426,10 @@ function PaymentCentre({ data, salesData, salesView, onSalesViewChange, from, to
 
   return <div className="finance-payment-centre">
     <section className="finance-metrics finance-payment-metrics">
-      <Metric label="גבייה נטו" value={summary.net_collected} note={`${number.format(summary.paid_count || 0)} תשלומים`} icon={BadgeDollarSign} color="#2DD4BF" />
-      <Metric label="חובות לגבייה" value={summary.open_amount} note={`${number.format(summary.open_count || 0)} חובות פתוחים`} icon={Clock3} color="#FBBF24" />
-      <Metric label="זיכויים" value={summary.refunds} note={`${number.format(summary.refunded_count || 0)} פעולות`} icon={RotateCcw} color="#FB7185" />
-      <Metric label="לקוחות בתקופה" value={summary.customers} note={`${number.format(summary.records || 0)} רשומות`} icon={UsersRound} color="#A78BFA" plain />
+      <Metric label="גבייה נטו" value={summary.net_collected} note={`${number.format(summary.paid_count || 0)} תשלומים`} icon={BadgeDollarSign} color="#2DD4BF" info="מה שנגבה על העסקאות המוצגות בתקופה, אחרי זיכויים. שונה מ'גבייה בפועל' שבסקירה: שם סופרים כל כסף שזז לפי יום התשלום, כאן לפי העסקאות שברשימה." />
+      <Metric label="חובות לגבייה" value={summary.open_amount} note={`${number.format(summary.open_count || 0)} חובות פתוחים`} icon={Clock3} color="#FBBF24" info="כל מה שטרם נגבה, מכל התקופות — אותו מספר כמו 'חוב פתוח' שבסקירה. שורות החוב מוצגות ברשימה גם כשהן מחוץ לטווח התאריכים." />
+      <Metric label="זיכויים" value={summary.refunds} note={`${number.format(summary.refunded_count || 0)} פעולות`} icon={RotateCcw} color="#FB7185" info="החזרים וזיכויים שבוצעו בתקופה על העסקאות המוצגות, כולל ביטולים שנעשו ישירות ב־iCount." />
+      <Metric label="לקוחות בתקופה" value={summary.customers} note={`${number.format(summary.records || 0)} רשומות`} icon={UsersRound} color="#A78BFA" plain info="כמה לקוחות שונים מופיעים ברשומות שבתקופה — תשלומים, חובות וזיכויים יחד." />
     </section>
 
     <section className="card finance-payment-workspace">
@@ -796,7 +801,7 @@ export default function FinancialReports() {
       </button>)}</div>
     {loading ? <div className="finance-loading"><RefreshCw className="spin" /> טוען דוחות…</div> : <>
       {tab === 'overview' && <><section className="finance-metrics">
-        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" onClick={() => openIncome('all')} /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" onClick={() => openIncome('paid')} /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" onClick={() => openIncome('debt')} /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" onClick={() => openIncome('refunded')} /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" onClick={() => openIncome('all')} />
+        <Metric label="הכנסה חשבונאית" value={kpi.revenue_net} note="ללא מע״מ · חשבוניות בלבד" icon={BadgeDollarSign} color="#38BDF8" onClick={() => openIncome('all')} info="סכום מסמכי ההכנסה שהונפקו בתקופה שנבחרה — חשבוניות וחשבוניות מס־קבלה, ללא מע״מ ובניכוי זיכויים. זו ההכנסה המוכרת חשבונאית, גם אם הכסף טרם נכנס בפועל." /><Metric label="גבייה בפועל" value={kpi.collected} note="כולל מע״מ" icon={WalletCards} color="#2DD4BF" onClick={() => openIncome('paid')} info="כסף שנכנס בפועל בתקופה, כולל מע״מ ואחרי החזרים — לפי יום התשלום. חשבונית מחודש קודם ששולמה החודש נספרת כאן החודש, ולכן המספר שונה מההכנסה החשבונאית." /><Metric label="חוב פתוח" value={kpi.open_debt} note="יתרה שטרם נגבתה" icon={Landmark} color="#FBBF24" onClick={() => openIncome('debt')} info="כל מה שטרם נגבה, מכל התקופות: יתרות חשבוניות שלא נפרעו ואירועים בהתחייבות המזמין שטרם שולמו. הכרטיס מתעלם מסינון התאריכים — חוב לא נעלם כשמחליפים חודש." /><Metric label="זיכויים" value={kpi.credits} note="בנפרד מהכנסה" icon={ReceiptText} color="#FB7185" onClick={() => openIncome('refunded')} info="זיכויים וביטולים שהונפקו בתקופה, כולל מע״מ. מוצגים בנפרד — הם כבר מנוכים מההכנסה ומהגבייה, כאן רואים את היקפם." /><Metric label="עסקה ממוצעת" value={kpi.average_transaction} note={`${number.format(kpi.paying_customers || 0)} לקוחות משלמים`} icon={CircleDollarSign} color="#A78BFA" onClick={() => openIncome('all')} info="הסכום הממוצע למסמך הכנסה בתקופה. מספר הלקוחות המשלמים — כמה לקוחות שונים עומדים מאחורי המסמכים." />
       </section>{featureFlags.dashboard_v2
         ? <>
           <div className="tab-bar tab-bar-sub finance-overview-sub">

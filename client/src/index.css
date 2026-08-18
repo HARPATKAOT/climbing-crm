@@ -2188,6 +2188,11 @@ select option, select optgroup {
 .finance-overview-sub { margin-top: 2px; }
 .finance-month-label { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
 /* קוביית KPI לחיצה */
+.finance-metric-info { position: absolute; top: 12px; inset-inline-start: 12px; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%; background: transparent; color: var(--text-3); cursor: help; }
+.finance-metric-info:hover, .finance-metric-info:focus-visible { color: var(--text-1); background: color-mix(in srgb, var(--metric) 18%, transparent); }
+.finance-metric-tip { position: absolute; inset: 0; z-index: 3; display: none; padding: 12px 14px; background: color-mix(in srgb, var(--bg-card) 94%, var(--metric)); color: var(--text-1); font-size: 12px; line-height: 1.55; text-align: start; overflow-y: auto; }
+.finance-metric-tip b { display: block; margin-bottom: 4px; color: var(--metric); }
+.finance-metric-info:hover ~ .finance-metric-tip, .finance-metric-info:focus-visible ~ .finance-metric-tip, .finance-metric-tip:hover { display: block; }
 .finance-metric.is-clickable { cursor: pointer; transition: transform .12s ease, border-color .12s ease; }
 .finance-metric.is-clickable:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--metric) 55%, var(--border)); }
 .finance-payment-filters label > span { display: inline-flex; align-items: center; gap: 4px; }
