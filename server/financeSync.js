@@ -259,22 +259,30 @@ async function mapConcurrency(rows, limit, worker) {
   return output;
 }
 
-async function docInfoWithRetry(row) {
+/**
+ * הגבלת קצב אינה תקלה אלא בקשה להאט. המתנה של מאיות שנייה רק שורפת ניסיון
+ * נוסף — וכך מסמכים נשמרו בלי פרטי הפירעון שלהם והוצגו כ„חוב פתוח”.
+ * משיכה מלאה עוברת מאות חודשים ואלפי מסמכים, ולכן כל קריאה ל-iCount בזרם
+ * הזה חייבת לדעת להמתין באמת.
+ */
+async function icountWithBackoff(call, { attempts = 6, rateLimitOnly = false } = {}) {
   let lastError;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await icount.getDocInfo({ doctype: row.doctype, docnum: row.docnum });
+      return await call();
     } catch (error) {
       lastError = error;
-      if (attempt >= 5) break;
-      // הגבלת קצב אינה תקלה אלא בקשה להאט. המתנה של מאיות שנייה רק שורפת
-      // ניסיון נוסף, והמסמך נשמר בסוף בלי פרטי הפירעון שלו — וזה בדיוק מה
-      // שהפך מסמכים משולמים ל„חוב פתוח” על המסך.
-      const wait = error?.code === 'rate_limited' ? 3000 * (attempt + 1) : 200 * (attempt + 1);
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      const rateLimited = error?.code === 'rate_limited';
+      // „יותר מדי תוצאות” נפתר בחלוקת הטווח, לא בהמתנה — המתקשר מטפל בו.
+      if (attempt >= attempts - 1 || (rateLimitOnly && !rateLimited)) break;
+      await new Promise((resolve) => setTimeout(resolve, rateLimited ? 3000 * (attempt + 1) : 200 * (attempt + 1)));
     }
   }
   throw lastError;
+}
+
+async function docInfoWithRetry(row) {
+  return icountWithBackoff(() => icount.getDocInfo({ doctype: row.doctype, docnum: row.docnum }));
 }
 
 function normalizePaymentList(value) {
@@ -334,7 +342,7 @@ function docDetailRecords(row, detail) {
 
 async function searchAdaptive(search, startDate, endDate) {
   try {
-    return await search({ startDate, endDate });
+    return await icountWithBackoff(() => search({ startDate, endDate }), { rateLimitOnly: true });
   } catch (error) {
     if (!/יותר מדי תוצאות|too many results/i.test(error.message || '') || startDate >= endDate) throw error;
     const start = new Date(`${startDate}T00:00:00Z`);
