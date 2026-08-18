@@ -604,7 +604,8 @@ export default function FinancialReports() {
     else url.searchParams.delete('status');
     window.history.replaceState(window.history.state, '', url);
   };
-  const [from, setFrom] = useState(yearStart());
+  // ברירת המחדל בפתיחה: החודש הנוכחי — המבט השוטף של בעל העסק.
+  const [from, setFrom] = useState(`${today().slice(0, 7)}-01`);
   const [to, setTo] = useState(today());
   const [dashboard, setDashboard] = useState(null);
   const [transactions, setTransactions] = useState([]);
