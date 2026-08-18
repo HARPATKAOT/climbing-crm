@@ -114,14 +114,18 @@ async function fetchSmeAccountData({ credentials, since }) {
     // שנוכל גם לקרוא את אותו API וגם לזהות את הכתובות שלו ברשת.
     await new Promise((resolve) => setTimeout(resolve, 8000));
     const fromDate = String(since || '').replace(/-/g, '') || undefined;
+    // הגרסה העסקית של רשימת החשבונות (התגלה מרשת האפליקציה: bsUserAccountsData)
     const accountsInfo = await page.evaluate(async () => {
       try {
-        const response = await fetch('/Titan/gatewayAPI/userAccountsData', { credentials: 'include' });
+        const response = await fetch('/Titan/gatewayAPI/userAccounts/bsUserAccountsData', { credentials: 'include' });
         if (!response.ok) return { httpStatus: response.status };
         return await response.json();
       } catch (error) { return { fetchError: String(error) }; }
     });
-    if (!accountsInfo?.UserAccountsData) {
+    // מבנה התשובה העסקית אינו מתועד — דולים כל מה שנראה כמספר חשבון.
+    const accountIds = [...new Set((JSON.stringify(accountsInfo || {}).match(/"\d{10}"/g) || [])
+      .map((quoted) => quoted.slice(1, -1)))];
+    if (!accountIds.length) {
       // אבחון: אילו כתובות נתונים האפליקציה עצמה קראה — הכתובת הנכונה
       // נמצאת ביניהן, והסבב הבא של הקוד ישתמש בה.
       const resources = await page.evaluate(() => [...new Set(
@@ -130,24 +134,22 @@ async function fetchSmeAccountData({ credentials, since }) {
           .filter((name) => /gateway|api|titan|account|transaction/i.test(name))
           .map((name) => name.replace(/^https:\/\/start\.telebank\.co\.il/, '').split('?')[0]),
       )].slice(0, 25));
-      const error = new Error(`הכניסה הצליחה (${landedUrl}) אבל קריאת הנתונים לא: ${JSON.stringify(accountsInfo).slice(0, 120)} | רשת: ${resources.join(' ; ')}`);
+      const error = new Error(`הכניסה הצליחה (${landedUrl}) אבל רשימת החשבונות לא נקראה: ${JSON.stringify(accountsInfo).slice(0, 200)} | רשת: ${resources.join(' ; ')}`);
       error.code = 'scrape_failed';
       throw error;
     }
 
-    const accounts = (accountsInfo.UserAccountsData.UserAccounts || [])
-      .map((account) => account?.NewAccountInfo?.AccountID)
-      .filter(Boolean);
     const rawTxns = [];
-    for (const accountNumber of accounts) {
+    const attempts = [];
+    for (const accountNumber of accountIds) {
       const data = await page.evaluate(async (acc, from) => {
         const query = `IsCategoryDescCode=True&IsTransactionDetails=True&IsEventNames=True&IsFutureTransactionFlag=True${from ? `&FromDate=${from}` : ''}`;
         const response = await fetch(`/Titan/gatewayAPI/lastTransactions/${acc}/Date?${query}`, { credentials: 'include' });
-        if (!response.ok) return { httpStatus: response.status };
-        return response.json();
+        const text = await response.text();
+        try { return JSON.parse(text); } catch { return { httpStatus: response.status, body: text.slice(0, 120) }; }
       }, accountNumber, fromDate);
       const block = data?.CurrentAccountLastTransactions;
-      if (!block) continue;
+      if (!block) { attempts.push(`${accountNumber}: ${JSON.stringify(data).slice(0, 160)}`); continue; }
       const toRaw = (entry, pending) => ({
         identifier: entry.OperationNumber,
         date: String(entry.OperationDate || ''),
@@ -158,6 +160,11 @@ async function fetchSmeAccountData({ credentials, since }) {
       });
       for (const entry of block.OperationEntry || []) rawTxns.push({ ...toRaw(entry, false), accountNumber });
       for (const entry of block.FutureTransactionsBlock?.FutureTransactionEntry || []) rawTxns.push({ ...toRaw(entry, true), accountNumber });
+    }
+    if (!rawTxns.length && attempts.length) {
+      const error = new Error(`חשבונות נמצאו (${accountIds.join(',')}) אבל התנועות לא נקראו: ${attempts.join(' | ')}`);
+      error.code = 'scrape_failed';
+      throw error;
     }
     return rawTxns;
   } finally {
