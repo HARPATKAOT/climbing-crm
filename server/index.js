@@ -34,6 +34,7 @@ import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from '
 import {
   applyResponse,
   calendarSlotCandidates,
+  classNeedsFor,
   eligibleEmployees,
   expandWeeklySlots,
   isWindowOpen,
@@ -623,6 +624,7 @@ import {
   keepIntroStatus,
   consecutiveAbsences,
   activityDateRange,
+  getGroupDays,
   planVacationAttendanceUpdates,
   planVacationAttendanceReverts,
   findTrainingVacation,
@@ -657,6 +659,12 @@ import {
   employeeCanSignDailySafety,
   employeeIsWallStaff,
 } from './staffAttendanceSettings.js';
+import {
+  readStaffReliabilitySettings,
+  readStaffReliabilitySettingsSync,
+  writeStaffReliabilitySettings,
+} from './staffReliabilitySettings.js';
+import { staffReliability } from './staffReliability.js';
 import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
   employeeCanOperateWall,
@@ -2054,6 +2062,22 @@ app.put('/api/settings/employee-onboard-form101', requireOwner, async (req, res)
 });
 
 // הגדרות שעון נוכחות / פתיחת קיר (דקות לפני שיבוץ + נוסח אישור)
+app.get('/api/settings/staff-reliability', async (_req, res) => {
+  try {
+    res.json(await readStaffReliabilitySettings(db, supa));
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'טעינת ההגדרות נכשלה' });
+  }
+});
+
+app.put('/api/settings/staff-reliability', requireOwner, async (req, res) => {
+  try {
+    res.json(await writeStaffReliabilitySettings(db, supa, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת ההגדרות נכשלה' });
+  }
+});
+
 app.get('/api/settings/staff-attendance', async (_req, res) => {
   try {
     res.json(await readStaffAttendanceSettings(db, supa));
@@ -13964,12 +13988,16 @@ const STAFF_ROLE_KEY_FOR = {
   assistant: SYSTEM_ROLE_KEYS.ASSISTANT,
 };
 
-function staffAttendanceRows({ groupId = null, date = null, employeeId = null } = {}) {
+function staffAttendanceRows({ groupId = null, activityId = null, date = null, employeeId = null } = {}) {
   return (db.get('staff_attendance') || []).filter((r) =>
     (!groupId || r.group_id === groupId)
+    && (!activityId || r.activity_id === activityId)
     && (!date || r.date === date)
     && (!employeeId || r.employee_id === employeeId));
 }
+
+/** סימוני נוכחות לאירוע ביומן — אותה טבלה, רק שהעוגן הוא האירוע ולא החוג. */
+const EVENT_ATTENDANCE_STATUSES = ['present', 'absent', 'substituted'];
 
 /** שעות האימון מתוך הגדרת הקבוצה — ברירת מחדל שאפשר לתקן במסך השכר. */
 function groupShiftTimes(group) {
@@ -14054,8 +14082,8 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
   const existing = staffAttendanceRows({ groupId, date })
     .find((r) => r.employee_id === employeeId) || null;
 
-  // סטטוס שאינו „נוכח”/„נעדר” מנקה את הסימון לגמרי — חזרה למצב „טרם סומן”.
-  if (status !== 'present' && status !== 'absent') {
+  // סטטוס שאינו אחד מהשלושה מנקה את הסימון לגמרי — חזרה למצב „טרם סומן”.
+  if (!EVENT_ATTENDANCE_STATUSES.includes(status)) {
     if (existing) db.delete('staff_attendance', existing.id);
     syncClassPayRow({ group, date, employeeId, paid: false });
     return res.json({ status: null, removed: !!existing });
@@ -14073,6 +14101,8 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
     group,
     date,
     employeeId,
+    // „הוחלף” אינו נוכחות: מי שלא הגיע אינו מקבל שכר על המשמרת, והמחליף
+    // מקבל שורה משלו.
     paid: status === 'present' && PAID_STAFF_ROLES.includes(staffRole),
     times,
     roleTitle: await systemRoleLabel(STAFF_ROLE_KEY_FOR[staffRole]),
@@ -14085,6 +14115,11 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
     role: staffRole,
     status,
     substitute_for: substituteFor || null,
+    // מי נכנס במקומו. הצד השני של אותה החלפה, כדי שאפשר יהיה לקרוא אותה
+    // משני הכיוונים — עד היום `substitute_for` נכתב ואיש לא קרא אותו.
+    substituted_by: req.body?.substituted_by || null,
+    marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+    marked_at: new Date().toISOString(),
     // גם מתנדב צובר שעות — הן פשוט לא הופכות לכסף.
     hours: status === 'present' ? (payRow?.hours ?? times.hours) : 0,
   };
@@ -14099,6 +14134,236 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
  * סיכום לתיק העובד: כמה שעות עבד וכמה פעמים נעדר, מופרד לפי תפקיד כדי
  * שהתנדבות כעוזר מדריך לא תיראה כמו שעות בתשלום.
  */
+/**
+ * מה יש היום ומי משובץ לזה.
+ *
+ * מסלול נפרד מ-`/api/wall-shift/state`, שנדגם כל הזמן וכבד ממילא. כאן נשאלת
+ * שאלה אחת: אילו אירועים וחוגים מתקיימים היום, מה כל אחד צריך, מי משובץ אליו,
+ * ומה כבר סומן — כדי שהדלפק יוכל לסמן הגעה בלי לפתוח את היומן.
+ */
+app.get('/api/day-staffing', (req, res) => {
+  const date = String(req.query.date || israelDateStr()).slice(0, 10);
+  const employees = db.get('employees') || [];
+  const nameOf = (id) => employees.find((e) => String(e.id) === String(id))?.name || 'עובד/ת';
+  const assignments = (db.get('work_assignments') || [])
+    .filter((row) => String(row.date || '').slice(0, 10) === date);
+  const marks = staffAttendanceRows({ date });
+  const activities = db.get('activities') || [];
+  const needsById = Object.fromEntries((db.get(STAFF_NEEDS_TABLE) || []).map((r) => [r.id, r.needs]));
+  const classNeeds = classNeedsByGroupMap();
+  const classRoles = signupClassRoles();
+
+  const placedFor = (predicate, markPredicate) => assignments.filter(predicate).map((row) => {
+    const mark = marks.find((m) => m.employee_id === row.employee_id && markPredicate(m)) || null;
+    return {
+      work_assignment_id: row.id,
+      employee_id: row.employee_id,
+      name: nameOf(row.employee_id),
+      role: row.role || '',
+      start_time: row.start_time || null,
+      end_time: row.end_time || null,
+      status: mark?.status || null,
+      substitute_for: mark?.substitute_for || null,
+      substituted_by: mark?.substituted_by || null,
+    };
+  });
+
+  const dayActivities = activities
+    .filter((activity) => {
+      const type = String(activity.type || '').toLowerCase();
+      if (type === 'training_vacation') return false;
+      const status = String(activity.status || '').toLowerCase();
+      if (activity.cancelled || status === 'cancelled' || status === 'canceled') return false;
+      return activityDateRange(activity).includes(date);
+    })
+    .map((activity) => ({
+      activity_id: activity.id,
+      name: activity.name || '',
+      type: activity.type || '',
+      start_time: activity.start_time || null,
+      end_time: activity.end_time || null,
+      needs: normalizeNeeds(needsById[activity.id], 0).filter((n) => n.role),
+      placed: placedFor(
+        (row) => row.activity_id === activity.id,
+        (m) => m.activity_id === activity.id
+      ),
+    }))
+    .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)));
+
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const onVacation = Boolean(findTrainingVacation(activities, date));
+  const dayClasses = onVacation ? [] : (db.get('groups') || [])
+    .filter((group) => getGroupDays(group).includes(weekday))
+    .map((group) => ({
+      group_id: group.id,
+      name: group.name || '',
+      time: group.time || '',
+      duration: Number(group.duration) || 50,
+      needs: classNeedsFor(classNeeds[group.id], classRoles),
+      // בחוג המשובצים הם השיבוץ הקבוע שבלוח, ולא שורות ביומן העבודה.
+      placed: [group.trainer, ...(Array.isArray(group.assistants) ? group.assistants : [])]
+        .filter(Boolean)
+        .map((employeeId, index) => {
+          const mark = marks.find((m) => m.group_id === group.id && m.employee_id === employeeId) || null;
+          return {
+            employee_id: employeeId,
+            name: nameOf(employeeId),
+            role: index === 0 ? (classRoles[0] || '') : (classRoles[1] || ''),
+            status: mark?.status || null,
+            substitute_for: mark?.substitute_for || null,
+            substituted_by: mark?.substituted_by || null,
+          };
+        }),
+    }))
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+
+  res.json({ date, vacation: onVacation, activities: dayActivities, classes: dayClasses });
+});
+
+/**
+ * נוכחות צוות באירוע ביומן.
+ *
+ * מראה של נוכחות החוג, בשני הבדלים שנובעים מהמודל: העוגן הוא האירוע ולא החוג,
+ * ואין כאן שום נגיעה בשכר. שורת השכר של האירוע כבר קיימת ומוקפאת — הסימון הוא
+ * ציר נפרד שאומר אם האדם הגיע, ולא כמה מגיע לו. מי שלא הגיע נשאר עם שורתו,
+ * מסומן, וההחלטה מה לעשות איתה היא של המנהל במסך השכר.
+ */
+app.post('/api/activities/:id/staff-attendance', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+
+  const {
+    date, employee_id: employeeId, status,
+    substitute_for: substituteFor, substituted_by: substitutedBy,
+  } = req.body || {};
+  if (!date) return res.status(400).json({ error: 'date is required' });
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+
+  const existing = staffAttendanceRows({ activityId: activity.id, date })
+    .find((r) => r.employee_id === employeeId) || null;
+
+  if (!EVENT_ATTENDANCE_STATUSES.includes(status)) {
+    if (existing) db.delete('staff_attendance', existing.id);
+    return res.json({ status: null, removed: Boolean(existing) });
+  }
+
+  // השורה ביומן העבודה היא מה שקושר את הסימון לשיבוץ שהוא מדבר עליו.
+  const placement = (db.get('work_assignments') || []).find((row) =>
+    row.employee_id === employeeId
+    && row.activity_id === activity.id
+    && String(row.date || '').slice(0, 10) === String(date).slice(0, 10));
+
+  const fields = {
+    group_id: null,
+    activity_id: activity.id,
+    date: String(date).slice(0, 10),
+    employee_id: employeeId,
+    // תפקיד האירוע הוא תווית ולא 'trainer'/'assistant' — הוא בא מהשיבוץ עצמו.
+    role: null,
+    role_label: placement?.role || req.body?.role_label || '',
+    work_assignment_id: placement?.id || null,
+    status,
+    substitute_for: substituteFor || null,
+    substituted_by: substitutedBy || null,
+    marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+    marked_at: new Date().toISOString(),
+    hours: status === 'present' ? (Number(placement?.hours) || 0) : 0,
+  };
+  const row = existing
+    ? db.update('staff_attendance', existing.id, fields)
+    : db.insert('staff_attendance', fields);
+  res.status(existing ? 200 : 201).json({ status, row });
+});
+
+/**
+ * החלפה: פעולה אחת ששתי שורות.
+ *
+ * מי שלא הגיע מסומן „הוחלף” ומי נכנס במקומו, והמחליף מסומן „נוכח” ואת מי הוא
+ * מחליף. שתי השורות נכתבות יחד כדי שלא ייווצר מצב שבו רק צד אחד יודע.
+ */
+app.post('/api/activities/:id/staff-substitution', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+  const date = String(req.body?.date || '').slice(0, 10);
+  const originalId = String(req.body?.employee_id || '');
+  const substituteId = String(req.body?.substitute_id || '');
+  if (!date || !originalId || !substituteId) {
+    return res.status(400).json({ error: 'צריך תאריך, מי לא הגיע ומי הגיע במקומו' });
+  }
+  if (originalId === substituteId) {
+    return res.status(400).json({ error: 'אי אפשר להחליף את עצמך' });
+  }
+  try {
+    requireActiveEmployees([substituteId]);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
+  }
+
+  const rows = staffAttendanceRows({ activityId: activity.id, date });
+  const placement = (db.get('work_assignments') || []).find((row) =>
+    row.employee_id === originalId
+    && row.activity_id === activity.id
+    && String(row.date || '').slice(0, 10) === date);
+
+  const upsert = (employeeId, fields) => {
+    const existing = rows.find((r) => r.employee_id === employeeId);
+    const base = {
+      group_id: null,
+      activity_id: activity.id,
+      date,
+      employee_id: employeeId,
+      role: null,
+      role_label: placement?.role || '',
+      marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+      marked_at: new Date().toISOString(),
+      ...fields,
+    };
+    return existing
+      ? db.update('staff_attendance', existing.id, base)
+      : db.insert('staff_attendance', base);
+  };
+
+  const original = upsert(originalId, {
+    status: 'substituted',
+    substituted_by: substituteId,
+    substitute_for: null,
+    work_assignment_id: placement?.id || null,
+    hours: 0,
+  });
+  const substitute = upsert(substituteId, {
+    status: 'present',
+    substitute_for: originalId,
+    substituted_by: null,
+    work_assignment_id: null,
+    hours: Number(placement?.hours) || 0,
+  });
+
+  // המחליף עבד, ולכן מגיעה לו שורת שכר משלו — נכתבת דרך אותה נורמליזציה של
+  // כל שיבוץ אחר, כדי שהתעריף והקיפאון יתנהגו בדיוק אותו דבר.
+  let created = null;
+  if (placement) {
+    const already = (db.get('work_assignments') || []).some((row) =>
+      row.employee_id === substituteId
+      && row.activity_id === activity.id
+      && String(row.date || '').slice(0, 10) === date);
+    if (!already) {
+      created = db.insert('work_assignments', withFrozenPay(normalizeWorkAssignment({
+        employee_id: substituteId,
+        activity_id: activity.id,
+        date,
+        work_type: placement.work_type,
+        role: placement.role,
+        start_time: placement.start_time,
+        end_time: placement.end_time,
+        source: 'substitution',
+        notes: 'החלפה',
+      })));
+    }
+  }
+
+  res.json({ original, substitute, created });
+});
+
 app.get('/api/employees/:id/attendance-summary', (req, res) => {
   if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, req.params.id)) {
     return res.status(403).json({ error: 'אין הרשאה לצפות בנוכחות של עובד אחר' });
@@ -14107,15 +14372,19 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
   const rows = staffAttendanceRows({ employeeId: req.params.id })
     .filter((r) => (!from || r.date >= from) && (!to || r.date <= to));
 
-  const blank = () => ({ present: 0, absent: 0, hours: 0 });
-  const summary = { total: blank(), trainer: blank(), assistant: blank() };
+  const blank = () => ({ present: 0, absent: 0, substituted: 0, hours: 0 });
+  // אירוע אינו „מדריך” ואינו „עוזר” — התפקיד שלו הוא תווית חופשית, ובלי דלי
+  // משלו הוא היה נופל לדלי המדריכים ומנפח את שעות החוגים.
+  const summary = { total: blank(), trainer: blank(), assistant: blank(), events: blank() };
 
   for (const row of rows) {
-    const bucket = summary[row.role] || summary.trainer;
-    const target = row.status === 'absent' ? 'absent' : 'present';
+    const bucket = row.group_id ? (summary[row.role] || summary.trainer) : summary.events;
+    const target = row.status === 'absent'
+      ? 'absent'
+      : (row.status === 'substituted' ? 'substituted' : 'present');
     bucket[target] += 1;
     summary.total[target] += 1;
-    if (row.status !== 'absent') {
+    if (target === 'present') {
       const hrs = Number(row.hours) || 0;
       bucket.hours += hrs;
       summary.total.hours += hrs;
@@ -14125,7 +14394,19 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
     summary[key].hours = Math.round(summary[key].hours * 100) / 100;
   }
 
-  res.json({ from: from || null, to: to || null, ...summary, rows });
+  res.json({
+    from: from || null,
+    to: to || null,
+    ...summary,
+    // אחוז ההגעה נמדד תמיד על כל ההיסטוריה ולא על החלון שנשאל: דגל שמשתנה
+    // כשמחליפים חודש בתצוגה אינו דגל.
+    reliability: staffReliability(
+      staffAttendanceRows({ employeeId: req.params.id }),
+      readStaffReliabilitySettingsSync(db),
+      israelDateStr()
+    ),
+    rows,
+  });
 });
 
 /**

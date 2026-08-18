@@ -38,6 +38,20 @@ export default function EmployeeSelf({ previewUserId = '', onBack = null }) {
   const [draft, setDraft] = useState({ type: 'other', period: currentMonth, title: '' });
   const fileRef = useRef(null);
 
+  const [reliability, setReliability] = useState(null);
+
+  // הנוכחות אינה חלק מתיק העובד שנטען למעלה — היא מסלול משלה, ולכן נשלפת כאן.
+  useEffect(() => {
+    const id = data?.employee?.id;
+    if (!id) return undefined;
+    let cancelled = false;
+    fetch(`/api/employees/${encodeURIComponent(id)}/attendance-summary`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => { if (!cancelled) setReliability(body?.reliability || null); })
+      .catch(() => { if (!cancelled) setReliability(null); });
+    return () => { cancelled = true; };
+  }, [data?.employee?.id]);
+
   const load = async () => {
     setLoading(true);
     setError('');
@@ -163,6 +177,14 @@ export default function EmployeeSelf({ previewUserId = '', onBack = null }) {
         <article><CalendarDays /><span>שעות בחודש</span><strong>{data.summary?.hours || 0}</strong></article>
         <article><PiggyBank /><span>שכר שנצבר</span><strong>{money(data.summary?.earned)}</strong></article>
         <article><Coins /><span>משמרות שבוצעו</span><strong>{(data.shifts || []).filter((row) => row.status === 'logged').length}</strong></article>
+        {/* אותו מספר שהמנהל רואה בתיק. עובד שנמדד צריך לדעת לפי מה. */}
+        {reliability && (
+          <article>
+            <UserRound />
+            <span>אחוז הגעה</span>
+            <strong>{reliability.total.attendance_pct === null ? '—' : `${reliability.total.attendance_pct}%`}</strong>
+          </article>
+        )}
       </div>
 
       <section className="employee-self-section">
