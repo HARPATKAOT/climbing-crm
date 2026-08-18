@@ -498,3 +498,21 @@ test('the overview shows open debt as stock: a month filter never hides it', () 
   assert.equal(august.kpis.revenue_net, 0);
   assert.equal(july.kpis.revenue_net, 2600);
 });
+
+test('an iCount storno arrives as a negative paid payment and counts as a credit, not a collection', () => {
+  const report = buildPaymentsReport({
+    payments: [
+      { id: 'p-orig', status: 'paid', amount: 1150, paid_at: '2026-08-01T10:00:00Z', icount_doc_number: '4093' },
+      { id: 'p-storno', status: 'paid', amount: -920, paid_at: '2026-08-04T10:00:00Z', icount_doc_number: '4097' },
+    ],
+    from: '2026-08-01',
+    to: '2026-08-31',
+  });
+  const storno = report.rows.find((row) => row.payment_id === 'p-storno');
+  assert.equal(storno.status, 'refunded');
+  assert.equal(storno.gross_collected, 0);
+  assert.equal(storno.refund_amount, 920);
+  assert.equal(report.summary.gross_collected, 1150);
+  assert.equal(report.summary.refunds, 920);
+  assert.equal(report.summary.net_collected, 230);
+});

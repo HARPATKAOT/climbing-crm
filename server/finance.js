@@ -813,10 +813,17 @@ export function buildPaymentsReport({
     // חוב פתוח הוא מלאי, לא תזרים: הוא מוצג תמיד, בלי קשר לטווח התאריכים —
     // סינון של השבוע הנוכחי אסור לו להעלים חוב שנוצר לפני שבועיים.
     const explicitRefund = Number(payment.refund_amount ?? sale?.refund_amount ?? 0);
-    const status = normalizePaymentStatus(payment.status || sale?.status, {
+    const normalizedStatus = normalizePaymentStatus(payment.status || sale?.status, {
       amount: payment.amount ?? sale?.total,
       refundAmount: explicitRefund,
     });
+    // זיכוי שנעשה ב-iCount (סטורנו) מגיע מה-webhook כתשלום „שולם” בסכום
+    // שלילי. ספירת הערך המוחלט כגבייה גם ניפחה את הגבייה וגם הותירה את
+    // קוביית הזיכויים על אפס — הכסף הזה יצא, לא נכנס.
+    const signedAmount = Number(payment.amount ?? sale?.total ?? 0);
+    const isCreditPayment = signedAmount < 0
+      && ['paid', 'refunded', 'partial_refund'].includes(normalizedStatus);
+    const status = isCreditPayment ? 'refunded' : normalizedStatus;
     const debt = OPEN_PAYMENT_STATUSES.has(status)
       ? openDebtClassification({
         payment,
@@ -856,7 +863,9 @@ export function buildPaymentsReport({
     const items = detailRows.length
       ? detailRows.map((item) => normalizedItem(item))
       : (payment.description ? [normalizedItem({ description: payment.description, amount: payment.amount })] : []);
-    const amounts = paymentRowAmounts(status, payment.amount ?? sale?.total ?? document?.total_gross, explicitRefund);
+    const amounts = isCreditPayment
+      ? paymentRowAmounts('refunded', signedAmount, explicitRefund, { accountingCredit: true })
+      : paymentRowAmounts(status, payment.amount ?? sale?.total ?? document?.total_gross, explicitRefund);
     const customerId = payment.parent_id || sale?.parent_id || document?.client_id || null;
     const paymentMethod = operationalPaymentMethod(payment, sale);
 
