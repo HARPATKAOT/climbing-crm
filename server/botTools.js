@@ -2152,6 +2152,20 @@ export function buildCustomerTools({
         };
       }
       const previous = String(student.birthDate || student.birth_date || '');
+      // „4.12.82” for a girl her mother had just placed in כיתה ג׳ was read as
+      // 1982, and the card went from seven years old to forty-four. Nothing
+      // downstream could work after that, and nobody would have noticed but
+      // for the placement failing. A correction moves a date by days or by a
+      // year; anything wider is a different person, and is worth one question.
+      const previousAge = previous ? ageFromBirthDate(previous) : null;
+      if (previousAge && Math.abs(previousAge.years - age.years) > 5) {
+        return {
+          error: 'הפרש הגילים גדול מדי מכדי שזה יהיה תיקון — יש לבקש מהלקוח '
+            + 'את השנה המלאה בארבע ספרות ולא לעדכן עד שתתקבל',
+          תאריך_שנמסר: wanted,
+          תאריך_בכרטיס: previous,
+        };
+      }
       if (previous === wanted) {
         return {
           עודכן: false,

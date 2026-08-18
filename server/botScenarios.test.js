@@ -76,6 +76,11 @@ async function withSeed(data, run) {
   }
 }
 
+/** The seeded trainee as the database holds it right now. */
+function cardStudent(id) {
+  return (db.get('students') || []).find((s) => s.id === id) || {};
+}
+
 const NOW = new Date();
 const SIGNED_TODAY = NOW.toISOString();
 
@@ -1653,6 +1658,27 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
   });
 });
 
+test('שנה דו-ספרתית לא הופכת ילדה בת שבע לבת ארבעים וארבע', async () => {
+  // האמא כתבה „4.12.82” על ילדה שהיא עצמה אמרה שהיא בכיתה ג׳. זה נקרא 1982,
+  // הכרטיס עבר מ-7.5 ל-44, וכל מה שאחרי זה — התאמת קבוצה, שיבוץ — נשען על
+  // הנתון החדש. תיקון מזיז תאריך בימים או בשנה; פער כזה הוא אדם אחר.
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam({ birthDate: '2018-12-04' })],
+    ...signedFormFor(['s-yotam']),
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+
+    const wrong = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '1982-12-04' });
+    assert.match(wrong.error || '', /שנה המלאה/);
+    assert.equal(cardStudent('s-yotam').birthDate, '2018-12-04');
+
+    // תיקון אמיתי — יום, חודש, או שנה אחת — עובר כרגיל.
+    const real = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2017-12-04' });
+    assert.equal(real.עודכן, true);
+    assert.equal(cardStudent('s-yotam').birthDate, '2017-12-04');
+  });
+});
 test('שאלה של הלקוח אינה שם משפחה', async () => {
   // ליבי שאלה „באיזה עיר”, ולא היה בזה סימן שאלה ולא מילה מרשימת המילים —
   // אז הכרטיס שלה נשמר בשם „ליבי באיזה עיר”. אחרי זה היא עזבה.

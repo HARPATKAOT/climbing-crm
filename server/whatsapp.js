@@ -1376,6 +1376,20 @@ export const whatsappService = {
       if (recoveryGate.action !== 'reply') {
         return { success: false, status: 409, reason: recoveryGate.reason || recoveryGate.action };
       }
+      // The same rule as the live path, and it has to be repeated here because
+      // this is the sweep for messages nobody answered — which is exactly what
+      // a conversation a person is handling looks like from the outside. It
+      // wrote "מעביר לצוות" twice into one, eighteen minutes and then thirty
+      // seconds after the team's own replies.
+      const handler = staffHandlingThread(normalizedPhone, { resumedAt: parent?.bot_resumed_at });
+      if (handler && await continuesStaffThread({
+        transcript: recentConversation(normalizedPhone),
+        message: incomingText,
+        callModel: callGeminiChat,
+        apiKey: process.env.GEMINI_API_KEY,
+      })) {
+        return { success: false, status: 409, reason: 'staff_thread' };
+      }
     }
     const replyKey = String(context.replyKey || '');
     const claim = await claimBotReply(db, replyKey, { phone: normalizedPhone });
