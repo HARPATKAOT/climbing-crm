@@ -56,12 +56,20 @@ export const financeRouter = express.Router();
 
 // Render invokes this without a CRM session. Keep it before the finance access
 // middleware, but fail closed unless the dedicated header secret is present.
-financeRouter.post('/sync-scheduled', requireCronSecret, async (_req, res) => {
+financeRouter.post('/sync-scheduled', requireCronSecret, async (req, res) => {
   try {
     // רשת ביטחון: אם ה-cron הלילי הייעודי לא קיים, הריצה הלילית נתפסת כאן —
     // ברקע, בלי לעכב את הסנכרון עצמו, לכל היותר פעם ביום.
     runFinanceNightlyIfDue().catch((error) =>
       console.error('finance nightly (piggyback) failed:', error?.message || error));
+    // משיכה מלאה מושכת שוב את פרטי הפירעון של כל מסמכי iCount — ריצה של
+    // עשרות דקות, ולכן היא יוצאת לדרך ברקע ומדווחת דרך /sync-status.
+    if (req.body?.full === true) {
+      runFinanceSync({ full: true, sources: ['icount'] }).catch((error) =>
+        console.error('finance full sync failed:', error?.message || error));
+      res.json({ started: true, full: true });
+      return;
+    }
     res.json(await runFinanceSync({ full: false, sources: ['notion', 'icount'] }));
   } catch (error) {
     res.status(502).json({ error: error.message || 'סנכרון הנתונים נכשל' });

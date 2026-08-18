@@ -179,3 +179,53 @@ export async function sendStaffAlert({
     return { sent: false, reason: err.message };
   }
 }
+
+/**
+ * התראה למנהל, שמגיעה גם אחרי יממה של שקט.
+ *
+ * התראות הצוות נשלחו כטקסט חופשי, ווואטסאפ מתיר טקסט חופשי רק בתוך 24 שעות
+ * מההודעה האחרונה של הנמען. מנהל שלא כתב לבוט יום שלם הפסיק לקבל אותן — חמש
+ * עשרה התראות אבדו כך בתוך יומיים, והשורות במסד אמרו רק „failed”.
+ *
+ * לכן: קודם טקסט, וכשהוא נכשל — אותה התראה בתבנית מאושרת. אין כאן ניהול של
+ * חלון הזמן, כי הכישלון עצמו הוא הסימן המדויק ביותר שיש, והוא מכסה גם סיבות
+ * אחרות שתבנית פותרת.
+ */
+export const STAFF_ALERT_TEMPLATE = 'staff_alert_v1';
+
+/** תבניות מאושרות שיכולות לשאת התראה חופשית, לפי סדר העדפה. */
+export const STAFF_ALERT_FALLBACKS = ['my_agenda_v1'];
+
+export function approvedAlertTemplate(rows = db.get('message_templates') || []) {
+  const approved = (name) => rows.some((row) => (
+    (row.meta_name || row.name) === name
+    && String(row.status || '').toUpperCase() === 'APPROVED'
+  ));
+  return [STAFF_ALERT_TEMPLATE, ...STAFF_ALERT_FALLBACKS].find(approved) || '';
+}
+
+/** Meta rejects a newline inside a parameter, so the alert becomes one line. */
+export function alertAsTemplateParameter(text) {
+  return String(text || '').trim().replace(/\s*\n+\s*/g, ' \u00b7 ').slice(0, 900);
+}
+
+export async function sendManagerAlert(phone, text, { clip = false } = {}) {
+  const to = String(phone || '').trim();
+  const body = String(text || '').trim();
+  if (!to || !body) return { sent: false, reason: 'missing_input' };
+
+  const direct = await whatsappService.sendTextMessage(to, body, false, {
+    source: 'staff_notify',
+    clip,
+  }).catch((err) => ({ success: false, error: err?.message }));
+  if (direct?.success) return { sent: true, via: 'text' };
+
+  const templateName = approvedAlertTemplate();
+  if (!templateName) return { sent: false, reason: direct?.error || 'send_failed' };
+
+  const viaTemplate = await whatsappService.sendTemplateMessage(
+    to, templateName, [alertAsTemplateParameter(body)], { source: 'staff_notify' }
+  ).catch((err) => ({ success: false, error: err?.message }));
+  if (viaTemplate?.success) return { sent: true, via: 'template', templateName };
+  return { sent: false, reason: viaTemplate?.error || direct?.error || 'send_failed' };
+}

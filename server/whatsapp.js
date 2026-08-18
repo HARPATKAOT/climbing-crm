@@ -83,7 +83,9 @@ import {
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
+import { readCentreMessage } from './customerIntent.js';
 import { alertRecipients } from './staffAlerts.js';
+import { sendManagerAlert } from './staffNotify.js';
 import { replyOffersForm } from './formFollowUp.js';
 import { scheduleFormCheck } from './botTools.js';
 import { recordBotAction } from './botActivityLog.js';
@@ -91,8 +93,6 @@ import { isCapabilityEnabled } from './botCapabilities.js';
 import {
   buildCentreReport,
   centreNameTokens,
-  centreReportsCancellation,
-  centreReportsRegistration,
   findStudentsByName,
   formatReportDate,
 } from './centreReport.js';
@@ -260,35 +260,6 @@ export function askWhichChildReply(students = []) {
   return `בשמחה! 🙂\nבשביל מי מהילדים? ${unique.join(' / ')}\nאו כתבו «ילד אחר» ונמשיך משם.`;
 }
 
-export function centreStudentName(text) {
-  const typed = String(text || '').trim();
-  if (!typed || !HEBREW_LETTER.test(typed)) return '';
-  const isStartQuestion = /^מתי(?:\s|$)/.test(typed) && /(?:^|\s)התחיל(?:ה)?(?:\s|[?!.,]|$)/.test(typed);
-  if (isStartQuestion) {
-    return typed
-      .replace(/[?!.,:;]+/g, ' ')
-      .split(/\s+/)
-      .filter((word) => !['מתי', 'התחיל', 'התחילה', 'להתאמן', 'להגיע', 'האימון', 'הראשון', 'של'].includes(word))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-  if (/^(?:תודה|מעולה|קיבלתי|הבנתי|סבבה|בוקר טוב|ערב טוב|היי|שלום|הי)[!?. ]*$/u.test(typed)) return '';
-  // „אלימלך קרני נרשם” is a name and a verb. Looking the whole string up came
-  // back as a child we do not have, and the team was told so. The length limit
-  // counts what is left after the verbs, so „נטע יאירי נרשמה אצלכם במתנ״ס”
-  // is still a two-word name and not a sentence we decline to read.
-  const tokens = centreNameTokens(typed);
-  if (!tokens.length || tokens.length > 4) return '';
-  const name = tokens.join(' ');
-  return name.length <= 40 ? name : '';
-}
-
-/** A greeting from the centre is answered by name, never with "מה שמך?". */
-export function isCentreGreeting(text) {
-  return /^(?:בוקר טוב|צהריים טובים|ערב טוב|היי|הי|שלום|אהלן)[!?. ]*$/u.test(String(text || '').trim());
-}
-
 /** Answer a greeting with the same one, so the hour of day stays right. */
 export function greetingFor(text) {
   const typed = String(text || '').trim();
@@ -298,37 +269,44 @@ export function greetingFor(text) {
 
 async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const typed = String(text || '').trim();
-  const isStartQuestion = /^מתי(?:\s|$)/u.test(typed)
-    && /(?:^|\s)התחיל(?:ה)?(?:\s|[?!.,]|$)/u.test(typed);
-  const studentName = centreStudentName(typed);
+
+  // What she wrote is read by the model; what happens next is not. A wrong
+  // billing date is a wrong charge to a family, so the lookup, the date and
+  // the status change stay exactly as deterministic as they were — see
+  // readCentreMessage.
+  const read = await readCentreMessage({
+    message: typed,
+    callModel: callGeminiChat,
+    apiKey: process.env.GEMINI_API_KEY,
+  });
+  const isStartQuestion = read.intent === 'start_question';
+  const reportsRegistration = read.intent === 'registration';
+  const studentName = centreNameTokens(read.name || '').join(' ');
 
   // „בוקר טוב” used to fall through to the customer flow, which answered the
   // secretary with "מה השם הפרטי שלך?". She is not a new customer.
-  if (isCentreGreeting(typed)) {
+  if (read.intent === 'greeting') {
     const contact = centreContactName(await loadBrandedBotSettings(), phone);
     return {
       ok: true,
       reason: 'greeting',
       reply: `${greetingFor(typed)}${contact ? ` ${contact}` : ''} 🙂\n`
-        + 'אפשר לכתוב שם של מתאמן/ת עם המילה «נרשם» ואחזור עם התאריך לחיוב.',
+        + 'אפשר לכתוב שם של מתאמן/ת ואחזור עם התאריך לחיוב.',
     };
   }
 
-  // Two things only are answered automatically: „<שם> נרשם”, and the fixed
-  // billing question „מתי <שם> התחיל?”. A bare name used to be treated as a
-  // registration — but the same two words appear when the centre asks us
-  // something, and when it tells us a child has cancelled. Marking a child
-  // registered off a message that said the opposite is a mistake nobody on
-  // our side can see afterwards, so everything else is a person's job.
-  const reportsRegistration = centreReportsRegistration(typed);
+  // Two things only are answered automatically: a registration she reports,
+  // and the billing question. A cancellation, a question of another kind, or
+  // a message with no name is a person's job — marking a child registered off
+  // a message that said the opposite is a mistake nobody here can see.
   if (!studentName || !(isStartQuestion || reportsRegistration)) {
     await notifyStaffOfHandoff({
       settings: db.getSettings(),
       parent: { name: 'המתנ״ס' },
       phone,
-      customerText: centreReportsCancellation(typed)
+      customerText: read.intent === 'cancellation'
         ? `המתנ״ס כתב על ביטול: "${typed}"`
-        : `המתנ״ס כתב: "${typed}" — אין כאן שם ומילת הרשמה, ולכן לא נענה אוטומטית`,
+        : `המתנ״ס כתב: "${typed}" — לא זוהה דיווח הרשמה עם שם, ולכן לא נענה אוטומטית`,
       reason: 'handoff',
       isSimulator,
     });
@@ -337,7 +315,7 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
       summary: `הודעה מהמתנ״ס הועברה לצוות: "${typed}"`,
       details: {
         ok: false,
-        reason: centreReportsCancellation(typed) ? 'cancellation' : 'no_registration_word',
+        reason: read.intent,
         typed,
       },
       phone,
@@ -484,11 +462,10 @@ export async function notifyStaffOfHandoff({
     if (!staffPhone) continue;
     if (customerPhone && phonesMatch(staffPhone, customerPhone)) continue;
     try {
-      const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-        source: 'staff_notify',
-        clip: false,
-      });
-      if (result?.success) sent += 1;
+      // Free text only reaches somebody who wrote to us in the last day; an
+      // approved template carries it the rest of the time. See sendManagerAlert.
+      const result = await sendManagerAlert(staffPhone, body);
+      if (result?.sent) sent += 1;
     } catch (err) {
       console.error('Staff handoff notify failed:', err.message);
     }
@@ -537,11 +514,10 @@ export async function notifyStaffOfPlacement({
     if (!staffPhone) continue;
     if (customerPhone && phonesMatch(staffPhone, customerPhone)) continue;
     try {
-      const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
-        source: 'staff_notify',
-        clip: false,
-      });
-      if (result?.success) sent += 1;
+      // Free text only reaches somebody who wrote to us in the last day; an
+      // approved template carries it the rest of the time. See sendManagerAlert.
+      const result = await sendManagerAlert(staffPhone, body);
+      if (result?.sent) sent += 1;
     } catch (err) {
       console.error('Staff placement notify failed:', err.message);
     }
@@ -814,6 +790,11 @@ export const whatsappService = {
         source: options.source || (isAi ? 'ai' : 'crm'),
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        // Without this a failure is a red mark on somebody's phone and nothing
+        // else: fifteen staff alerts were lost over two days and the rows said
+        // only "failed". Meta's own words are what tell a closed 24-hour window
+        // apart from a blocked number.
+        meta: { ...(options.meta || {}), error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }
@@ -879,6 +860,7 @@ export const whatsappService = {
         message_type: 'interactive',
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        meta: { error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }
@@ -992,6 +974,7 @@ export const whatsappService = {
         source: options.source || 'crm',
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
+        meta: { error: String(error?.message || error).slice(0, 400) },
       });
       return { success: false, error: error.message };
     }

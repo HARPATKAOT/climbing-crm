@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, LogOut, UserCheck, Users,
+  AlertTriangle, CalendarCheck, CheckCircle2, LogOut, UserCheck, Users,
 } from 'lucide-react';
 import WallShiftOpen from './checkin/WallShiftOpen.jsx';
 import WallShiftClose from './checkin/WallShiftClose.jsx';
 import ShiftStaffTab from './checkin/ShiftStaffTab.jsx';
+import DayStaffingTab from './checkin/DayStaffingTab.jsx';
 import ClimberEntryPanel, { ClimberPicker } from './checkin/ClimberEntryPanel.jsx';
 import PendingQueue from './checkin/PendingQueue.jsx';
 import PrinterControls from './checkin/PrinterControls.jsx';
@@ -19,7 +20,13 @@ import { canOperateCash, employeesFor } from '../utils/operationalEmployees.js';
 const TABS = [
   { key: 'climbers', label: 'קבלה ומכירה', icon: UserCheck },
   { key: 'staff', label: 'עובדים', icon: Users },
+  { key: 'day', label: 'אירועי היום', icon: CalendarCheck },
 ];
+
+/** התאריך של היום באזור הזמן של הקיר. */
+function todayStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+}
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -51,6 +58,7 @@ export default function CheckInConsole({
   // כך אף מכירה לא שואלת „מי מבצע?” באמצע הטיפול בלקוח.
   const [cashierId, setCashierId] = useState('');
   const [closing, setClosing] = useState(false);
+  const [showDayBeforeOpen, setShowDayBeforeOpen] = useState(false);
   const [justOpened, setJustOpened] = useState(false);
   const [successMsg, setSuccessMsg] = useState(null);
   const [refusalMsg, setRefusalMsg] = useState(null);
@@ -76,6 +84,14 @@ export default function CheckInConsole({
   const loadCheckIns = useCallback(async () => {
     const data = await fetch('/api/check-ins').then((r) => (r.ok ? r.json() : [])).catch(() => []);
     setCheckIns(Array.isArray(data) ? data : []);
+  }, []);
+
+  // האם יש היום בכלל אירוע לסמן. נשאל פעם אחת, כדי שהאשף לא יישא כרטיס ריק.
+  useEffect(() => {
+    fetch(`/api/day-staffing?date=${encodeURIComponent(todayStr())}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => setShowDayBeforeOpen(Boolean(body && body.activities?.length)))
+      .catch(() => setShowDayBeforeOpen(false));
   }, []);
 
   useEffect(() => {
@@ -234,11 +250,18 @@ export default function CheckInConsole({
     </>
   );
 
-  // ── לפני פתיחה: רק האשף ──────────────────────────────────────────────────
+  // ── לפני פתיחה: האשף, ולצדו אירועי היום ─────────────────────────────────
+  // טיול בבוקר או סבב מסלולים מתקיימים בלי שאיש פותח את הקיר, ובלי הלשונית
+  // כאן לא היה להם שום מקום להיסמן בו.
   if (state.stage !== 'open') {
     return (
       <div className="fade-in" style={{ maxWidth: 900, margin: '0 auto' }}>
         {banners}
+        {showDayBeforeOpen && (
+          <div style={{ marginBottom: 16 }}>
+            <DayStaffingTab date={todayStr()} employees={employees} />
+          </div>
+        )}
         <WallShiftOpen
           state={state}
           employees={employees}
@@ -392,6 +415,10 @@ export default function CheckInConsole({
             }}
           />
         </div>
+      )}
+
+      {tab === 'day' && (
+        <DayStaffingTab date={todayStr()} employees={employees} />
       )}
 
       {tab === 'staff' && (

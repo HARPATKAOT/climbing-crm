@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import {
   buildCentreReport,
   centreNameTokens,
-  centreReportsCancellation,
-  centreReportsRegistration,
   firstBillableSession,
   findStudentsByName,
   attendanceCounts,
@@ -144,26 +142,6 @@ test('the verb the centre types is not part of the name, and the order is not fi
   // A message that is all verbs is not a name at all.
   assert.deepEqual(findStudentsByName(roster, 'הוא נרשם במתנס'), []);
   assert.deepEqual(centreNameTokens('אלימלך קרני נרשם'), ['אלימלך', 'קרני']);
-});
-
-test('nothing moves without the centre saying the child is registered', () => {
-  // A bare name used to be a registration. The same two words appear when the
-  // centre asks us something, and when it tells us a child cancelled — and
-  // marking that child registered is a mistake nobody here can see afterwards.
-  assert.equal(centreReportsRegistration('נטע יאירי נרשם'), true);
-  assert.equal(centreReportsRegistration('נטע יאירי נרשמה'), true);
-  assert.equal(centreReportsRegistration('נטע יאירי רשום אצלנו'), true);
-  assert.equal(centreReportsRegistration('נטע יאירי'), false);
-  assert.equal(centreReportsRegistration('מה קורה עם נטע יאירי?'), false);
-
-  // A cancellation outranks the registration word inside it.
-  assert.equal(centreReportsRegistration('נטע יאירי ביטל את ההרשמה'), false);
-  assert.equal(centreReportsRegistration('נטע יאירי לא נרשמה בסוף'), false);
-  assert.equal(centreReportsCancellation('נטע יאירי ביטל את ההרשמה'), true);
-  assert.equal(centreReportsCancellation('נטע יאירי נרשם'), false);
-
-  // The name survives the cancellation words, so the team is told about whom.
-  assert.deepEqual(centreNameTokens('נטע יאירי ביטל'), ['נטע', 'יאירי']);
 });
 
 test('before the season opens the answer is the opening day, charged in full', () => {

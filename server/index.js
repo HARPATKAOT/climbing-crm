@@ -34,6 +34,7 @@ import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from '
 import {
   applyResponse,
   calendarSlotCandidates,
+  classNeedsFor,
   eligibleEmployees,
   expandWeeklySlots,
   isWindowOpen,
@@ -46,6 +47,16 @@ import {
   responsesForWindow,
   signupBoard,
 } from './shiftSignup.js';
+import {
+  CLASS_WINDOW_KIND,
+  applyClassResponse,
+  classAssignmentMessageText,
+  classSignupBoard,
+  isClassWindowOpen,
+  normalizeClassWindow,
+  planClassStaffing,
+  publicClassBoardView,
+} from './classSignup.js';
 import { sendAssignmentSummaries, sendSignupInvites } from './shiftSignupNotify.js';
 import {
   DENOMINATIONS,
@@ -613,6 +624,7 @@ import {
   keepIntroStatus,
   consecutiveAbsences,
   activityDateRange,
+  getGroupDays,
   planVacationAttendanceUpdates,
   planVacationAttendanceReverts,
   findTrainingVacation,
@@ -647,6 +659,12 @@ import {
   employeeCanSignDailySafety,
   employeeIsWallStaff,
 } from './staffAttendanceSettings.js';
+import {
+  readStaffReliabilitySettings,
+  readStaffReliabilitySettingsSync,
+  writeStaffReliabilitySettings,
+} from './staffReliabilitySettings.js';
+import { staffReliability } from './staffReliability.js';
 import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
   employeeCanOperateWall,
@@ -2044,6 +2062,22 @@ app.put('/api/settings/employee-onboard-form101', requireOwner, async (req, res)
 });
 
 // הגדרות שעון נוכחות / פתיחת קיר (דקות לפני שיבוץ + נוסח אישור)
+app.get('/api/settings/staff-reliability', async (_req, res) => {
+  try {
+    res.json(await readStaffReliabilitySettings(db, supa));
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'טעינת ההגדרות נכשלה' });
+  }
+});
+
+app.put('/api/settings/staff-reliability', requireOwner, async (req, res) => {
+  try {
+    res.json(await writeStaffReliabilitySettings(db, supa, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת ההגדרות נכשלה' });
+  }
+});
+
 app.get('/api/settings/staff-attendance', async (_req, res) => {
   try {
     res.json(await readStaffAttendanceSettings(db, supa));
@@ -2308,6 +2342,10 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
   });
   if (!resolved) return res.status(404).json({ error: 'הקישור אינו תקף או שפג תוקפו' });
   try {
+    // Every save sent a confirmation, so a customer who ticked, untucked and
+    // ticked again got three in two minutes — twice saying the opposite of
+    // what they had just chosen. The confirmation belongs to a change.
+    const before = mailingPreferencesSnapshot(db, resolved.parent);
     const snapshot = await updateMailingPreferences(
       db,
       resolved.parent,
@@ -2321,11 +2359,13 @@ app.put('/api/public/mailing-preferences/:token', publicFormRateLimit, async (re
     // אם חלון 24 השעות סגור, ההודעה פשוט לא תישלח והשמירה עצמה תקינה.
     try {
       const confirmation = mailingConfirmationMessage(snapshot);
-      whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
-        parentId: resolved.parent.id,
-        source: 'mailing_preferences',
-        clip: false,
-      }).catch(() => {});
+      if (confirmation !== mailingConfirmationMessage(before)) {
+        whatsappService.sendTextMessage(resolved.parent.phone, confirmation, false, {
+          parentId: resolved.parent.id,
+          source: 'mailing_preferences',
+          clip: false,
+        }).catch(() => {});
+      }
     } catch { /* אישור הוא תוספת — לא מכשיל שמירה */ }
     res.set('Cache-Control', 'no-store');
     return res.json({ success: true, ...snapshot });
@@ -12821,6 +12861,17 @@ async function writeRoleCatalog(catalog) {
 }
 
 /**
+ * אותה תווית, בלי המתנה. הקטלוג נשמר מקומית ברגע שנקרא, ולכן מסלול שכבר קרא
+ * אותו יכול לשאול שוב באופן סינכרוני — וברירת המחדל תמיד קיימת.
+ */
+function systemRoleLabelSync(key) {
+  const local = db.getAppSettingLocal?.(ROLE_CATALOG_KEY);
+  const catalog = local ? normalizeCatalog(local) : blankCatalog();
+  const found = catalog.system.find((r) => r.key === key);
+  return found?.label || DEFAULT_SYSTEM_ROLES.find((r) => r.key === key)?.label || '';
+}
+
+/**
  * התווית הנוכחית של תפקיד מערכת. הקוד שכותב שורות עבודה חייב לעבור דרך כאן —
  * אחרת שינוי שם היה יוצר שורות עם השם הישן לצד נתונים שכבר הומרו.
  */
@@ -12862,6 +12913,7 @@ function allCatalogLabels(catalog) {
  * נועד לו. מזהה השורה הוא מזהה האירוע, כך שאין חיפוש ואין שתי שורות לאירוע אחד.
  */
 const STAFF_NEEDS_TABLE = 'activity_staff_needs';
+const CLASS_NEEDS_TABLE = 'class_staff_needs';
 
 function propagateRoleRename(from, to) {
   let touched = 0;
@@ -12902,10 +12954,12 @@ function propagateRoleRename(from, to) {
   // צרכי האיוש של אירועים ושל טפסי המשמרות. בלי אלה שינוי שם תפקיד היה משאיר
   // טופס שנשלח לצוות מבקש תפקיד שכבר לא קיים — מושב שאיש אינו מסומן בו, ולכן
   // איש לא יכול לקחת אותו.
-  for (const row of db.get(STAFF_NEEDS_TABLE) || []) {
-    const needs = Array.isArray(row.needs) ? row.needs : [];
+  for (const row of [...(db.get(STAFF_NEEDS_TABLE) || []).map((r) => [STAFF_NEEDS_TABLE, r]),
+    ...(db.get(CLASS_NEEDS_TABLE) || []).map((r) => [CLASS_NEEDS_TABLE, r])]) {
+    const [table, needsRow] = row;
+    const needs = Array.isArray(needsRow.needs) ? needsRow.needs : [];
     if (!needs.some((need) => need.role === from)) continue;
-    db.update(STAFF_NEEDS_TABLE, row.id, {
+    db.update(table, needsRow.id, {
       needs: needs.map((need) => (need.role === from ? { ...need, role: to } : need)),
     });
     touched += 1;
@@ -13966,12 +14020,16 @@ const STAFF_ROLE_KEY_FOR = {
   assistant: SYSTEM_ROLE_KEYS.ASSISTANT,
 };
 
-function staffAttendanceRows({ groupId = null, date = null, employeeId = null } = {}) {
+function staffAttendanceRows({ groupId = null, activityId = null, date = null, employeeId = null } = {}) {
   return (db.get('staff_attendance') || []).filter((r) =>
     (!groupId || r.group_id === groupId)
+    && (!activityId || r.activity_id === activityId)
     && (!date || r.date === date)
     && (!employeeId || r.employee_id === employeeId));
 }
+
+/** סימוני נוכחות לאירוע ביומן — אותה טבלה, רק שהעוגן הוא האירוע ולא החוג. */
+const EVENT_ATTENDANCE_STATUSES = ['present', 'absent', 'substituted'];
 
 /** שעות האימון מתוך הגדרת הקבוצה — ברירת מחדל שאפשר לתקן במסך השכר. */
 function groupShiftTimes(group) {
@@ -14056,8 +14114,8 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
   const existing = staffAttendanceRows({ groupId, date })
     .find((r) => r.employee_id === employeeId) || null;
 
-  // סטטוס שאינו „נוכח”/„נעדר” מנקה את הסימון לגמרי — חזרה למצב „טרם סומן”.
-  if (status !== 'present' && status !== 'absent') {
+  // סטטוס שאינו אחד מהשלושה מנקה את הסימון לגמרי — חזרה למצב „טרם סומן”.
+  if (!EVENT_ATTENDANCE_STATUSES.includes(status)) {
     if (existing) db.delete('staff_attendance', existing.id);
     syncClassPayRow({ group, date, employeeId, paid: false });
     return res.json({ status: null, removed: !!existing });
@@ -14075,6 +14133,8 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
     group,
     date,
     employeeId,
+    // „הוחלף” אינו נוכחות: מי שלא הגיע אינו מקבל שכר על המשמרת, והמחליף
+    // מקבל שורה משלו.
     paid: status === 'present' && PAID_STAFF_ROLES.includes(staffRole),
     times,
     roleTitle: await systemRoleLabel(STAFF_ROLE_KEY_FOR[staffRole]),
@@ -14087,6 +14147,11 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
     role: staffRole,
     status,
     substitute_for: substituteFor || null,
+    // מי נכנס במקומו. הצד השני של אותה החלפה, כדי שאפשר יהיה לקרוא אותה
+    // משני הכיוונים — עד היום `substitute_for` נכתב ואיש לא קרא אותו.
+    substituted_by: req.body?.substituted_by || null,
+    marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+    marked_at: new Date().toISOString(),
     // גם מתנדב צובר שעות — הן פשוט לא הופכות לכסף.
     hours: status === 'present' ? (payRow?.hours ?? times.hours) : 0,
   };
@@ -14101,6 +14166,236 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
  * סיכום לתיק העובד: כמה שעות עבד וכמה פעמים נעדר, מופרד לפי תפקיד כדי
  * שהתנדבות כעוזר מדריך לא תיראה כמו שעות בתשלום.
  */
+/**
+ * מה יש היום ומי משובץ לזה.
+ *
+ * מסלול נפרד מ-`/api/wall-shift/state`, שנדגם כל הזמן וכבד ממילא. כאן נשאלת
+ * שאלה אחת: אילו אירועים וחוגים מתקיימים היום, מה כל אחד צריך, מי משובץ אליו,
+ * ומה כבר סומן — כדי שהדלפק יוכל לסמן הגעה בלי לפתוח את היומן.
+ */
+app.get('/api/day-staffing', (req, res) => {
+  const date = String(req.query.date || israelDateStr()).slice(0, 10);
+  const employees = db.get('employees') || [];
+  const nameOf = (id) => employees.find((e) => String(e.id) === String(id))?.name || 'עובד/ת';
+  const assignments = (db.get('work_assignments') || [])
+    .filter((row) => String(row.date || '').slice(0, 10) === date);
+  const marks = staffAttendanceRows({ date });
+  const activities = db.get('activities') || [];
+  const needsById = Object.fromEntries((db.get(STAFF_NEEDS_TABLE) || []).map((r) => [r.id, r.needs]));
+  const classNeeds = classNeedsByGroupMap();
+  const classRoles = signupClassRoles();
+
+  const placedFor = (predicate, markPredicate) => assignments.filter(predicate).map((row) => {
+    const mark = marks.find((m) => m.employee_id === row.employee_id && markPredicate(m)) || null;
+    return {
+      work_assignment_id: row.id,
+      employee_id: row.employee_id,
+      name: nameOf(row.employee_id),
+      role: row.role || '',
+      start_time: row.start_time || null,
+      end_time: row.end_time || null,
+      status: mark?.status || null,
+      substitute_for: mark?.substitute_for || null,
+      substituted_by: mark?.substituted_by || null,
+    };
+  });
+
+  const dayActivities = activities
+    .filter((activity) => {
+      const type = String(activity.type || '').toLowerCase();
+      if (type === 'training_vacation') return false;
+      const status = String(activity.status || '').toLowerCase();
+      if (activity.cancelled || status === 'cancelled' || status === 'canceled') return false;
+      return activityDateRange(activity).includes(date);
+    })
+    .map((activity) => ({
+      activity_id: activity.id,
+      name: activity.name || '',
+      type: activity.type || '',
+      start_time: activity.start_time || null,
+      end_time: activity.end_time || null,
+      needs: normalizeNeeds(needsById[activity.id], 0).filter((n) => n.role),
+      placed: placedFor(
+        (row) => row.activity_id === activity.id,
+        (m) => m.activity_id === activity.id
+      ),
+    }))
+    .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)));
+
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const onVacation = Boolean(findTrainingVacation(activities, date));
+  const dayClasses = onVacation ? [] : (db.get('groups') || [])
+    .filter((group) => getGroupDays(group).includes(weekday))
+    .map((group) => ({
+      group_id: group.id,
+      name: group.name || '',
+      time: group.time || '',
+      duration: Number(group.duration) || 50,
+      needs: classNeedsFor(classNeeds[group.id], classRoles),
+      // בחוג המשובצים הם השיבוץ הקבוע שבלוח, ולא שורות ביומן העבודה.
+      placed: [group.trainer, ...(Array.isArray(group.assistants) ? group.assistants : [])]
+        .filter(Boolean)
+        .map((employeeId, index) => {
+          const mark = marks.find((m) => m.group_id === group.id && m.employee_id === employeeId) || null;
+          return {
+            employee_id: employeeId,
+            name: nameOf(employeeId),
+            role: index === 0 ? (classRoles[0] || '') : (classRoles[1] || ''),
+            status: mark?.status || null,
+            substitute_for: mark?.substitute_for || null,
+            substituted_by: mark?.substituted_by || null,
+          };
+        }),
+    }))
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+
+  res.json({ date, vacation: onVacation, activities: dayActivities, classes: dayClasses });
+});
+
+/**
+ * נוכחות צוות באירוע ביומן.
+ *
+ * מראה של נוכחות החוג, בשני הבדלים שנובעים מהמודל: העוגן הוא האירוע ולא החוג,
+ * ואין כאן שום נגיעה בשכר. שורת השכר של האירוע כבר קיימת ומוקפאת — הסימון הוא
+ * ציר נפרד שאומר אם האדם הגיע, ולא כמה מגיע לו. מי שלא הגיע נשאר עם שורתו,
+ * מסומן, וההחלטה מה לעשות איתה היא של המנהל במסך השכר.
+ */
+app.post('/api/activities/:id/staff-attendance', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+
+  const {
+    date, employee_id: employeeId, status,
+    substitute_for: substituteFor, substituted_by: substitutedBy,
+  } = req.body || {};
+  if (!date) return res.status(400).json({ error: 'date is required' });
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+
+  const existing = staffAttendanceRows({ activityId: activity.id, date })
+    .find((r) => r.employee_id === employeeId) || null;
+
+  if (!EVENT_ATTENDANCE_STATUSES.includes(status)) {
+    if (existing) db.delete('staff_attendance', existing.id);
+    return res.json({ status: null, removed: Boolean(existing) });
+  }
+
+  // השורה ביומן העבודה היא מה שקושר את הסימון לשיבוץ שהוא מדבר עליו.
+  const placement = (db.get('work_assignments') || []).find((row) =>
+    row.employee_id === employeeId
+    && row.activity_id === activity.id
+    && String(row.date || '').slice(0, 10) === String(date).slice(0, 10));
+
+  const fields = {
+    group_id: null,
+    activity_id: activity.id,
+    date: String(date).slice(0, 10),
+    employee_id: employeeId,
+    // תפקיד האירוע הוא תווית ולא 'trainer'/'assistant' — הוא בא מהשיבוץ עצמו.
+    role: null,
+    role_label: placement?.role || req.body?.role_label || '',
+    work_assignment_id: placement?.id || null,
+    status,
+    substitute_for: substituteFor || null,
+    substituted_by: substitutedBy || null,
+    marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+    marked_at: new Date().toISOString(),
+    hours: status === 'present' ? (Number(placement?.hours) || 0) : 0,
+  };
+  const row = existing
+    ? db.update('staff_attendance', existing.id, fields)
+    : db.insert('staff_attendance', fields);
+  res.status(existing ? 200 : 201).json({ status, row });
+});
+
+/**
+ * החלפה: פעולה אחת ששתי שורות.
+ *
+ * מי שלא הגיע מסומן „הוחלף” ומי נכנס במקומו, והמחליף מסומן „נוכח” ואת מי הוא
+ * מחליף. שתי השורות נכתבות יחד כדי שלא ייווצר מצב שבו רק צד אחד יודע.
+ */
+app.post('/api/activities/:id/staff-substitution', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+  const date = String(req.body?.date || '').slice(0, 10);
+  const originalId = String(req.body?.employee_id || '');
+  const substituteId = String(req.body?.substitute_id || '');
+  if (!date || !originalId || !substituteId) {
+    return res.status(400).json({ error: 'צריך תאריך, מי לא הגיע ומי הגיע במקומו' });
+  }
+  if (originalId === substituteId) {
+    return res.status(400).json({ error: 'אי אפשר להחליף את עצמך' });
+  }
+  try {
+    requireActiveEmployees([substituteId]);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
+  }
+
+  const rows = staffAttendanceRows({ activityId: activity.id, date });
+  const placement = (db.get('work_assignments') || []).find((row) =>
+    row.employee_id === originalId
+    && row.activity_id === activity.id
+    && String(row.date || '').slice(0, 10) === date);
+
+  const upsert = (employeeId, fields) => {
+    const existing = rows.find((r) => r.employee_id === employeeId);
+    const base = {
+      group_id: null,
+      activity_id: activity.id,
+      date,
+      employee_id: employeeId,
+      role: null,
+      role_label: placement?.role || '',
+      marked_by: req.crmUser?.employee_id || req.crmUser?.id || null,
+      marked_at: new Date().toISOString(),
+      ...fields,
+    };
+    return existing
+      ? db.update('staff_attendance', existing.id, base)
+      : db.insert('staff_attendance', base);
+  };
+
+  const original = upsert(originalId, {
+    status: 'substituted',
+    substituted_by: substituteId,
+    substitute_for: null,
+    work_assignment_id: placement?.id || null,
+    hours: 0,
+  });
+  const substitute = upsert(substituteId, {
+    status: 'present',
+    substitute_for: originalId,
+    substituted_by: null,
+    work_assignment_id: null,
+    hours: Number(placement?.hours) || 0,
+  });
+
+  // המחליף עבד, ולכן מגיעה לו שורת שכר משלו — נכתבת דרך אותה נורמליזציה של
+  // כל שיבוץ אחר, כדי שהתעריף והקיפאון יתנהגו בדיוק אותו דבר.
+  let created = null;
+  if (placement) {
+    const already = (db.get('work_assignments') || []).some((row) =>
+      row.employee_id === substituteId
+      && row.activity_id === activity.id
+      && String(row.date || '').slice(0, 10) === date);
+    if (!already) {
+      created = db.insert('work_assignments', withFrozenPay(normalizeWorkAssignment({
+        employee_id: substituteId,
+        activity_id: activity.id,
+        date,
+        work_type: placement.work_type,
+        role: placement.role,
+        start_time: placement.start_time,
+        end_time: placement.end_time,
+        source: 'substitution',
+        notes: 'החלפה',
+      })));
+    }
+  }
+
+  res.json({ original, substitute, created });
+});
+
 app.get('/api/employees/:id/attendance-summary', (req, res) => {
   if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, req.params.id)) {
     return res.status(403).json({ error: 'אין הרשאה לצפות בנוכחות של עובד אחר' });
@@ -14109,15 +14404,19 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
   const rows = staffAttendanceRows({ employeeId: req.params.id })
     .filter((r) => (!from || r.date >= from) && (!to || r.date <= to));
 
-  const blank = () => ({ present: 0, absent: 0, hours: 0 });
-  const summary = { total: blank(), trainer: blank(), assistant: blank() };
+  const blank = () => ({ present: 0, absent: 0, substituted: 0, hours: 0 });
+  // אירוע אינו „מדריך” ואינו „עוזר” — התפקיד שלו הוא תווית חופשית, ובלי דלי
+  // משלו הוא היה נופל לדלי המדריכים ומנפח את שעות החוגים.
+  const summary = { total: blank(), trainer: blank(), assistant: blank(), events: blank() };
 
   for (const row of rows) {
-    const bucket = summary[row.role] || summary.trainer;
-    const target = row.status === 'absent' ? 'absent' : 'present';
+    const bucket = row.group_id ? (summary[row.role] || summary.trainer) : summary.events;
+    const target = row.status === 'absent'
+      ? 'absent'
+      : (row.status === 'substituted' ? 'substituted' : 'present');
     bucket[target] += 1;
     summary.total[target] += 1;
-    if (row.status !== 'absent') {
+    if (target === 'present') {
       const hrs = Number(row.hours) || 0;
       bucket.hours += hrs;
       summary.total.hours += hrs;
@@ -14127,7 +14426,19 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
     summary[key].hours = Math.round(summary[key].hours * 100) / 100;
   }
 
-  res.json({ from: from || null, to: to || null, ...summary, rows });
+  res.json({
+    from: from || null,
+    to: to || null,
+    ...summary,
+    // אחוז ההגעה נמדד תמיד על כל ההיסטוריה ולא על החלון שנשאל: דגל שמשתנה
+    // כשמחליפים חודש בתצוגה אינו דגל.
+    reliability: staffReliability(
+      staffAttendanceRows({ employeeId: req.params.id }),
+      readStaffReliabilitySettingsSync(db),
+      israelDateStr()
+    ),
+    rows,
+  });
 });
 
 /**
@@ -14741,11 +15052,29 @@ const SIGNUP_TABLES = ['shift_signup_windows', 'shift_signup_responses'];
  * המפתח נוצר בשליחה, אחד לכל עובד, ונשמר על הטופס. הוא מזהה בלי סיסמה ובלי
  * בחירה מרשימה — וגם חוסם תשובה בשם מישהו אחר, מה שהבורר הפתוח אִפשר.
  */
+const EMPLOYEE_LINKS_TABLE = 'employee_links';
+
+/** הקישור האישי הקבוע של עובד, נוצר בפעם הראשונה שמבקשים אותו. */
+function employeeLinkToken(employeeId) {
+  const existing = db.getOne(EMPLOYEE_LINKS_TABLE, String(employeeId));
+  if (existing && !existing.revoked_at) return existing.token;
+  const token = newSignupToken();
+  if (existing) db.update(EMPLOYEE_LINKS_TABLE, existing.id, { token, revoked_at: null });
+  else db.insert(EMPLOYEE_LINKS_TABLE, { id: String(employeeId), token });
+  return token;
+}
+
 function employeeIdForKey(windowRow, key) {
   const wanted = String(key || '').trim();
   if (!wanted) return null;
   const keys = windowRow?.employee_keys || {};
-  return Object.keys(keys).find((employeeId) => keys[employeeId] === wanted) || null;
+  const onWindow = Object.keys(keys).find((employeeId) => keys[employeeId] === wanted);
+  if (onWindow) return onWindow;
+  // קישור אישי קבוע — אותו מפתח פותח כל טופס שהעובד קיבל, כך שקישור שמור בטלפון
+  // ממשיך לעבוד גם לטופס הבא.
+  const standing = (db.get(EMPLOYEE_LINKS_TABLE) || [])
+    .find((row) => row.token === wanted && !row.revoked_at);
+  return standing ? String(standing.id) : null;
 }
 
 /** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
@@ -14780,6 +15109,36 @@ app.put('/api/activities/:id/staff-needs', (req, res) => {
   res.json({ needs: saved.needs });
 });
 
+function classNeedsRowFor(groupId) {
+  const row = db.getOne(CLASS_NEEDS_TABLE, String(groupId || ''));
+  return Array.isArray(row?.needs) ? row.needs : [];
+}
+
+/** כל דרישות החוגים במפה אחת, כפי שבורר המשמרות מבקש אותן. */
+function classNeedsByGroupMap() {
+  return Object.fromEntries((db.get(CLASS_NEEDS_TABLE) || []).map((row) => [row.id, row.needs]));
+}
+
+app.get('/api/groups/:id/staff-needs', (req, res) => {
+  res.json({ needs: classNeedsRowFor(req.params.id) });
+});
+
+app.put('/api/groups/:id/staff-needs', (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  if (!group) return res.status(404).json({ error: 'החוג לא נמצא' });
+  // רשימה ריקה היא „מדריך אחד, כרגיל” — מחיקה של ההגדרה, לא אפס אנשים.
+  const needs = normalizeNeeds(req.body?.needs, 0).filter((need) => need.role);
+  const existing = db.getOne(CLASS_NEEDS_TABLE, String(group.id));
+  if (!needs.length) {
+    if (existing) db.delete(CLASS_NEEDS_TABLE, existing.id);
+    return res.json({ needs: [] });
+  }
+  const saved = existing
+    ? db.update(CLASS_NEEDS_TABLE, existing.id, { needs })
+    : db.insert(CLASS_NEEDS_TABLE, { id: String(group.id), needs });
+  res.json({ needs: saved.needs });
+});
+
 /**
  * איזה תפקיד מתאים לאיזו רשומה ביומן — כפי שבורר המשמרות צריך לראות את זה.
  *
@@ -14799,8 +15158,42 @@ async function signupRoleCatalog() {
 }
 
 /** רשומת טופס עם הספירות שהרשימה מציגה, בלי גוף המשמרות. */
+/** התפקידים שחוג מאויש בהם: הראשון הוא ההדרכה עצמה. */
+function signupClassRoles() {
+  return [
+    systemRoleLabelSync(SYSTEM_ROLE_KEYS.TRAINER),
+    systemRoleLabelSync(SYSTEM_ROLE_KEYS.ASSISTANT),
+  ].filter(Boolean);
+}
+
 function signupWindowSummary(windowRow, responses, today, assignments = null) {
   const answers = responsesForWindow(responses, windowRow.id);
+  // טופס לוח חוגים אינו נמדד בתאריכים: המושבים שלו הם חוגים, והשיבוץ נקרא
+  // מלוח החוגים עצמו ולא מיומן העבודה.
+  if (windowRow.kind === CLASS_WINDOW_KIND) {
+    const seats = windowRow.seats || [];
+    const board = classSignupBoard(windowRow, responses, db.get('employees') || [],
+      db.get('groups') || [], signupClassRoles());
+    return {
+      id: windowRow.id,
+      kind: CLASS_WINDOW_KIND,
+      title: windowRow.title,
+      roles: [...new Set(seats.flatMap((seat) => (seat.needs || []).map((n) => n.role)).filter(Boolean))],
+      status: windowRow.status,
+      deadline: windowRow.deadline || null,
+      note: windowRow.note || '',
+      token: windowRow.token,
+      recipients: windowRow.recipients || [],
+      sent_at: windowRow.sent_at || null,
+      slot_count: seats.length,
+      first_date: null,
+      last_date: null,
+      missing: board.reduce((sum, seat) => sum + seat.missing, 0),
+      respondents: answers.length,
+      open: isClassWindowOpen(windowRow, today),
+      created_at: windowRow.created_at || null,
+    };
+  }
   const slots = windowRow.slots || [];
   const dates = slots.map((slot) => slot.date).sort();
   // כמה שיבוצים עוד חסרים בטופס כולו. מחושב מהרוסטר ולא נשמר, מאותה סיבה
@@ -14869,6 +15262,7 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
       assignments,
       rolesByType: catalog.rolesByType,
       classRoles: catalog.classRoles,
+    classNeedsByGroup: classNeedsByGroupMap(),
       from: req.query.from,
       to: req.query.to,
       // רשימת סוגים מופרדת בפסיקים, כפי שהמסך מסמן אותם. ריק פירושו „הכל”,
@@ -14883,7 +15277,12 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
 });
 
 app.post('/api/shift-signup/windows', (req, res) => {
-  const { window: record, error } = normalizeWindow(req.body || {});
+  // שני סוגי טפסים על אותה טבלה: מהיומן, שמושביו נושאים תאריך, ומלוח החוגים,
+  // שמושביו הם חוגים ואין להם תאריך כלל.
+  const isClass = req.body?.kind === CLASS_WINDOW_KIND;
+  const { window: record, error } = isClass
+    ? normalizeClassWindow(req.body || {}, { classRoles: signupClassRoles() })
+    : normalizeWindow(req.body || {});
   if (error) return res.status(400).json({ error });
   const created = db.insert('shift_signup_windows', record);
   res.status(201).json(created);
@@ -14897,6 +15296,16 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
     const employees = db.get('employees') || [];
     const assignments = db.get('work_assignments') || [];
     const answers = responsesForWindow(responses, windowRow.id);
+    const pendingOf = () => eligibleEmployees(employees, windowRow.recipients)
+      .filter((person) => !answers.some((answer) => answer.employee_id === person.id));
+    if (windowRow.kind === CLASS_WINDOW_KIND) {
+      return res.json({
+        ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
+        seats: windowRow.seats || [],
+        board: classSignupBoard(windowRow, responses, employees, db.get('groups') || [], signupClassRoles()),
+        pending: pendingOf(),
+      });
+    }
     res.json({
       ...signupWindowSummary(windowRow, responses, israelDateStr(), assignments),
       slots: windowRow.slots || [],
@@ -14915,7 +15324,9 @@ app.get('/api/shift-signup/windows/:id', async (req, res) => {
 app.put('/api/shift-signup/windows/:id', (req, res) => {
   const existing = db.getOne('shift_signup_windows', req.params.id);
   if (!existing) return res.status(404).json({ error: 'הטופס לא נמצא' });
-  const { window: record, error } = normalizeWindow(req.body || {}, { existing });
+  const { window: record, error } = existing.kind === CLASS_WINDOW_KIND
+    ? normalizeClassWindow(req.body || {}, { existing, classRoles: signupClassRoles() })
+    : normalizeWindow(req.body || {}, { existing });
   if (error) return res.status(400).json({ error });
   res.json(db.update('shift_signup_windows', existing.id, record));
 });
@@ -14968,7 +15379,7 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
     // אפשר לענות בשם מישהו אחר גם אם הקישור הועבר הלאה.
     const keys = { ...(windowRow.employee_keys || {}) };
     for (const employee of targets) {
-      if (!keys[employee.id]) keys[employee.id] = newSignupToken();
+      if (!keys[employee.id]) keys[employee.id] = employeeLinkToken(employee.id);
     }
     const { sent, results } = await sendSignupInvites({
       windowRow,
@@ -14983,6 +15394,90 @@ app.post('/api/shift-signup/windows/:id/send', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+/**
+ * אישור שיבוץ לחוגים.
+ *
+ * מסלול נפרד מ-`/assign` בכוונה: זה לא כותב שורות ליומן העבודה אלא את השיבוץ
+ * הקבוע על החוג, ומשם הנוכחות והשכר מתגלגלים כמו לכל מדריך אחר. הפרדה גם
+ * שומרת על המסלול שנוגע בשכר עם בדיקות ההרשאה שלו, בלי ענף נוסף בתוכו.
+ */
+app.post('/api/shift-signup/windows/:id/assign-class', async (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  if (windowRow.kind !== CLASS_WINDOW_KIND) {
+    return res.status(400).json({ error: 'הטופס הזה אינו טופס לוח חוגים' });
+  }
+  const employees = db.get('employees') || [];
+  const { groups: plans, skipped } = planClassStaffing(windowRow, req.body?.picks || [], {
+    groups: db.get('groups') || [],
+    employees,
+    classRoles: signupClassRoles(),
+    replace: req.body?.replace || [],
+  });
+
+  const updated = [];
+  for (const plan of plans) {
+    try {
+      // אותה בדיקה שעוברת שמירה ידנית של חוג: אי אפשר לשבץ עובד שהושבת בינתיים.
+      requireActiveEmployees([plan.trainer, ...plan.assistants].filter(Boolean));
+    } catch (error) {
+      skipped.push({ group_id: plan.group_id, reason: 'inactive_employee', error: error.message });
+      continue;
+    }
+    // רק שני השדות האלה: כל שדה אחר שיישלח לכאן ייעלם במיפוי של הקבוצה.
+    db.update('groups', plan.group_id, { trainer: plan.trainer, assistants: plan.assistants });
+    updated.push(plan);
+  }
+
+  // הודעה אחת לעובד עם כל החוגים שקיבל, ולא הודעה לכל חוג.
+  const byEmployee = new Map();
+  for (const plan of updated) {
+    for (const item of plan.placed) {
+      const list = byEmployee.get(item.employee_id) || [];
+      list.push({ label: plan.group_name || item.label, role: item.role });
+      byEmployee.set(item.employee_id, list);
+    }
+  }
+  let notified = 0;
+  try {
+    const result = await sendAssignmentSummaries({
+      windowRow,
+      byEmployee,
+      employees,
+      textFor: (placed) => classAssignmentMessageText(windowRow, placed),
+    });
+    notified = result?.sent || 0;
+  } catch (error) {
+    console.error('class assignment notify failed:', error.message);
+  }
+
+  res.json({ updated, skipped, notified });
+});
+
+/**
+ * הקישור האישי של עובד לטופס.
+ *
+ * כפתור „העתקת קישור” חילק עד כה את הכתובת הכללית, וזו מפילה את מי שפותח אותה
+ * חזרה לבורר שמות פתוח — בדיוק מה שהמפתח האישי נועד למנוע.
+ */
+app.post('/api/shift-signup/windows/:id/link', (req, res) => {
+  const windowRow = db.getOne('shift_signup_windows', req.params.id);
+  if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  const employee = db.getOne('employees', String(req.body?.employee_id || ''));
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const token = employeeLinkToken(employee.id);
+  const keys = { ...(windowRow.employee_keys || {}) };
+  if (!keys[employee.id]) {
+    keys[employee.id] = token;
+    db.update('shift_signup_windows', windowRow.id, { employee_keys: keys });
+  }
+  res.json({
+    employee_id: employee.id,
+    name: employee.name || '',
+    link: `${eventPublicBase()}/shift-signup/${windowRow.token}?u=${keys[employee.id]}`,
+  });
 });
 
 /**
@@ -15061,22 +15556,52 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
     if (!windowRow) return res.status(404).json({ error: 'הטופס לא נמצא' });
     const employees = db.get('employees') || [];
     const answers = responsesForWindow(responses, windowRow.id);
+    const me = employeeIdForKey(windowRow, req.query.u) || null;
+    const mineOf = () => (me ? answers.filter((a) => a.employee_id === me) : []).map((answer) => ({
+      employee_id: answer.employee_id,
+      picks: answer.picks || [],
+      wanted_count: answer.wanted_count || 0,
+      note: answer.note || '',
+    }));
+    if (windowRow.kind === CLASS_WINDOW_KIND) {
+      return res.json({
+        ...publicClassBoardView(windowRow, responses, israelDateStr()),
+        me,
+        eligible: eligibleEmployees(employees, windowRow.recipients),
+        mine: mineOf(),
+      });
+    }
+    const typeCatalog = await readActivityTypes();
+    // חוג אינו סוג ביומן אלא מסך אחר, ולכן הוא נושא צבע משלו.
+    const CLASS_META = { label: 'חוג', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' };
+    const typeMeta = (id) => (id === 'class' ? CLASS_META : typeCatalog.find((t) => t.id === id))
+      || { label: '', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' };
+    const view = publicWindowView(windowRow, answers);
     res.json({
-      ...publicWindowView(windowRow, answers),
+      ...view,
+      // הצבע והתווית של סוג הפעילות נוסעים עם המשמרת: הקטלוג עצמו נמצא מאחורי
+      // אימות, והטופס הזה נפתח בלי התחברות.
+      slots: (view.slots || []).map((slot) => {
+        const meta = typeMeta(slot.source_type);
+        return { ...slot, type_label: meta.label, type_color: meta.color, type_bg: meta.bg };
+      }),
       // מי פתח את הקישור, כשהוא אישי. הטופס נפתח על השם שלו בלי בורר, ואי אפשר
       // לענות בשם מישהו אחר — הקישור עובר בוואטסאפ ואפשר להעביר אותו הלאה.
-      me: employeeIdForKey(windowRow, req.query.u) || null,
+      me,
       // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
       // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
       eligible: eligibleEmployees(employees, windowRow.recipients),
-      // מה שכל אחד כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
+      // מה שאותו אדם כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
       // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
-      mine: answers.map((answer) => ({
-        employee_id: answer.employee_id,
-        picks: answer.picks || [],
-        wanted_count: answer.wanted_count || 0,
-        note: answer.note || '',
-      })),
+      // רק שלו: הקישור עובר בוואטסאפ, ומה שכל הצוות סימן אינו עניינו של מי
+      // שמחזיק בו.
+      mine: (me ? answers.filter((answer) => answer.employee_id === me) : [])
+        .map((answer) => ({
+          employee_id: answer.employee_id,
+          picks: answer.picks || [],
+          wanted_count: answer.wanted_count || 0,
+          note: answer.note || '',
+        })),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -15103,7 +15628,10 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // העובד עצמו נמסר לבדיקת הכשירות: מושב בתפקיד שהוא לא מסומן בו נדחה כאן,
     // ולא רק מוסתר במסך — הקישור עובר בוואטסאפ ואפשר לשלוח בקשה בלי המסך.
     const employee = employees.find((e) => String(e.id) === employeeId) || null;
-    const { record, existing, error } = applyResponse(windowRow, responses, req.body || {}, { employee });
+    const payload = { ...(req.body || {}), employee_id: employeeId };
+    const { record, existing, error } = windowRow.kind === CLASS_WINDOW_KIND
+      ? applyClassResponse(windowRow, responses, payload, { today: israelDateStr(), employee })
+      : applyResponse(windowRow, responses, payload, { employee });
     if (error) return res.status(400).json({ error });
     const saved = existing
       ? db.update('shift_signup_responses', existing.id, record)

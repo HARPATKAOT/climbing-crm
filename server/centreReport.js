@@ -47,49 +47,6 @@ const REPORT_NOISE = new Set([
   'במתנס', 'במתנ״ס', 'במתנ"ס', 'מתנס', 'מתנ״ס', 'מתנ"ס', 'לחוג', 'לקבוצה',
 ]);
 
-/**
- * The centre saying, in so many words, that this child is registered.
- *
- * A bare name used to be enough, and that is a status change made on a guess:
- * the same two words appear when כרמית asks us something about a child, or
- * tells us one has cancelled. Nothing moves without the word.
- */
-// Written out word by word rather than as a stem plus endings: Hebrew final
-// letters are separate characters, so «נרשמ» never matches «נרשם».
-const REGISTERED_WORDS = new RegExp(
-  '(?:^|[\\s.,!?])(?:'
-  + ['נרשם', 'נרשמה', 'נרשמו', 'נרשמתי', 'נרשמת', 'נרשמנו',
-    'רשום', 'רשומה', 'רשומים', 'רשומות',
-    'הושלמה ההרשמה', 'ההרשמה הושלמה', 'אושר', 'אושרה'].join('|')
-  + ')(?:$|[\\s.,!?])',
-  'u'
-);
-
-/**
- * The opposite, and it outranks everything else in the message. "נטע יאירי
- * ביטל את ההרשמה" contains a registration word, and marking him registered on
- * the strength of it is the one mistake that cannot be noticed from our side.
- */
-const CANCELLED_WORDS = new RegExp(
-  '(?:^|[\\s.,!?])(?:'
-  + ['ביטל', 'ביטלה', 'ביטלו', 'ביטלתי', 'ביטלנו', 'מבטל', 'מבטלת', 'מבטלים',
-    'בוטל', 'בוטלה', 'ביטול', 'הפסיק', 'הפסיקה', 'הפסיקו', 'פרש', 'פרשה', 'פרשו',
-    'לא ממשיך', 'לא ממשיכה', 'לא ממשיכים', 'לא נרשם', 'לא נרשמה', 'לא נרשמו',
-    'לא רשום', 'לא רשומה', 'יצא', 'יצאה', 'עזב', 'עזבה'].join('|')
-  + ')(?:$|[\\s.,!?])',
-  'u'
-);
-
-export function centreReportsRegistration(text) {
-  const typed = String(text || '');
-  if (CANCELLED_WORDS.test(typed)) return false;
-  return REGISTERED_WORDS.test(typed);
-}
-
-export function centreReportsCancellation(text) {
-  return CANCELLED_WORDS.test(String(text || ''));
-}
-
 /** The words of a name, with the reporting verbs around it removed. */
 export function centreNameTokens(text) {
   return normalizedName(text)

@@ -184,3 +184,42 @@ test('marketing send detection: template category first, then list', () => {
 test('phoneBucket folds 050 and 972 formats together', () => {
   assert.equal(phoneBucket('050-123-4567'), phoneBucket('972501234567'));
 });
+
+test('a family that is already registered is held back from a marketing blast', () => {
+  // "ההרשמה נפתחה! מהרו לשריין מקום" reached families whose children were
+  // already placed, and four of them answered "אבל כבר נרשמתי לא?".
+  const marketingTemplate = { name: 'openregister', category: 'MARKETING' };
+  const registered = {
+    id: '1', phone: '0501111111', name: 'תום', hasActiveRegistration: true, windowOpen: true,
+  };
+  const lead = {
+    id: '2', phone: '0502222222', name: 'דנה', hasActiveRegistration: false, windowOpen: true,
+  };
+
+  const result = evaluateSuppression({
+    recipients: [registered, lead],
+    template: marketingTemplate,
+    templates: [marketingTemplate],
+  });
+  assert.deepEqual(result.eligible.map((r) => r.id), ['2']);
+  const held = result.suppressed.find((r) => r.id === '1');
+  assert.ok(held.reasons.some((reason) => reason.code === 'already_registered'));
+  assert.equal(held.reasons.find((r) => r.code === 'already_registered').overridable, true);
+
+  // An operational message is still theirs to receive.
+  const operational = evaluateSuppression({
+    recipients: [registered, lead],
+    template: { name: 'hours_change', category: 'UTILITY' },
+    templates: [],
+  });
+  assert.deepEqual(operational.eligible.map((r) => r.id), ['1', '2']);
+
+  // And the owner can knowingly send it anyway.
+  const overridden = evaluateSuppression({
+    recipients: [registered],
+    template: marketingTemplate,
+    templates: [marketingTemplate],
+    overrides: ['1'],
+  });
+  assert.deepEqual(overridden.eligible.map((r) => r.id), ['1']);
+});

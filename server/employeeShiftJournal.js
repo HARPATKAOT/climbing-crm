@@ -130,6 +130,10 @@ export function buildShiftJournal({
   //    שורת שכר — בלי השורות האלה חצי מהעבר של עוזר מדריך פשוט נעלם.
   for (const row of staffAttendance) {
     if (row.employee_id !== employeeId || !row.date) continue;
+    // שורת נוכחות של אירוע ביומן — לאירוע כבר יש שורה משלו ביומן העבודה,
+    // והיא זו שמופיעה כאן. בלי הדילוג `groupDayKey(undefined, date)` היה מפתח
+    // אחד לכל אירועי אותו יום, וכל אחד מהם היה מכסה את השני.
+    if (!row.group_id) continue;
     const key = groupDayKey(row.group_id, row.date);
     const group = groups.find((g) => g.id === row.group_id) || null;
     const label = CLASS_ROLE_LABEL[row.role] || CLASS_ROLE_LABEL.trainer;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyResponse,
   calendarSlotCandidates,
+  classNeedsFor,
   eligibleEmployees,
   expandWeeklySlots,
   findSlotAssignment,
@@ -875,4 +876,31 @@ test('the message to an employee names the role for each shift', () => {
     `• יום רביעי, 12.8 · 15:30–18:00 · פתיחת קיר · ${WALL}`,
   ]);
   assert.match(text, /משמרות פתיחה/);
+});
+
+// ─── דרישת תפקידים לחוג ─────────────────────────────────────────────────────
+test('a class with nothing written on it asks for one trainer', () => {
+  assert.deepEqual(classNeedsFor(undefined, CLASS_ROLES), [{ role: 'הדרכת חוג', count: 1 }]);
+  assert.deepEqual(classNeedsFor([], CLASS_ROLES), [{ role: 'הדרכת חוג', count: 1 }]);
+});
+
+test('what was written on the class wins over the default', () => {
+  assert.deepEqual(
+    classNeedsFor([{ role: 'הדרכת חוג', count: 1 }, { role: 'עוזר מדריך', count: 2 }], CLASS_ROLES),
+    [{ role: 'הדרכת חוג', count: 1 }, { role: 'עוזר מדריך', count: 2 }]
+  );
+});
+
+test('a class carries its own requirement into the picker', () => {
+  const { candidates } = calendarSlotCandidates({
+    groups: [{ id: 'g1', name: 'חוג', day: 2, time: '16:00', duration: 50 }],
+    classNeedsByGroup: { g1: [{ role: 'עוזר מדריך', count: 2 }] },
+    rolesByType: ROLES_BY_TYPE,
+    classRoles: CLASS_ROLES,
+    types: ['class'],
+    from: '2026-08-11',
+    to: '2026-08-11',
+  });
+  assert.deepEqual(candidates[0].needs, [{ role: 'עוזר מדריך', count: 2 }]);
+  assert.deepEqual(candidates[0].staffing, [{ role: 'עוזר מדריך', count: 2, staffed: 0 }]);
 });

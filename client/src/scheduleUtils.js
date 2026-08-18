@@ -16,6 +16,19 @@ export function getGroupDays(group) {
   return [group?.day].filter((d) => d != null);
 }
 
+/** Assistant ids on a group, tolerant of older rows that have no list at all. */
+export function normalizeAssistants(value) {
+  return Array.isArray(value) ? value.filter(id => typeof id === 'string' && id) : [];
+}
+
+/** Names of the assistants assigned to a group, skipping ids we can't resolve. */
+export function assistantNamesOf(group, employees = []) {
+  return normalizeAssistants(group?.assistants)
+    .map(id => employees.find(e => e.id === id))
+    .filter(Boolean)
+    .map(e => e.name);
+}
+
 // The palette the weekly board paints its blocks with, keyed by age band. It
 // lives here rather than in Schedule.jsx because the group pickers elsewhere
 // have to come out the same colour — a card the user recognises from the board.

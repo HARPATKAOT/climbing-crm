@@ -17,12 +17,16 @@
  *   without a second bookkeeping step.
  */
 
+import { randomBytes } from 'node:crypto';
 import {
   activityDateRange,
   getGroupDays,
   israelDateStr,
   isTrainingVacationDate,
 } from './attendanceUtils.js';
+
+const TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+const TOKEN_LENGTH = 12;
 
 export const SIGNUP_TABLE = 'shift_signup_windows';
 export const RESPONSE_TABLE = 'shift_signup_responses';
@@ -45,7 +49,7 @@ const WORK_TYPE_BY_ACTIVITY_TYPE = {
 const HM = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function cleanText(value, max = 200) {
+export function cleanText(value, max = 200) {
   return String(value ?? '').trim().slice(0, max);
 }
 
@@ -159,6 +163,9 @@ export function normalizeSlot(raw = {}) {
       // חוג ובניית מסלולים אינם אותו סוג שורה ביומן העבודה. כשהמשמרת נבחרה
       // מהיומן היא יודעת מה היא, וזה גובר על ברירת המחדל של הטופס.
       work_type: SIGNUP_WORK_TYPES.includes(raw.work_type) ? raw.work_type : null,
+      // סוג הרשומה ביומן. נשמר כדי שהטופס יוכל לצבוע את המשמרת בצבע שלה
+      // ביומן — „הנקיק השחור” לבדו לא אומר אם זה טיול או שעות פתיחה.
+      source_type: cleanText(raw.source_type, 40) || null,
     },
   };
 }
@@ -234,7 +241,22 @@ export const CLASS_SOURCE_TYPE = 'class';
  * סביר בהיעדר מידע. ובסוף תפקיד ריק, שפירושו „מי שמתאים”: עדיף להציע משמרת בלי
  * לדעת מה היא צריכה מאשר לא להציע אותה בכלל.
  */
-function needsForActivity(activity, rolesByType, type) {
+/**
+ * מה חוג צריך.
+ *
+ * מה שנכתב על החוג גובר; בלעדיו — מדריך אחד, שזו האמת של רוב החוגים. עוזר
+ * מדריך הוא תוספת שנבחרת לחוג מסוים, ולכן הוא לא נכנס לברירת המחדל: טופס
+ * שמבקש עוזר לכל חוג בקיר מזמין התנדבות שאיש לא ביקש.
+ */
+export function classNeedsFor(savedNeeds, classRoles = []) {
+  const explicit = normalizeNeeds(savedNeeds, 0);
+  if (explicit[0]?.role) return explicit;
+  return classRoles.length
+    ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
+    : [{ role: '', count: 1 }];
+}
+
+export function needsForActivity(activity, rolesByType, type) {
   const explicit = normalizeNeeds(activity?.staff_needs, 0);
   if (explicit[0]?.role) return explicit;
   if (activity?.staff_role) return [{ role: cleanText(activity.staff_role, 60), count: 1 }];
@@ -243,6 +265,24 @@ function needsForActivity(activity, rolesByType, type) {
     return byType.map((role) => ({ role: cleanText(role, 60), count: 1 })).filter((n) => n.role);
   }
   return [{ role: '', count: 1 }];
+}
+
+/**
+ * מה כבר מאויש בכל תפקיד בנפרד.
+ *
+ * „כבר 1” על משמרת שצריכה מפעיל קיר ושני עוזרים לא אומר דבר — לא ברור מי מהם
+ * כבר יש. הפירוט לכל תפקיד הוא מה שהמנהל שוקל כשהוא מחליט אם בכלל להציע את
+ * המשמרת, ולכן הוא נשלח לצדו של מה שהיא צריכה.
+ */
+function staffingOf(needs, assignments, where) {
+  return needs.map((need) => ({
+    role: need.role,
+    count: need.count,
+    staffed: Math.min(
+      need.count,
+      staffedCount(assignments, { ...where, role: need.role || null })
+    ),
+  }));
 }
 
 /** How many people already hold this exact calendar slot in the given role. */
@@ -297,6 +337,8 @@ export function calendarSlotCandidates({
   assignments = [],
   rolesByType = {},
   classRoles = [],
+  // מה שנשמר על כל חוג. המודול לא יודע על טבלאות, ולכן המפה מגיעה מהמסלול.
+  classNeedsByGroup = {},
   from,
   to,
   types = null,
@@ -358,6 +400,7 @@ export function calendarSlotCandidates({
         start_time: start,
         end_time: end,
         needs,
+        staffing: staffingOf(needs, assignments, { date, startTime: start, activityId: activity.id }),
         label: cleanText(activity.name, 60),
         activity_id: activity.id || null,
         group_id: null,
@@ -410,11 +453,7 @@ export function calendarSlotCandidates({
 
       if (!offeredClass) continue;
 
-      // חוג צריך מי שמדריך אותו. `classRoles` הם התפקידים שיכולים לקחת חוג,
-      // והראשון שבהם הוא ההדרכה עצמה — עוזר מדריך הוא תוספת, לא תחליף.
-      const classNeeds = classRoles.length
-        ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
-        : [{ role: '', count: 1 }];
+      const classNeeds = classNeedsFor(classNeedsByGroup[group.id], classRoles);
 
       for (const date of dates) {
         candidates.push({
@@ -423,6 +462,7 @@ export function calendarSlotCandidates({
           start_time: start,
           end_time: end,
           needs: classNeeds,
+          staffing: staffingOf(classNeeds, assignments, { date, startTime: start, groupId: group.id }),
           label: cleanText(group.name, 60),
           activity_id: null,
           group_id: group.id || null,
@@ -450,13 +490,14 @@ export function calendarSlotCandidates({
 
 /** Short, unguessable, and readable enough to be dictated over the phone. */
 export function newSignupToken() {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  // `randomBytes` ולא `Math.random`: המפתח הזה הוא כל מה שעומד בין קישור שהועבר
+  // בוואטסאפ לבין תשובה בשם מישהו אחר, ומחולל פסאודו-אקראי אפשר לנחש ממנו קדימה.
+  const bytes = randomBytes(TOKEN_LENGTH);
   let token = '';
-  for (let i = 0; i < 12; i += 1) {
-    token += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for (let i = 0; i < TOKEN_LENGTH; i += 1) token += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
   return token;
 }
+
 
 /**
  * מי מקבל את הקישור. רשימה ריקה פירושה „כל הצוות” — הטופס מציע לכל אחד את

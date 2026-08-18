@@ -16,6 +16,12 @@ import { TASKS_COLLECTION, TASK_OPEN } from './aiActions.js';
 import { actionTypeMeta, ACTION_KIND } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { israelDateStr } from './attendanceUtils.js';
+import { supa } from './supa.js';
+
+/** No Supabase and an opted-in local file: a test run, never production. */
+export function isolatedLocalStore() {
+  return !supa.isEnabled() && process.env.LOCAL_DURABLE_STORAGE === '1';
+}
 
 export const REVIEW_TASK_SOURCE = 'bot_review';
 export const REVIEW_TASK_CAPABILITY = 'review_tasks';
@@ -62,6 +68,12 @@ export function openBotReviewTask(db, persist, entry = {}, { today = israelDateS
   try {
     const meta = actionTypeMeta(entry.type);
     if (meta.kind !== ACTION_KIND) return null;
+    // The isolated local store — a test run, or a dev box with no credentials.
+    // Eleven review tasks about fixture children („יותם כהן”, „גיל
+    // זלטוקרילוב”) reached the real task list this way: they were written to
+    // db.json during a test, and the next boot with credentials migrated
+    // every local row the database was missing straight up.
+    if (isolatedLocalStore()) return null;
     if (!reviewTasksEnabled(db.getSettings?.() || {})) return null;
 
     const fingerprint = reviewTaskFingerprint(entry, today);

@@ -238,13 +238,14 @@ function ClassAttendanceSummary({ employeeId, month, paidHoursThisMonth }) {
   );
 
   const total = summary?.total || { present: 0, absent: 0, hours: 0 };
+  const reliability = summary?.reliability || null;
   const assistant = summary?.assistant || { present: 0, absent: 0, hours: 0 };
 
   return (
     <div className="card card-p">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Clock size={14} style={{ color: 'var(--text-3)' }} /> שעות וחיסורים בחוגים
+          <Clock size={14} style={{ color: 'var(--text-3)' }} /> נוכחות ואמינות
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
           {[['month', 'החודש'], ['all', 'מאז ומתמיד']].map(([key, label]) => (
@@ -270,6 +271,42 @@ function ClassAttendanceSummary({ employeeId, month, paidHoursThisMonth }) {
         {stat('אימונים שהיה בהם', total.present)}
         {stat('חיסורים', total.absent, total.absent > 0 ? 'var(--red)' : undefined)}
       </div>
+
+      {/* אמינות והיקף — נמדדים תמיד על כל ההיסטוריה, ולא על החלון שנבחר למעלה:
+          דגל שמשתנה כשמחליפים חודש בתצוגה אינו דגל. */}
+      {reliability && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            {stat('אחוז הגעה', reliability.total.attendance_pct === null
+              ? '—'
+              : `${reliability.total.attendance_pct}%`,
+            reliability.flags.reliability ? 'var(--red)' : 'var(--green)')}
+            {stat('הברזות', reliability.total.absent, reliability.total.absent > 0 ? 'var(--red)' : undefined)}
+            {stat('החלפות', reliability.total.substituted)}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {reliability.flags.reliability && (
+              <span className="badge badge-red">
+                אחוז הגעה מתחת ל-{reliability.thresholds.reliability_min_pct}%
+              </span>
+            )}
+            {reliability.flags.volume && (
+              <span className="badge badge-amber">
+                פחות מ-{reliability.thresholds.volume_min_events_per_month} אירועים בחודש
+                {' '}(ממוצע {reliability.monthly_average})
+              </span>
+            )}
+            {!reliability.flags.reliability && !reliability.flags.volume && reliability.total.marked > 0 && (
+              <span className="badge badge-green">עומד במכסה</span>
+            )}
+            {reliability.total.marked === 0 && (
+              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                עוד לא סומנה לו אף נוכחות — אין ממה לחשב.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {assistant.hours > 0 && (
         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
@@ -2821,6 +2858,36 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
     return () => { cancelled = true; };
   }, [activeTab]);
 
+  const [reliabilitySettings, setReliabilitySettings] = useState(null);
+  const [reliabilityMsg, setReliabilityMsg] = useState('');
+
+  useEffect(() => {
+    if (activeTab !== 'settings') return undefined;
+    let cancelled = false;
+    fetch('/api/settings/staff-reliability')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => { if (!cancelled && body) setReliabilitySettings(body); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeTab]);
+
+  const saveReliabilitySettings = async () => {
+    setReliabilityMsg('');
+    try {
+      const res = await fetch('/api/settings/staff-reliability', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reliabilitySettings),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'שמירה נכשלה');
+      setReliabilitySettings(body);
+      setReliabilityMsg('נשמר');
+    } catch (err) {
+      setReliabilityMsg(err.message || 'שמירה נכשלה');
+    }
+  };
+
   const saveStaffAttSettings = async () => {
     setStaffAttBusy(true);
     setStaffAttMsg('');
@@ -3762,6 +3829,42 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
       )}
 
       {/* ─── Tab: Onboarding link ───────────────────────────────────────────── */}
+      {activeTab === 'settings' && reliabilitySettings && (
+        <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 520, marginBottom: 16 }}>
+          <div>
+            <div className="section-title" style={{ marginBottom: 4 }}>מתי מתנדב מסומן כלא עומד במכסה</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              שני דגלים נפרדים: מי שנרשם ולא מגיע, ומי שכמעט לא נרשם. אחוז ההגעה
+              נמדד רק על משמרות שסומנו — מפגש שאיש לא סימן אינו נחשב הברזה.
+            </div>
+          </div>
+          {[
+            ['reliability_min_pct', 'אחוז הגעה מזערי', 0, 100],
+            ['reliability_min_marked', 'כמה סימונים לפני שמדגלים', 1, 100],
+            ['volume_min_events_per_month', 'אירועים בחודש (חוגים נספרים בנפרד)', 0, 60],
+            ['volume_window_months', 'על פני כמה חודשים', 1, 24],
+          ].map(([key, label, min, max]) => (
+            <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-3)' }}>
+              {label}
+              <input
+                className="input"
+                type="number"
+                min={min}
+                max={max}
+                value={reliabilitySettings[key]}
+                onChange={(e) => setReliabilitySettings((p) => ({ ...p, [key]: Number(e.target.value) }))}
+              />
+            </label>
+          ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="btn btn-primary btn-sm" onClick={saveReliabilitySettings}>
+              <Save size={14} /> שמירה
+            </button>
+            {reliabilityMsg && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{reliabilityMsg}</span>}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'settings' && (
         <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520 }}>
           <div>

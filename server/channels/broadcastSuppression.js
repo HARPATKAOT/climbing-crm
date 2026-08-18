@@ -49,6 +49,10 @@ export const REASON_META = {
     label: 'טלפון של מתאמן — לפי מסנן «נמענים» הדיוור נשלח להורים',
     overridable: false,
   },
+  already_registered: {
+    label: 'כבר רשום/ה לחוג — הודעת פתיחת הרשמה אינה רלוונטית',
+    overridable: true,
+  },
 };
 
 export const DEFAULT_RECENCY_DAYS = 7;
@@ -187,6 +191,13 @@ export function evaluateSuppression({
     }
     if (recipient.listUnsubscribed) {
       addReason('list_unsubscribed');
+    }
+    // A family that is already registered was told to hurry and reserve a
+    // place. Four of them wrote back confused, and the bot then had to answer
+    // a question the message itself had created. Overridable, because plenty
+    // of marketing is right for them — just not "registration is open".
+    if (marketing && recipient.hasActiveRegistration) {
+      addReason('already_registered');
     }
 
     const rows = outbound.get(phoneBucket(recipient.phone)) || [];
