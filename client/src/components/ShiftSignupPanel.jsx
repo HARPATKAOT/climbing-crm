@@ -17,6 +17,7 @@ import { isWallStaff } from '../utils/employeeScope.js';
 import { activityFilterChips, activityTypeMeta, useActivityTypes } from '../utils/activityTypes.js';
 import { activityTypeIcon } from '../utils/activityIcons.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
+import ClassBoardGrid, { GroupBlock } from './schedule/ClassBoardGrid.jsx';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -880,6 +881,14 @@ function SignupBoard({ windowId, onChanged }) {
   }, [data, picked]);
 
   const isClassBoard = data?.kind === 'class_board';
+  // איזה חוג פתוח לשיבוץ. הלוח הוא המפה; הכרטיס שמתחתיו הוא שולחן העבודה.
+  const [focusSeat, setFocusSeat] = useState('');
+  useEffect(() => {
+    if (!isClassBoard || !data?.board?.length) return;
+    setFocusSeat((current) => (current && data.board.some((row) => row.id === current)
+      ? current
+      : (data.board.find((row) => row.missing > 0) || data.board[0]).id));
+  }, [isClassBoard, data]);
 
   const approve = async (replace = []) => {
     setBusy(true);
@@ -925,8 +934,43 @@ function SignupBoard({ windowId, onChanged }) {
 
       {error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>}
 
+      {/* טופס חוגים נפתח על הלוח עצמו: אותם צבעים, אותה רשת. לחיצה על חוג
+          בוחרת אותו, והכרטיס שמתחת מציג רק אותו — מפה למעלה, עבודה למטה. */}
+      {isClassBoard && (
+        <ClassBoardGrid
+          groups={(data.board || []).map((row) => ({
+            id: row.group_id,
+            name: row.label,
+            day: row.day,
+            time: row.time,
+            duration: row.duration,
+            ageCategory: row.ageCategory,
+            trainerName: row.trainer_name || '',
+            boardRow: row,
+          }))}
+          renderBlock={(group, day) => (
+            <GroupBlock
+              key={`${group.id}-${day}`}
+              group={group}
+              enrolledCount={null}
+              selected={focusSeat === group.boardRow.id}
+              onClick={() => setFocusSeat(group.boardRow.id)}
+            >
+              <div style={{ marginTop: 2 }}>
+                <span className={`badge ${group.boardRow.missing > 0 ? 'badge-amber' : 'badge-green'}`}
+                  style={{ fontSize: 9, padding: '1px 6px' }}>
+                  {group.boardRow.missing > 0 ? `חסרים ${group.boardRow.missing}` : 'מאויש'}
+                </span>
+              </div>
+            </GroupBlock>
+          )}
+        />
+      )}
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {(data.board || []).map((slot) => {
+        {(data.board || [])
+          .filter((slot) => !isClassBoard || slot.id === focusSeat)
+          .map((slot) => {
           const draft = (slot.seats || []).reduce((sum, seat) => sum + (seat.claimants || [])
             .filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length, 0);
           const full = slot.missing - draft <= 0;

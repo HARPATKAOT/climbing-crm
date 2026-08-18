@@ -5,7 +5,7 @@ import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, His
 import { DAYS_FULL } from '../mockData.js';
 import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
-  fetchRoleCatalog, roleLabelOf, payableRolesOf, useRoleCatalog,
+  fetchRoleCatalog, roleLabelOf,
 } from '../utils/staffRoles.js';
 import { canConductSafetyTest, employeesFor } from '../utils/operationalEmployees.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
@@ -990,7 +990,6 @@ function PeoplePicker({ options, selected, onToggle, onClear, placeholder, multi
 // ─── Group Form Modal (Add / Edit) ────────────────────────────────────────────
 function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const roleLabels = useStaffRoleLabels();
-  const roleCatalog = useRoleCatalog();
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
   const [trainingDays, setTrainingDays] = useState(() => {
@@ -1225,11 +1224,15 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                 לצוות, ובלעדיה חוג יכול לבקש רק מדריך אחד. */}
             {group?.id && (
               <div className="form-group">
+                {/* חוג מאויש רק בשני תפקידים — הצעת „הפעלת קיר” כאן הייתה רעש. */}
                 <StaffNeedsEditor
                   endpoint={`/api/groups/${encodeURIComponent(group.id)}/staff-needs`}
-                  roleOptions={payableRolesOf(roleCatalog)}
+                  roleOptions={[
+                    { role: roleLabels.trainer, key: SYSTEM_ROLE_KEYS.TRAINER },
+                    { role: roleLabels.assistant, key: SYSTEM_ROLE_KEYS.ASSISTANT },
+                  ]}
                   title="מה החוג צריך"
-                  emptyLabel="מדריך אחד, כרגיל"
+                  emptyLabel="מדריך ושני עוזרים, כרגיל"
                 />
               </div>
             )}

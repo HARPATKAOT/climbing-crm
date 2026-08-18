@@ -57,8 +57,41 @@ test('editing the form keeps the ticks of classes that stayed', () => {
   assert.equal(edited.token, first.token);
 });
 
-test('a class with no stated requirement asks for one trainer', () => {
-  assert.deepEqual(windowFixture().seats[1].needs, [{ role: 'הדרכת חוג', count: 1 }]);
+test('a class with no stated requirement asks for one trainer and two assistants', () => {
+  assert.deepEqual(windowFixture().seats[1].needs, [
+    { role: 'הדרכת חוג', count: 1 },
+    { role: 'עוזר מדריך', count: 2 },
+  ]);
+});
+
+test('a trainer may claim an assistant seat; an assistant may not claim a trainer seat', () => {
+  const row = windowFixture();
+  const fallbacks = { 'עוזר מדריך': ['הדרכת חוג'] };
+  // "ותיק" מוסמך רק כמדריך — ובכל זאת מושב עוזר פתוח בפניו.
+  const trainerPick = applyClassResponse(row, [], {
+    employee_id: 'e9',
+    picks: [{ slot_id: classSeatId('g1'), role: 'עוזר מדריך' }],
+  }, { today: TODAY, employee: EMPLOYEES[2], roleFallbacks: fallbacks });
+  assert.deepEqual(trainerPick.record.picks, [{ slot_id: classSeatId('g1'), role: 'עוזר מדריך' }]);
+
+  // דנה מוסמכת רק כעוזרת — מושב מדריך נשאר סגור גם עם המדרג.
+  const assistantPick = applyClassResponse(row, [], {
+    employee_id: 'e1',
+    picks: [{ slot_id: classSeatId('g1'), role: 'הדרכת חוג' }],
+  }, { today: TODAY, employee: EMPLOYEES[0], roleFallbacks: fallbacks });
+  assert.deepEqual(assistantPick.record.picks, []);
+});
+
+test('approval seats a trainer in an assistant chair — two trainers, one assistant', () => {
+  const row = windowFixture();
+  const { groups, skipped } = planClassStaffing(row, [
+    { slot_id: classSeatId('g1'), employee_id: 'e2', role: 'הדרכת חוג' },
+    // e9 מוסמך רק כמדריך, ולוקח מושב עוזר — התרחיש של שני מדריכים בחוג אחד.
+    { slot_id: classSeatId('g1'), employee_id: 'e9', role: 'עוזר מדריך' },
+  ], { groups: GROUPS, employees: EMPLOYEES, classRoles: CLASS_ROLES });
+  assert.deepEqual(skipped, []);
+  assert.equal(groups[0].trainer, 'e2');
+  assert.deepEqual(groups[0].assistants, ['e9']);
 });
 
 test('the form closes on status and on its deadline, never on a passing date', () => {

@@ -10,7 +10,7 @@
  */
 import React, { useState } from 'react';
 import { CalendarCheck, Check, Loader2, X } from 'lucide-react';
-import ClassBoardGrid, { GroupBlock } from './schedule/ClassBoardGrid.jsx';
+import ClassBoardGrid, { GroupBlock, t2m } from './schedule/ClassBoardGrid.jsx';
 import { roleIcon } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -45,6 +45,28 @@ export default function PublicClassBoardSignup({
   const groups = seatsAsGroups(data.seats);
   const pickOf = (seatId) => picks.find((p) => p.slot_id === seatId) || null;
 
+  // הלוח נגזר מהחוגים שבטופס ולא מ-14:00-22:00 הקבועים: טופס של חוגי אחר
+  // הצהריים לא צריך לצייר ערב ריק, ובטלפון כל דקה מיותרת היא גלילה.
+  const minutes = groups.map((g) => t2m(g.time));
+  const ends = groups.map((g) => t2m(g.time) + (Number(g.duration) || 50));
+  const startMin = groups.length ? Math.floor(Math.min(...minutes) / 60) * 60 : 14 * 60;
+  const endMin = groups.length ? Math.ceil(Math.max(...ends) / 60) * 60 : 22 * 60;
+  // צפיפות שנכנסת במסך: שאיפה ל~420 פיקסל גובה, בלי לרדת מגובה שאפשר לגעת בו.
+  const pxPerMin = Math.min(1.2, Math.max(0.75, 420 / Math.max(60, endMin - startMin)));
+
+  const openSeatData = (data.seats || []).find((seat) => seat.id === openSeat) || null;
+
+  const clickSeat = (seat) => {
+    if (!employee) return;
+    const mine = pickOf(seat.id);
+    if (mine) { onClear(seat.id); return; }
+    const roles = (seat.needs || []).filter((need) => canFill(need.role));
+    // תפקיד אפשרי אחד — הלחיצה בוחרת אותו. יותר מאחד — הבחירה נפתחת מתחת
+    // ללוח, כי בתוך משבצת בגובה 40 פיקסל אין מקום לכפתור שאצבע פוגעת בו.
+    if (roles.length === 1) onClaim(seat.id, roles[0].role);
+    else setOpenSeat(openSeat === seat.id ? '' : seat.id);
+  };
+
   return (
     <>
       <section>
@@ -57,59 +79,30 @@ export default function PublicClassBoardSignup({
         <div className="class-signup-board">
           <ClassBoardGrid
             groups={groups}
-            renderBlock={(group, day) => {
+            startMin={startMin}
+            endMin={endMin}
+            pxPerMin={pxPerMin}
+            hourLabelWidth={34}
+            minColWidth={0}
+            showCounts={false}
+            renderBlock={(group, day, geometry) => {
               const { seat } = group;
               const mine = pickOf(seat.id);
-              const open = openSeat === seat.id;
               return (
                 <GroupBlock
                   key={`${seat.id}-${day}`}
                   group={group}
                   enrolledCount={null}
                   showStaff={false}
-                  selected={Boolean(mine)}
-                  onClick={() => {
-                    if (!employee) return;
-                    const roles = (seat.needs || []).filter((need) => canFill(need.role));
-                    // תפקיד אחד אפשרי — לחיצה אחת מספיקה. יותר מאחד, ובוחרים.
-                    if (!mine && roles.length === 1) onClaim(seat.id, roles[0].role);
-                    else setOpenSeat(open ? '' : seat.id);
-                  }}
+                  selected={Boolean(mine) || openSeat === seat.id}
+                  startMin={geometry.startMin}
+                  pxPerMin={geometry.pxPerMin}
+                  onClick={() => clickSeat(seat)}
                   onContextMenu={(e) => { e.preventDefault(); onClear(seat.id); }}
                 >
                   {mine && (
                     <div className="class-seat-mine">
                       <Check size={10} /> {mine.role}
-                      <button
-                        type="button"
-                        className="class-seat-clear"
-                        title="הסרת הבחירה"
-                        onClick={(e) => { e.stopPropagation(); onClear(seat.id); }}
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
-                  )}
-                  {open && !mine && (
-                    <div className="class-seat-roles" onClick={(e) => e.stopPropagation()}>
-                      {(seat.needs || []).map((need) => {
-                        const RoleIcon = roleIcon(need.role);
-                        const allowed = canFill(need.role);
-                        return (
-                          <button
-                            type="button"
-                            key={need.role || 'any'}
-                            className={`class-seat-pill ${allowed ? '' : 'is-off'}`}
-                            disabled={!allowed}
-                            title={allowed
-                              ? `${need.role} · דרושים ${need.count}, סימנו ${need.taken}`
-                              : `אינך מסומן כ„${need.role}” בכרטיס העובד`}
-                            onClick={() => { onClaim(seat.id, need.role); setOpenSeat(''); }}
-                          >
-                            <RoleIcon size={10} /> {need.role}
-                          </button>
-                        );
-                      })}
                     </div>
                   )}
                 </GroupBlock>
@@ -117,6 +110,38 @@ export default function PublicClassBoardSignup({
             }}
           />
         </div>
+
+        {/* בורר התפקיד — מתחת ללוח ולא בתוך המשבצת: בטלפון המשבצת קטנה מדי
+            לכפתורים, וכאן הם בגודל שאצבע פוגעת בו. */}
+        {openSeatData && !pickOf(openSeatData.id) && (
+          <div className="class-seat-picker">
+            <div className="class-seat-picker-title">{openSeatData.label}</div>
+            <div className="class-seat-picker-roles">
+              {(openSeatData.needs || []).map((need) => {
+                const RoleIcon = roleIcon(need.role);
+                const allowed = canFill(need.role);
+                return (
+                  <button
+                    type="button"
+                    key={need.role || 'any'}
+                    className={`class-seat-pill is-big ${allowed ? '' : 'is-off'}`}
+                    disabled={!allowed}
+                    title={allowed
+                      ? `${need.role} · דרושים ${need.count}, סימנו ${need.taken}`
+                      : `אינך מסומן כ„${need.role}” בכרטיס העובד`}
+                    onClick={() => { onClaim(openSeatData.id, need.role); setOpenSeat(''); }}
+                  >
+                    <RoleIcon size={13} /> {need.role}
+                    <span style={{ opacity: 0.7, fontWeight: 600 }}>· סימנו {need.taken}</span>
+                  </button>
+                );
+              })}
+              <button type="button" className="class-seat-pill is-big" onClick={() => setOpenSeat('')}>
+                <X size={13} /> סגירה
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* הלוח צר בטלפון, ולכן מה שנבחר מסוכם גם כרשימה. */}
         <div className="class-signup-summary">
@@ -155,7 +180,14 @@ export default function PublicClassBoardSignup({
       </div>
 
       <style>{`
-        .class-signup-board{padding:0 24px;margin-top:10px}
+        .class-signup-board{padding:0 10px;margin-top:10px}
+        .class-signup-board .card{overflow:hidden !important}
+        .class-seat-picker{margin:10px 10px 0;padding:10px 12px;border-radius:12px;
+          border:1px solid var(--form-accent-border,rgba(56,189,248,.45));
+          background:var(--form-accent-soft,rgba(56,189,248,.09))}
+        .class-seat-picker-title{font-size:13px;font-weight:800;color:#fff;margin-bottom:8px}
+        .class-seat-picker-roles{display:flex;flex-wrap:wrap;gap:7px}
+        .class-seat-pill.is-big{font-size:13px;padding:9px 14px;border-radius:11px}
         .class-signup-board .card{background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.1);border-radius:14px}
         .class-seat-mine{display:flex;align-items:center;gap:4px;font-size:9.5px;font-weight:800;
           color:#0b1220;background:var(--form-accent-solid,#38bdf8);border-radius:6px;padding:1px 5px;margin-top:2px}

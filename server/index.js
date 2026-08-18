@@ -15078,6 +15078,12 @@ function employeeIdForKey(windowRow, key) {
 }
 
 /** כל התפקידים שטופס אחד מבקש, על פני כל המשמרות שבו. */
+/** מדריך יכול לאייש מושב של עוזר מדריך — לא להפך. */
+function signupRoleFallbacks() {
+  const [trainerRole, assistantRole] = signupClassRoles();
+  return trainerRole && assistantRole ? { [assistantRole]: [trainerRole] } : {};
+}
+
 function windowRowRoles(windowRow) {
   // טופס יומן מחזיק משמרות; טופס לוח חוגים מחזיק מושבים. התפקידים נאספים
   // משניהם — בלי זה סינון התפקידים בשליחה פשוט לא פעל על טפסי חוגים.
@@ -15571,6 +15577,7 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
         ...publicClassBoardView(windowRow, responses, israelDateStr()),
         me,
         eligible: eligibleEmployees(employees, windowRow.recipients),
+        role_fallbacks: signupRoleFallbacks(),
         mine: mineOf(),
       });
     }
@@ -15594,6 +15601,7 @@ app.get('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res)
       // כל נמען עם התפקידים שלו: הטופס מציג לכל אחד רק את המושבים שהוא יכול
       // לקחת, וזו ההחלטה שהחליפה את נעילת הטופס לתפקיד אחד.
       eligible: eligibleEmployees(employees, windowRow.recipients),
+      role_fallbacks: signupRoleFallbacks(),
       // מה שאותו אדם כבר ענה, כדי שפתיחה חוזרת של הקישור תהיה תיקון ולא התחלה
       // מאפס — תשובה חדשה מחליפה את הקודמת, ובלי זה היא הייתה מוחקת אותה.
       // רק שלו: הקישור עובר בוואטסאפ, ומה שכל הצוות סימן אינו עניינו של מי
@@ -15632,9 +15640,10 @@ app.post('/api/public/shift-signup/:token', publicFormRateLimit, async (req, res
     // ולא רק מוסתר במסך — הקישור עובר בוואטסאפ ואפשר לשלוח בקשה בלי המסך.
     const employee = employees.find((e) => String(e.id) === employeeId) || null;
     const payload = { ...(req.body || {}), employee_id: employeeId };
+    const roleFallbacks = signupRoleFallbacks();
     const { record, existing, error } = windowRow.kind === CLASS_WINDOW_KIND
-      ? applyClassResponse(windowRow, responses, payload, { today: israelDateStr(), employee })
-      : applyResponse(windowRow, responses, payload, { employee });
+      ? applyClassResponse(windowRow, responses, payload, { today: israelDateStr(), employee, roleFallbacks })
+      : applyResponse(windowRow, responses, payload, { employee, roleFallbacks });
     if (error) return res.status(400).json({ error });
     const saved = existing
       ? db.update('shift_signup_responses', existing.id, record)

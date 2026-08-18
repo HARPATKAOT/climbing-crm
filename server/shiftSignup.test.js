@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyResponse,
   calendarSlotCandidates,
+  canFillSeatRole,
   classNeedsFor,
   eligibleEmployees,
   expandWeeklySlots,
@@ -560,7 +561,10 @@ test('a class asks for the role that teaches it', () => {
     to: '2026-08-20',
   });
   assert.equal(candidates.length, 2);
-  assert.deepEqual(candidates[0].needs, [{ role: 'הדרכת חוג', count: 1 }]);
+  assert.deepEqual(candidates[0].needs, [
+    { role: 'הדרכת חוג', count: 1 },
+    { role: 'עוזר מדריך', count: 2 },
+  ]);
 });
 
 test('a candidate reports how many are already placed on it', () => {
@@ -879,9 +883,20 @@ test('the message to an employee names the role for each shift', () => {
 });
 
 // ─── דרישת תפקידים לחוג ─────────────────────────────────────────────────────
-test('a class with nothing written on it asks for one trainer', () => {
-  assert.deepEqual(classNeedsFor(undefined, CLASS_ROLES), [{ role: 'הדרכת חוג', count: 1 }]);
-  assert.deepEqual(classNeedsFor([], CLASS_ROLES), [{ role: 'הדרכת חוג', count: 1 }]);
+test('a class with nothing written on it asks for one trainer and two assistants', () => {
+  const expected = [{ role: 'הדרכת חוג', count: 1 }, { role: 'עוזר מדריך', count: 2 }];
+  assert.deepEqual(classNeedsFor(undefined, CLASS_ROLES), expected);
+  assert.deepEqual(classNeedsFor([], CLASS_ROLES), expected);
+});
+
+test('a trainer can take an assistant seat, an assistant cannot take a trainer seat', () => {
+  const fallbacks = { 'עוזר מדריך': ['הדרכת חוג'] };
+  const trainerOnly = { certifications: ['הדרכת חוג'] };
+  const assistantOnly = { certifications: ['עוזר מדריך'] };
+  assert.equal(canFillSeatRole(trainerOnly, 'עוזר מדריך', fallbacks), true);
+  assert.equal(canFillSeatRole(assistantOnly, 'הדרכת חוג', fallbacks), false);
+  // בלי מדרג — התנהגות ישנה: התאמה מדויקת בלבד.
+  assert.equal(canFillSeatRole(trainerOnly, 'עוזר מדריך'), false);
 });
 
 test('what was written on the class wins over the default', () => {

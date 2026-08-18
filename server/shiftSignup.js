@@ -251,8 +251,16 @@ export const CLASS_SOURCE_TYPE = 'class';
 export function classNeedsFor(savedNeeds, classRoles = []) {
   const explicit = normalizeNeeds(savedNeeds, 0);
   if (explicit[0]?.role) return explicit;
-  return classRoles.length
-    ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
+  // ברירת המחדל של חוג: מדריך אחד ושני עוזרים. מה שנכתב על החוג עצמו גובר.
+  const [trainerRole, assistantRole] = classRoles;
+  if (trainerRole && assistantRole) {
+    return [
+      { role: cleanText(trainerRole, 60), count: 1 },
+      { role: cleanText(assistantRole, 60), count: 2 },
+    ];
+  }
+  return trainerRole
+    ? [{ role: cleanText(trainerRole, 60), count: 1 }]
     : [{ role: '', count: 1 }];
 }
 
@@ -464,6 +472,8 @@ export function calendarSlotCandidates({
           needs: classNeeds,
           staffing: staffingOf(classNeeds, assignments, { date, startTime: start, groupId: group.id }),
           label: cleanText(group.name, 60),
+          // שכבת הגיל היא הצבע של החוג בלוח — בלעדיה כל המשבצות בטופס אפורות.
+          ageCategory: cleanText(group.ageCategory, 40),
           activity_id: null,
           group_id: group.id || null,
           work_type: 'class_shift',
@@ -585,6 +595,18 @@ export function canFillRole(employee, role) {
   return rolesOfEmployee(employee).includes(cleanText(role, 60));
 }
 
+/**
+ * מי יכול לשבת במושב.
+ *
+ * הכשירות היא מדרג ולא רשימה שטוחה: מדריך חוג יכול לאייש מושב של עוזר מדריך —
+ * מי שמוסמך להוביל אימון ודאי מוסמך לעזור בו — אבל לא להפך. המדרג מגיע מבחוץ
+ * (`roleFallbacks`), כי התוויות ניתנות לשינוי בקטלוג ואסור לקבע אותן כאן.
+ */
+export function canFillSeatRole(employee, role, roleFallbacks = {}) {
+  if (canFillRole(employee, role)) return true;
+  return (roleFallbacks[role] || []).some((alt) => canFillRole(employee, alt));
+}
+
 /** מפתח אחיד לזוג משמרת-תפקיד, בשרת ובמסך. */
 export function seatKey(slotId, role) {
   return `${slotId}|${role || ''}`;
@@ -645,6 +667,7 @@ export function publicWindowView(windowRow, responses = [], today = israelDateSt
 export function applyResponse(windowRow, responses = [], payload = {}, {
   today = israelDateStr(),
   employee = null,
+  roleFallbacks = {},
 } = {}) {
   if (!windowRow) return { error: 'הטופס לא נמצא' };
   if (!isWindowOpen(windowRow, today)) return { error: 'ההרשמה לטופס הזה נסגרה' };
@@ -666,7 +689,7 @@ export function applyResponse(windowRow, responses = [], payload = {}, {
     if (seenSlots.has(slot.id)) continue;
     const role = cleanText(raw?.role, 60);
     if (!(slot.needs || []).some((need) => (need.role || '') === role)) continue;
-    if (employee && !canFillRole(employee, role)) continue;
+    if (employee && !canFillSeatRole(employee, role, roleFallbacks)) continue;
     seenSlots.add(slot.id);
     picks.push({ slot_id: slot.id, role });
   }

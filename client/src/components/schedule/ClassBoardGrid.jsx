@@ -86,10 +86,14 @@ export function GroupBlock({
   // מי מדריך את החוג. בטופס הציבורי אין מה למלא כאן, ו„ללא מדריך” על חוג שיש
   // לו מדריך הוא שקר — עדיף בלי השורה.
   showStaff = true,
+  // הגאומטריה של הרשת המארחת. בטלפון הרשת מתכווצת כדי להיכנס במסך בלי גלילה,
+  // והמשבצת חייבת לזוז ולהתקצר יחד איתה — אחרת חוג של 17:00 מצויר על 15:30.
+  startMin = START_MIN,
+  pxPerMin = PX_PER_MIN,
 }) {
   const c    = AGE_COLORS[group.ageCategory] || DEF_COLOR;
-  const top  = topPx(group.time);
-  const h    = heightPx(group.duration);
+  const top  = (t2m(group.time) - startMin) * pxPerMin;
+  const h    = (Number(group.duration) || 0) * pxPerMin;
   const showCapacity = enrolledCount !== null && enrolledCount !== undefined;
   const occ  = showCapacity ? occupancyOf(enrolledCount, group.maxSlots) : null;
 
@@ -183,17 +187,37 @@ export function GroupBlock({
  * הרשת השבועית. `renderBlock(group, day)` מחזיר את מה שמצויר בעמודת אותו יום,
  * כך שאותה רשת משרתת גם את מסך הצוות וגם את הטופס הציבורי.
  */
-export default function ClassBoardGrid({ groups = [], days = null, dayCounts = null, renderBlock }) {
+export default function ClassBoardGrid({
+  groups = [],
+  days = null,
+  dayCounts = null,
+  renderBlock,
+  // ברירת המחדל היא הלוח המלא של מסך החוגים. טופס בטלפון מוסר טווח צר יותר
+  // וצפיפות נמוכה יותר, כדי שכל הלוח ייכנס במסך אחד בלי גלילה לשום כיוון.
+  startMin = START_MIN,
+  endMin = END_MIN,
+  pxPerMin = PX_PER_MIN,
+  hourLabelWidth = 52,
+  minColWidth = 120,
+  showCounts = true,
+}) {
   const computed = visibleDaysOf(groups, days);
   const visibleDays = days && days.length ? days : computed.visibleDays;
   const counts = dayCounts || computed.dayCounts;
+  const gridH = (endMin - startMin) * pxPerMin;
+  const hourH = 60 * pxPerMin;
+  const hours = Array.from(
+    { length: Math.max(1, Math.ceil((endMin - startMin) / 60)) },
+    (_, i) => Math.floor(startMin / 60) + i
+  );
+  const geometry = { startMin, pxPerMin };
 
   return (
     <div className="card" style={{ overflow: 'auto' }}>
-      <div style={{ minWidth: 140 + visibleDays.length * 120, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ minWidth: hourLabelWidth + visibleDays.length * minColWidth, display: 'flex', flexDirection: 'column' }}>
         {/* Day headers */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ width: 52, flexShrink: 0, padding: '10px 6px', fontSize: 10, color: 'var(--text-3)' }}>שעה</div>
+          <div style={{ width: hourLabelWidth, flexShrink: 0, padding: '10px 4px', fontSize: 10, color: 'var(--text-3)' }}>שעה</div>
           {visibleDays.map((i, pos) => {
             const count = counts[i];
             return (
@@ -204,7 +228,7 @@ export default function ClassBoardGrid({ groups = [], days = null, dayCounts = n
                 borderLeft: pos > 0 ? '1px solid var(--border)' : 'none',
               }}>
                 {DAYS_FULL[i]}
-                {count > 0 && (
+                {showCounts && count > 0 && (
                   <span style={{ marginRight: 5, fontSize: 10, color: 'var(--text-3)' }}>({count})</span>
                 )}
               </div>
@@ -215,11 +239,11 @@ export default function ClassBoardGrid({ groups = [], days = null, dayCounts = n
         {/* Grid body */}
         <div style={{ display: 'flex', position: 'relative' }}>
           {/* Time labels column */}
-          <div style={{ width: '52px', flexShrink: 0, position: 'relative', height: `${GRID_H}px` }}>
-            {HOURS.map((h, i) => (
+          <div style={{ width: `${hourLabelWidth}px`, flexShrink: 0, position: 'relative', height: `${gridH}px` }}>
+            {hours.map((h, i) => (
               <div key={h} style={{
-                position: 'absolute', top: `${i * HOUR_H}px`,
-                width: '100%', padding: '3px 6px',
+                position: 'absolute', top: `${i * hourH}px`,
+                width: '100%', padding: '3px 4px',
                 fontSize: 10, color: 'var(--text-3)',
               }}>
                 {String(h).padStart(2, '0')}:00
@@ -232,26 +256,26 @@ export default function ClassBoardGrid({ groups = [], days = null, dayCounts = n
             const dayGroups = groups.filter(g => getGroupDays(g).includes(day));
             return (
               <div key={day} style={{
-                flex: 1, position: 'relative', height: `${GRID_H}px`,
+                flex: 1, position: 'relative', height: `${gridH}px`, minWidth: 0,
                 borderLeft: '1px solid var(--border)',
               }}>
                 {/* Hour grid lines */}
-                {HOURS.map((_, i) => (
+                {hours.map((_, i) => (
                   <div key={i} style={{
-                    position: 'absolute', top: `${i * HOUR_H}px`,
+                    position: 'absolute', top: `${i * hourH}px`,
                     width: '100%', borderTop: '1px solid var(--border)',
                     pointerEvents: 'none',
                   }} />
                 ))}
                 {/* 30-min sub-lines */}
-                {HOURS.map((_, i) => (
+                {hours.map((_, i) => (
                   <div key={`h${i}`} style={{
-                    position: 'absolute', top: `${i * HOUR_H + HOUR_H / 2}px`,
+                    position: 'absolute', top: `${i * hourH + hourH / 2}px`,
                     width: '100%', borderTop: '1px dashed rgba(255,255,255,0.04)',
                     pointerEvents: 'none',
                   }} />
                 ))}
-                {dayGroups.map(g => renderBlock(g, day))}
+                {dayGroups.map(g => renderBlock(g, day, geometry))}
               </div>
             );
           })}

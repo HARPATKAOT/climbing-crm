@@ -90,7 +90,11 @@ export default function PublicShiftSignup() {
     return me?.roles || [];
   }, [data, employeeId]);
 
-  const canTake = (role) => !role || myRoles.includes(role);
+  // מדריג התפקידים מהשרת: מדריך רואה גם את מושב העוזר פתוח, לא להפך.
+  const canTake = (role) => {
+    if (!role || myRoles.includes(role)) return true;
+    return ((data?.role_fallbacks || {})[role] || []).some((alt) => myRoles.includes(alt));
+  };
   const claimOf = (slotId) => picked.find((p) => p.slot_id === slotId) || null;
 
   /**

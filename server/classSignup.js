@@ -16,7 +16,8 @@
  */
 
 import {
-  canFillRole,
+  canFillSeatRole,
+  classNeedsFor,
   cleanText,
   normalizeNeeds,
   newSignupToken,
@@ -47,9 +48,8 @@ export function normalizeClassSeat(raw = {}, { classRoles = [] } = {}) {
       time: cleanText(raw.time, 5),
       duration: Math.max(15, Math.min(300, Math.round(Number(raw.duration) || 50))),
       ageCategory: cleanText(raw.ageCategory, 40),
-      needs: needs[0]?.role
-        ? needs
-        : (classRoles.length ? [{ role: cleanText(classRoles[0], 60), count: 1 }] : [{ role: '', count: 1 }]),
+      // אותה ברירת מחדל שבכל מקום אחר: מדריך אחד ושני עוזרים.
+      needs: needs[0]?.role ? needs : classNeedsFor([], classRoles),
     },
   };
 }
@@ -141,6 +141,7 @@ export function publicClassBoardView(windowRow, responses = [], today) {
 export function applyClassResponse(windowRow, responses = [], payload = {}, {
   today,
   employee = null,
+  roleFallbacks = {},
 } = {}) {
   if (!windowRow) return { error: 'הטופס לא נמצא' };
   if (!isClassWindowOpen(windowRow, today)) return { error: 'ההרשמה לטופס הזה נסגרה' };
@@ -160,7 +161,7 @@ export function applyClassResponse(windowRow, responses = [], payload = {}, {
     if (!(seat.needs || []).some((need) => (need.role || '') === role)) continue;
     // אותה בדיקה כפולה שבטופס היומן: התפקיד חייב להיות מבוקש וגם כזה שהעובד
     // מוסמך אליו. הסתרה במסך לבדה אינה הגנה — הקישור עובר הלאה.
-    if (employee && !canFillRole(employee, role)) continue;
+    if (employee && !canFillSeatRole(employee, role, roleFallbacks)) continue;
     seen.add(seat.id);
     picks.push({ slot_id: seat.id, role });
   }
@@ -261,7 +262,9 @@ export function planClassStaffing(windowRow, picks = [], { groups = [], employee
   const groupById = new Map((groups || []).map((g) => [String(g.id), g]));
   const seatById = new Map((windowRow.seats || []).map((s) => [s.id, s]));
   const employeeById = new Map((employees || []).map((e) => [String(e.id), e]));
-  const [trainerRole] = classRoles;
+  const [trainerRole, assistantRole] = classRoles;
+  // מדריך יכול לאייש מושב של עוזר — אותו מדרג שנאכף בטופס עצמו.
+  const roleFallbacks = trainerRole && assistantRole ? { [assistantRole]: [trainerRole] } : {};
   const replaceSet = new Set((replace || []).map(String));
 
   const byGroup = new Map();
@@ -279,7 +282,7 @@ export function planClassStaffing(windowRow, picks = [], { groups = [], employee
     if (!(seat.needs || []).some((need) => (need.role || '') === role)) {
       skipped.push({ employee_id: employeeId, group_id: group.id, reason: 'role_not_needed' }); continue;
     }
-    if (!canFillRole(employee, role)) {
+    if (!canFillSeatRole(employee, role, roleFallbacks)) {
       skipped.push({ employee_id: employeeId, group_id: group.id, reason: 'not_certified' }); continue;
     }
 
