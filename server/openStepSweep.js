@@ -29,6 +29,7 @@ import {
   STEP_FOLLOWUP_REASON,
 } from './registrationSteps.js';
 import { outreachPausedUntil } from './botOutreachPause.js';
+import { EQUIPMENT_REASON, ladderExhausted } from './equipmentReminderLadder.js';
 import { isOptedOut } from './whatsappBot.js';
 
 /** הסטטוסים שבהם הכדור אצל הלקוח. */
@@ -106,6 +107,9 @@ export function openStepCandidates(db, { now = new Date() } = {}) {
       return { ...entry, step, reason: STEP_FOLLOWUP_REASON[step] };
     })
     .filter((entry) => entry.reason)
+    // The equipment ladder ends after three reminders and becomes a person's
+    // job. A weekly sweep on top of that would be the fourth, and the fifth.
+    .filter((entry) => !(entry.reason === EQUIPMENT_REASON && equipmentLadderDone(db, entry.parent.id)))
     // A pause on this very subject — „אני רוצה לחשוב על הציוד עוד שבוע” — is
     // the customer answering this sweep before it ran.
     .filter((entry) => !outreachPausedUntil(db, entry.parent.id, now, { reason: entry.reason }))
@@ -118,6 +122,15 @@ export function hasOpenFollowUp(db, parentId) {
   return (db?.get?.(FOLLOWUP_COLLECTION) || []).some((row) => (
     String(row.parent_id || '') === String(parentId)
     && String(row.status || FOLLOWUP_OPEN) === FOLLOWUP_OPEN
+  ));
+}
+
+/** Three equipment reminders already went out to this family. */
+export function equipmentLadderDone(db, parentId) {
+  return (db?.get?.(FOLLOWUP_COLLECTION) || []).some((row) => (
+    String(row.parent_id || '') === String(parentId)
+    && String(row.reason || '') === EQUIPMENT_REASON
+    && ladderExhausted(Number(row.attempt || 0))
   ));
 }
 

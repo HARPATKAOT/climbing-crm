@@ -121,6 +121,7 @@ import {
   planFollowUp,
 } from './botFollowUps.js';
 import { openEndedPause, resolvePauseUntil, setOutreachPause } from './botOutreachPause.js';
+import { firstSessionForGroups, ladderPlan } from './equipmentReminderLadder.js';
 import { shortMailingPreferencesUrl } from './mailingShortLinks.js';
 import {
   loadEquipmentPrices,
@@ -1014,6 +1015,21 @@ export async function scheduleFormCheck({ parent, phone, settings }) {
   if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
 }
 
+/** The trainee's first training day of the season, for the equipment ladder. */
+function firstSessionForStudent(student) {
+  try {
+    const season = resolveSeasonHalves(DEFAULT_EQUIPMENT_SETTINGS, new Date());
+    const groups = enrichGroupsWithBotMeta(db, db.get('groups') || [])
+      .filter((group) => studentGroupIds(student).includes(String(group.id)));
+    return firstSessionForGroups(groups, {
+      seasonStart: season.start.toISOString().slice(0, 10),
+      weekdays: groups.flatMap((group) => getSortedGroupDays(group)),
+    });
+  } catch {
+    return '';
+  }
+}
+
 async function scheduleEquipmentCheck({ parent, phone, student }) {
   if (!parent?.id) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
@@ -1021,16 +1037,15 @@ async function scheduleEquipmentCheck({ parent, phone, student }) {
   // Same three days. Chasing the kit the morning after we asked them to go and
   // register is the same nudge wearing a different subject.
   if (holdIsCounting(db, student)) return;
-  const plan = planFollowUp({
-    days: 1,
-    lastInboundAt: parent.last_inbound_whatsapp,
-    settings: db.getSettings ? db.getSettings() : {},
-  });
+  // Equipment is not a deadline, so it gets the ladder: three reminders with
+  // widening gaps, and never before the week the trainee actually starts.
+  const plan = ladderPlan({ attempt: 0, firstSessionDate: firstSessionForStudent(student) });
   if (!plan) return;
   const row = db.insert(FOLLOWUP_COLLECTION, {
     id: newFollowUpId(),
     parent_id: parent.id,
     phone: parent.phone || phone || '',
+    attempt: 1,
     reason: 'equipment_unpaid',
     note: 'הסדרת הציוד',
     subject: student?.name || '',

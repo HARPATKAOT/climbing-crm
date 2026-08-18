@@ -23,10 +23,17 @@ import {
 import { outreachPausedUntil } from './botOutreachPause.js';
 import { registrationStep, STEP_GROUP } from './registrationSteps.js';
 import { runOpenStepSweep } from './openStepSweep.js';
+import {
+  EQUIPMENT_REASON,
+  ladderExhausted,
+  ladderPlan,
+} from './equipmentReminderLadder.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { sendManagerAlert } from './staffNotify.js';
 import {
   FOLLOWUP_COLLECTION,
+  FOLLOWUP_OPEN,
+  newFollowUpId,
   claimFollowUpSend,
   dueFollowUps,
   finishFollowUpSend,
@@ -115,6 +122,50 @@ function traineeIsTheCustomer(students = [], parent = {}) {
   const student = normalize(students[0]?.name);
   const customer = normalize(parent?.name);
   return Boolean(student) && student === customer;
+}
+
+/**
+ * אחרי שתזכורת ציוד נשלחה: קובעים את הדרגה הבאה בסולם, ואם הסולם מוצה —
+ * פותחים שורה במשימות במקום לשלוח רביעית.
+ *
+ * שלוש פניות בחודש ואז אדם. מי שלא הגיב שלוש פעמים לא ישתכנע ברביעית, והמשך
+ * שליחה הופך תזכורת לגובה.
+ */
+async function advanceEquipmentLadder(row, parent) {
+  if (String(row?.reason || '') !== EQUIPMENT_REASON) return;
+  const attempt = Number(row.attempt || 1);
+
+  if (ladderExhausted(attempt)) {
+    recordBotAction(db, persistCore, {
+      type: 'other',
+      summary: `הציוד של ${row.subject || 'מתאמן'} לא הוסדר אחרי שלוש תזכורות — עובר לצוות`,
+      details: { reason: EQUIPMENT_REASON, attempts: attempt },
+      parentId: parent?.id || null,
+      parentName: parent?.name || '',
+      studentId: row.student_id || null,
+      studentName: row.subject || '',
+      phone: parent?.phone || '',
+    });
+    return;
+  }
+
+  const plan = ladderPlan({ attempt });
+  if (!plan) return;
+  const next = db.insert(FOLLOWUP_COLLECTION, {
+    id: newFollowUpId(),
+    parent_id: row.parent_id,
+    phone: row.phone || parent?.phone || '',
+    reason: EQUIPMENT_REASON,
+    note: row.note || 'הסדרת הציוד',
+    subject: row.subject || '',
+    student_id: row.student_id || null,
+    attempt: attempt + 1,
+    ...plan,
+    status: FOLLOWUP_OPEN,
+    created_by: 'ladder',
+    created_at: new Date().toISOString(),
+  });
+  if (next?.id) await persistCore(FOLLOWUP_COLLECTION, next);
 }
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
@@ -846,6 +897,7 @@ export const automationsService = {
             sent += 1;
             await finishFollowUpSend(db, claim.id, { persist: persistCore });
             for (const item of rowGroup) await closeFollowUp(item, 'sent');
+            await advanceEquipmentLadder(row, parent);
             recordBotAction(db, persistCore, {
               type: 'followup_sent',
               summary: `מעקב נשלח בתבנית: ${subject}`,
@@ -871,6 +923,7 @@ export const automationsService = {
           sent += 1;
           await finishFollowUpSend(db, claim.id, { persist: persistCore });
           for (const item of rowGroup) await closeFollowUp(item, 'sent');
+          await advanceEquipmentLadder(row, parent);
           recordBotAction(db, persistCore, {
             type: 'followup_sent',
             summary: `מעקב נשלח: ${row.note || 'מעקב'}`,
