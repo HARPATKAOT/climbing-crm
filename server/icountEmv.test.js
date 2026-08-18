@@ -28,7 +28,7 @@ function stubIcount(responder) {
     const endpoint = String(url).split('/api/v3.php/')[1] || '';
     const fields = Object.fromEntries(options.body.entries());
     seen.push({ endpoint, fields, signal: options.signal });
-    return { json: async () => responder(endpoint, fields) };
+    return { status: 200, text: async () => JSON.stringify(await responder(endpoint, fields)) };
   };
   return seen;
 }

@@ -18,7 +18,8 @@ describe('iCount VAT-inclusive invoice', () => {
     globalThis.fetch = async (_url, options) => {
       sentFields = Object.fromEntries(options.body.entries());
       return {
-        json: async () => ({ status: true, doc_id: 'doc-1', docnum: '1001' }),
+        status: 200,
+        text: async () => JSON.stringify({ status: true, doc_id: 'doc-1', docnum: '1001' }),
       };
     };
 
