@@ -102,7 +102,7 @@ export const BOT_CAPABILITIES = [
     hint: 'שם פרטי ושם משפחה, ותיקון תאריך לידה שאינו מתיישב עם מה שההורה אומר; '
       + 'יתר הפרטים נאספים בטופס ההרשמה',
     source: 'כותב לכרטיס הלקוח',
-    tools: ['updateCustomerDetails', 'updateTraineeBirthDate'],
+    tools: ['updateCustomerDetails'],
   },
   {
     key: 'mailing_preferences',

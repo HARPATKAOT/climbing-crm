@@ -24,7 +24,7 @@ import {
   wantsExplicitHumanStaff,
   normalizeHistoryLimit,
   customerNameParts,
-  hasCustomerFullName,
+  hasCustomerName,
   customerNameWords,
   parseCustomerFullName,
   isClosingAcknowledgement,
@@ -70,11 +70,13 @@ test('handoff and stop keywords match', () => {
   assert.equal(textMatchesStandaloneKeywords('מה זה טופס הסרת אחריות?', 'עצור,הסר,stop'), false);
 });
 
-test('customer identity requires first and family name, and accepts only name words', () => {
-  assert.equal(hasCustomerFullName({ name: 'לקוח וואטסאפ' }), false);
-  assert.equal(hasCustomerFullName({ name: 'דנה' }), false);
-  assert.equal(hasCustomerFullName({ name: 'דנה לוי' }), true);
-  assert.equal(hasCustomerFullName({ name: 'דנה', lastName: 'לוי' }), true);
+test('a first name identifies a customer; a placeholder card does not', () => {
+  // The surname was a second question, and it is where strangers left. It
+  // reaches us signed on the participation form either way.
+  assert.equal(hasCustomerName({ name: 'לקוח וואטסאפ' }), false);
+  assert.equal(hasCustomerName({ name: 'דנה' }), true);
+  assert.equal(hasCustomerName({ name: 'דנה לוי' }), true);
+  assert.equal(hasCustomerName({ name: 'דנה', lastName: 'לוי' }), true);
   assert.deepEqual(
     customerNameParts({ name: 'דנה לוי כהן' }),
     { firstName: 'דנה', lastName: 'לוי כהן', complete: true }

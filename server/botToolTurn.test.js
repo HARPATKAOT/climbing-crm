@@ -646,7 +646,6 @@ test('the tools offered to the model are facts, links and placements — never s
     'scheduleIntroSession',
     'startSignup',
     'updateCustomerDetails',
-    'updateTraineeBirthDate',
   ]);
   // Every writing tool must name the child it acts on, so the bot can never
   // place — or unplace — "somebody" from the card.

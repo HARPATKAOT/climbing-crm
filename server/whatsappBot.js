@@ -982,10 +982,15 @@ export function customerNameParts(parent) {
   const firstName = words[0] || '';
   const storedLast = String(parent?.lastName || parent?.last_name || '').trim();
   const lastName = storedLast || words.slice(1).join(' ');
-  return { firstName, lastName, complete: Boolean(firstName && lastName) };
+  // A first name is the whole requirement. The surname used to be a second
+  // question, and it is where strangers left: three in one day asked something,
+  // were asked their surname instead of answered, and two of those ended in a
+  // handoff. We get the surname anyway, in writing and signed, the moment the
+  // participation form is filled — so asking for it bought nothing.
+  return { firstName, lastName, complete: Boolean(firstName) };
 }
 
-export function hasCustomerFullName(parent) {
+export function hasCustomerName(parent) {
   return customerNameParts(parent).complete;
 }
 
@@ -1097,21 +1102,30 @@ export function introducedName(input) {
 }
 
 /** Shared by the deterministic intake and the model tool. No other fields. */
-export async function updateCustomerFullName(parent, { firstName, lastName } = {}) {
+/**
+ * Save what the customer told us their name is.
+ *
+ * A surname is kept when it is volunteered — „יונתן ברזילי” in one breath — and
+ * never asked for. Everything downstream matches on the phone number, so a card
+ * with one name is a whole card, not half of one.
+ */
+export async function saveCustomerName(parent, { firstName, lastName } = {}) {
   if (!parent?.id) return { error: 'אין כרטיס לקוח לשמור אליו' };
-  const parsed = parseCustomerFullName(`${String(firstName || '').trim()} ${String(lastName || '').trim()}`);
-  if (!parsed) return { error: 'נדרשים שם פרטי ושם משפחה' };
+  const words = customerNameWords(`${String(firstName || '').trim()} ${String(lastName || '').trim()}`);
+  if (!words.length) return { error: 'נדרש שם פרטי' };
+  const first = words[0];
+  const last = words.slice(1).join(' ');
+  const full = last ? `${first} ${last}` : first;
 
   const current = customerNameParts(parent);
-  const same = current.complete
-    && current.firstName === parsed.firstName
-    && current.lastName === parsed.lastName;
-  if (same) return { saved: false, parent, name: `${parsed.firstName} ${parsed.lastName}` };
-  if (current.complete) return { error: 'בכרטיס כבר קיים שם מלא — שינוי שלו נעשה על ידי הצוות' };
+  if (current.complete && current.firstName === first && current.lastName === last) {
+    return { saved: false, parent, name: full };
+  }
+  if (current.complete) return { error: 'בכרטיס כבר קיים שם — שינוי שלו נעשה על ידי הצוות' };
 
   const updated = db.update('parents', parent.id, {
-    name: `${parsed.firstName} ${parsed.lastName}`,
-    lastName: parsed.lastName,
+    name: full,
+    ...(last ? { lastName: last } : {}),
   });
   if (!updated) return { error: 'שמירת השם נכשלה' };
   await persistCore('parents', updated);
@@ -1185,7 +1199,7 @@ async function completeOrOfferTraineeLink(phone, parent, parsedName, pendingMess
       reply: `נעים מאוד ${parsedName.firstName}. רגע, יש אצלנו מתאמן/ת בדיוק בשם הזה — ההורה שלך זה ${familyFirst}?`,
     };
   }
-  const saved = await updateCustomerFullName(parent, parsedName);
+  const saved = await saveCustomerName(parent, parsedName);
   if (saved.error) return { done: false, reply: saved.error };
   await setIntake(phone, { step: 'done', name_capture: true });
   return {
@@ -1229,7 +1243,7 @@ async function handleTraineeLinkAnswer(phone, parent, incomingText, prior) {
 
   // «לא» (או «כן» שהחיבור שלו נכשל): נשארים ליד חדש, שומרים את השם וממשיכים.
   if (yes || no) {
-    const saved = await updateCustomerFullName(parent, parsedName);
+    const saved = await saveCustomerName(parent, parsedName);
     if (saved.error) return { done: false, reply: saved.error };
     await setIntake(phone, { step: 'done', name_capture: true });
     return {
@@ -1252,10 +1266,9 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText, { 
   if (linkPrior.step === 'trainee_link_confirm') {
     return handleTraineeLinkAnswer(phone, parent, incomingText, linkPrior);
   }
-  if (hasCustomerFullName(parent)) return { done: true, parent, pendingMessage: '' };
+  if (hasCustomerName(parent)) return { done: true, parent, pendingMessage: '' };
 
   const text = String(incomingText || '').trim();
-  const existing = customerNameParts(parent);
   const prior = { ...(getIntake(parent) || {}) };
   const active = /^tools_parent_/.test(String(prior.step || ''));
 
@@ -1265,70 +1278,38 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText, { 
       return completeOrOfferTraineeLink(phone, parent, explicit, '');
     }
 
-    const step = existing.firstName ? 'tools_parent_last_name' : 'tools_parent_first_name';
-    await setIntake(phone, {
-      step,
-      asked: true,
-      parentFirstName: existing.firstName,
-      pendingMessage: text,
-    });
-    return {
-      done: false,
-      // These lines run before the model, so the system prompt cannot set their
-      // tone — it has to be written here. Somebody who just said hello is being
-      // asked a question by a person, not filling in a form: no smiley, no
-      // "השם הפרטי", nothing that reads as a field on a screen.
-      reply: existing.firstName
-        ? `היי ${existing.firstName}, מה שם המשפחה שלך?`
-        : 'היי, איך קוראים לך?',
-    };
+    await setIntake(phone, { step: 'tools_parent_first_name', asked: true, pendingMessage: text });
+    // This line runs before the model, so the system prompt cannot set its
+    // tone — it has to be written here. Somebody who just said hello is being
+    // asked a question by a person, not filling in a form.
+    return { done: false, reply: 'היי, איך קוראים לך?' };
   }
 
-  // One field per question. Asking for both in one breath came back as a single
-  // line the system then had to split — and a customer who writes "כהן דנה",
-  // or a family name of two words, gets filed the wrong way round with nothing
-  // to show that it happened. `tools_parent_full_name` is the old step name,
-  // still answered here so a conversation caught mid-flow does not restart.
-  if (prior.step !== 'tools_parent_last_name') {
-    const words = customerNameWords(text);
-    if (!words.length) {
-      return askAgainOrHandOff(phone, prior, 'איך קוראים לך?');
-    }
-    // Somebody who asks a question instead of answering deserves an answer, not
-    // "סליחה, לא הבנתי" — and certainly not to be filed under their question.
-    if (!await replyIsAName(text, { callModel })) {
-      await setIntake(phone, { ...prior, pendingMessage: text });
-      return { done: true, parent, pendingMessage: text, nameDeferred: true };
-    }
-    if (words.length === 1) {
-      await setIntake(phone, {
-        ...prior,
-        step: 'tools_parent_last_name',
-        parentFirstName: words[0],
-      });
-      return { done: false, reply: `נעים מאוד ${words[0]}, ומה שם המשפחה?` };
-    }
-    // Both names in one answer anyway — nobody is asked to repeat themselves.
-    return completeOrOfferTraineeLink(phone, parent, {
-      firstName: words[0],
-      lastName: words.slice(1).join(' '),
-    }, prior.pendingMessage || '');
-  }
-
-  const lastWords = customerNameWords(text);
-  if (!lastWords.length) return askAgainOrHandOff(phone, prior, 'מה שם המשפחה?');
+  const words = customerNameWords(text);
+  if (!words.length) return askAgainOrHandOff(phone, prior, 'איך קוראים לך?');
+  // Somebody who asks a question instead of answering deserves an answer, not
+  // "סליחה, לא הבנתי" — and certainly not to be filed under their question.
   if (!await replyIsAName(text, { callModel })) {
     await setIntake(phone, { ...prior, pendingMessage: text });
     return { done: true, parent, pendingMessage: text, nameDeferred: true };
   }
-  const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
-  if (!firstName) {
-    await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
-    return { done: false, reply: 'היי, איך קוראים לך?' };
+
+  // A conversation that was already waiting on the surname question when this
+  // changed: the customer answered it, and their answer belongs in the card.
+  const askedForSurname = prior.step === 'tools_parent_last_name'
+    && String(prior.parentFirstName || '').trim();
+  if (askedForSurname) {
+    return completeOrOfferTraineeLink(phone, parent, {
+      firstName: askedForSurname,
+      lastName: words.join(' '),
+    }, prior.pendingMessage || '');
   }
+
+  // One question, and whatever comes back is the answer. „יונתן ברזילי” keeps
+  // both words; „יונתן” is a complete answer on its own and is not followed up.
   return completeOrOfferTraineeLink(phone, parent, {
-    firstName,
-    lastName: lastWords.join(' '),
+    firstName: words[0],
+    lastName: words.slice(1).join(' '),
   }, prior.pendingMessage || '');
 }
 

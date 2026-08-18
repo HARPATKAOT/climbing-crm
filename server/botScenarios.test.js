@@ -350,28 +350,23 @@ const NEW_CARD = {
 
 const cardById = (id) => db.getOne('parents', id);
 
-test('לקוח חדש: שואלים שם פרטי, ורק אחר כך שם משפחה — שאלה לשדה', async () => {
+test('לקוח חדש נשאל לשמו פעם אחת, וזהו', async () => {
+  // שתי שאלות היו המקום שבו מתעניינים עזבו: שלושה ביום אחד שאלו משהו, נשאלו
+  // לשם המשפחה במקום לקבל תשובה, ושניים מהם הגיעו להעברה לצוות. שם המשפחה
+  // מגיע ממילא חתום בטופס ההשתתפות.
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;
 
     const first = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי, כמה עולה החוג?');
     assert.equal(first.done, false);
     assert.match(first.reply, /איך קוראים לך/);
-    // שתי השאלות בנשימה אחת הן מה שגרם לשם ולשם המשפחה להתחלף בכרטיס.
     assert.doesNotMatch(first.reply, /שם המשפחה/);
 
     const second = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'דנה');
-    assert.equal(second.done, false);
-    assert.match(second.reply, /דנה/);
-    assert.match(second.reply, /שם המשפחה/);
-    assert.equal(getIntake(cardById('p-fresh')).parentFirstName, 'דנה');
-
-    const third = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'כהן');
-    assert.equal(third.done, true);
-    assert.equal(third.parent.name, 'דנה כהן');
-    assert.equal(third.parent.lastName, 'כהן');
+    assert.equal(second.done, true);
+    assert.equal(second.parent.name, 'דנה');
     // השאלה המקורית לא הלכה לאיבוד — היא נענית מיד אחרי השם.
-    assert.equal(third.pendingMessage, 'היי, כמה עולה החוג?');
+    assert.equal(second.pendingMessage, 'היי, כמה עולה החוג?');
   });
 });
 
@@ -440,12 +435,11 @@ test('מי שכתב שם מלא בתשובה אחת אינו מתבקש לחזו
   });
 });
 
-test('שם משפחה של שתי מילים נשמר שלם, ולא נדחף לשם הפרטי', async () => {
+test('שם משפחה שנמסר מעצמו נשמר שלם, ולא נדחף לשם הפרטי', async () => {
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;
     await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
-    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'דנה');
-    const done = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'בן דוד');
+    const done = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'דנה בן דוד');
 
     assert.equal(done.done, true);
     assert.equal(done.parent.name, 'דנה בן דוד');
@@ -453,17 +447,12 @@ test('שם משפחה של שתי מילים נשמר שלם, ולא נדחף ל
   });
 });
 
-test('כרטיס עם שם פרטי בלבד נשאל רק על שם המשפחה', async () => {
+test('כרטיס שכבר יש בו שם פרטי אינו נשאל דבר', async () => {
   await withSeed({ parents: [{ ...NEW_CARD, name: 'דנה' }] }, async () => {
     const phone = NEW_CARD.phone;
     const ask = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
-    assert.equal(ask.done, false);
-    assert.match(ask.reply, /שם המשפחה/);
-    assert.doesNotMatch(ask.reply, /השם הפרטי/);
-
-    const done = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'כהן');
-    assert.equal(done.done, true);
-    assert.equal(done.parent.name, 'דנה כהן');
+    assert.equal(ask.done, true);
+    assert.equal(cardById('p-fresh').name, 'דנה');
   });
 });
 
@@ -471,7 +460,6 @@ test('שאלה של הלקוח אינה שם — «מזה ai?» לא נשמר כ
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;
     await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
-    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'יהודה');
 
     // כך נוצר בכרטיס אמיתי השם «יהודה מזה ai» — 6.8.2026.
     const asked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'מזה ai?');
@@ -1107,29 +1095,18 @@ test('הכרטיס אומר איזה צעד בהרשמה עדיין פתוח, ע
   });
 });
 
-test('סתירה בין מה שההורה אומר לתאריך בכרטיס מתוקנת, לא עוצרת', async () => {
+test('תאריך לידה אינו נתון שהבוט אוסף או כותב', async () => {
+  // אמא כתבה „4.12.82” על ילדה בכיתה ג׳, זה נקרא 1982, והכרטיס עבר מגיל שבע
+  // לגיל 44 — ומשם שום התאמת קבוצה לא יכלה לעבוד. התאריך מגיע מטופס
+  // ההשתתפות, בכתב וחתום, ולכן הכלי הזה כבר לא קיים.
   await withSeed({
     parents: [PARENT],
     students: [childYotam({ birthDate: '2017-05-01' })],
     groups: [GROUP_GD],
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
-
-    const fixed = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2015-05-01' });
-    assert.equal(fixed.עודכן, true);
-    assert.equal(student('s-yotam').birthDate, '2015-05-01');
-
-    // אותו תאריך שוב — לא „עודכן”, כדי שלא ייאמר ללקוח שינוי שלא היה.
-    const again = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2015-05-01' });
-    assert.equal(again.עודכן, false);
-    assert.equal(again.כבר_זהה, true);
-
-    // שנה שהוקלדה שגוי מזיזה שכבת גיל שלמה — ולכן נבדקת.
-    const silly = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2925-05-01' });
-    assert.match(silly.error || '', /אינו סביר/);
-    const malformed = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '1.5.2015' });
-    assert.match(malformed.error || '', /YYYY-MM-DD/);
-    assert.equal(student('s-yotam').birthDate, '2015-05-01');
+    assert.equal(tools.updateTraineeBirthDate, undefined);
+    assert.equal(student('s-yotam').birthDate, '2017-05-01');
   });
 });
 
@@ -1658,35 +1635,13 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
   });
 });
 
-test('שנה דו-ספרתית לא הופכת ילדה בת שבע לבת ארבעים וארבע', async () => {
-  // האמא כתבה „4.12.82” על ילדה שהיא עצמה אמרה שהיא בכיתה ג׳. זה נקרא 1982,
-  // הכרטיס עבר מ-7.5 ל-44, וכל מה שאחרי זה — התאמת קבוצה, שיבוץ — נשען על
-  // הנתון החדש. תיקון מזיז תאריך בימים או בשנה; פער כזה הוא אדם אחר.
-  await withSeed({
-    groups: [GROUP_GD],
-    students: [childYotam({ birthDate: '2018-12-04' })],
-    ...signedFormFor(['s-yotam']),
-  }, async () => {
-    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
-
-    const wrong = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '1982-12-04' });
-    assert.match(wrong.error || '', /שנה המלאה/);
-    assert.equal(cardStudent('s-yotam').birthDate, '2018-12-04');
-
-    // תיקון אמיתי — יום, חודש, או שנה אחת — עובר כרגיל.
-    const real = await tools.updateTraineeBirthDate({ childName: 'יותם', birthDate: '2017-12-04' });
-    assert.equal(real.עודכן, true);
-    assert.equal(cardStudent('s-yotam').birthDate, '2017-12-04');
-  });
-});
-test('שאלה של הלקוח אינה שם משפחה', async () => {
+test('שאלה של הלקוח אינה שם', async () => {
   // ליבי שאלה „באיזה עיר”, ולא היה בזה סימן שאלה ולא מילה מרשימת המילים —
   // אז הכרטיס שלה נשמר בשם „ליבי באיזה עיר”. אחרי זה היא עזבה.
   const says = (word) => async () => ({ content: { role: 'model', parts: [{ text: word }] }, error: '' });
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;
     await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי', { callModel: says('כן') });
-    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'ליבי', { callModel: says('כן') });
 
     const asked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'באיזה עיר', {
       callModel: says('לא'),
@@ -1697,12 +1652,12 @@ test('שאלה של הלקוח אינה שם משפחה', async () => {
     assert.equal(cardById('p-fresh').name, NEW_CARD.name);
     assert.ok(!String(cardById('p-fresh').name || '').includes('באיזה'));
 
-    // ושם משפחה אמיתי אחר כך נשמר כרגיל.
-    const named = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'כהן', {
+    // ושם אמיתי אחר כך נשמר כרגיל.
+    const named = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'ליבי', {
       callModel: says('כן'),
     });
     assert.equal(named.done, true);
-    assert.equal(named.parent.name, 'ליבי כהן');
+    assert.equal(named.parent.name, 'ליבי');
   });
 });
 

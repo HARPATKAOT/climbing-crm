@@ -82,7 +82,7 @@ import {
   studentsForParent,
   findPrimaryParent,
   isIdentifiedParent,
-  hasCustomerFullName,
+  hasCustomerName,
   advanceCustomerNameCapture,
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
@@ -1441,7 +1441,7 @@ export const whatsappService = {
       }
 
       let currentParent = parent;
-      if (!speaker && !hasCustomerFullName(currentParent)) {
+      if (!speaker && !hasCustomerName(currentParent)) {
         const nameCapture = await advanceCustomerNameCapture(normalizedPhone, currentParent, incomingText);
         if (!nameCapture.done) {
           const sent = await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
@@ -1920,7 +1920,7 @@ export const whatsappService = {
     // A trainee writing from their known personal phone is already identified;
     // every other incomplete card must supply first + family name first.
     if (matchedVia !== 'child_phone'
-      && !hasCustomerFullName(parent)) {
+      && !hasCustomerName(parent)) {
       const nameCapture = await advanceCustomerNameCapture(normalizedPhone, parent, text);
       if (!nameCapture.done) {
         await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
