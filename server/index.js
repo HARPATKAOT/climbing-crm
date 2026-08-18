@@ -708,6 +708,7 @@ import {
   applyMessageEditByMetaId,
   applyMessageRevokeByMetaId,
 } from './channels/messageStore.js';
+import { sweepUnmirroredMedia } from './channels/mediaMirror.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import {
   POS_INVOICE_TEMPLATE_NAME,
@@ -22206,6 +22207,25 @@ app.listen(PORT, () => {
     flushPendingMessages().catch((err) =>
       console.error('startup flushPendingMessages failed:', err.message)
     );
+
+    // Message files live on Meta's servers for only 30 days. New ones are
+    // copied into our storage as they arrive; this sweep rescues the rest —
+    // older rows, and anything the arrival copy missed — while Meta still
+    // has them.
+    const sweepMediaSafely = () => {
+      sweepUnmirroredMedia()
+        .then(({ scanned, mirrored, gone, failed }) => {
+          if (!scanned) return;
+          console.log(
+            `🎙️ Media mirror sweep: ${mirrored}/${scanned} copied to storage` +
+            (gone ? `, ${gone} already deleted by Meta` : '') +
+            (failed ? `, ${failed} failed` : '')
+          );
+        })
+        .catch((err) => console.error('media mirror sweep failed:', err.message));
+    };
+    setTimeout(sweepMediaSafely, 30 * 1000);
+    setInterval(sweepMediaSafely, 6 * 60 * 60 * 1000);
   }
   
   if (!backgroundJobsEnabled) {

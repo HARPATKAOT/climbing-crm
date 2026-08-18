@@ -37,6 +37,7 @@ import { replyKeyForBurst } from '../botReplyClaims.js';
 import { supa } from '../supa.js';
 import { childrenOfParent } from '../studentGuardians.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
+import { saveMediaCopy } from './mediaMirror.js';
 import { resolveConversationTemplateOptions } from './conversationTemplateOptions.js';
 
 // What the desk may attach.
@@ -776,29 +777,6 @@ export async function getConversation(parentId) {
 }
 
 /**
- * Mirror media we just fetched into our own bucket, so the thread keeps it after
- * Meta deletes its copy at 30 days. Best effort in every step: this runs on a
- * read path, and a failed mirror must never turn a working preview into an error.
- */
-async function mirrorMediaToStorage(row, buffer, mimeType, filename) {
-  try {
-    if (!buffer?.length) return;
-    const storagePath = storagePathForMedia(row.id, mimeType);
-    const uploaded = await supa.uploadClientDocument(storagePath, buffer, mimeType);
-    if (uploaded?.ok === false) return;
-
-    const mediaUrl = encodeMediaRef({ kind: 'storage', id: storagePath, mime: mimeType, filename });
-    // Both collections carry media_url under the same name, and mergeThread reads
-    // whichever it finds — so a half-done rewrite would still be consistent.
-    const updated = db.update('messages', row.id, { media_url: mediaUrl });
-    db.update('whatsapp_logs', row.id, { media_url: mediaUrl });
-    if (updated) await persistCore('messages', updated);
-  } catch (err) {
-    console.warn(`mirroring media for message ${row?.id} failed:`, err.message);
-  }
-}
-
-/**
  * The bytes behind one message in one conversation.
  *
  * Resolution goes through mergeThread rather than a raw message lookup on
@@ -869,7 +847,7 @@ export async function getConversationMedia(parentId, messageId) {
   }
 
   const mimeType = media.mimeType || ref.mime || 'application/octet-stream';
-  await mirrorMediaToStorage(row, media.buffer, mimeType, ref.filename);
+  await saveMediaCopy(row, media.buffer, mimeType, ref.filename);
   return { success: true, buffer: media.buffer, mimeType, filename: ref.filename, kind };
 }
 

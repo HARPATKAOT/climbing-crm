@@ -4,6 +4,7 @@ import { supa } from './supa.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import { encodeMediaRef, metaFromMediaRef } from './channels/mediaRef.js';
+import { mirrorMetaMediaNow } from './channels/mediaMirror.js';
 import {
   recordMessage,
   recordMessageDurable,
@@ -1616,6 +1617,15 @@ export const whatsappService = {
       };
     }
 
+    // A voice note or photo lives on Meta's servers for only 30 days. Copy it
+    // into our own storage now, not when someone happens to open the thread.
+    // Off the critical path on purpose — the customer is waiting for a reply.
+    if (meta.mediaRef?.id) {
+      mirrorMetaMediaNow(storedInbound.message).catch((err) =>
+        console.warn('inbound media mirror failed:', err.message)
+      );
+    }
+
     // 3. Open / refresh the 24h window on the resolved parent card(s).
     // Child-phone inbound must touch the parent card even when parent.phone differs.
     const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
@@ -2074,7 +2084,7 @@ export const whatsappService = {
       channel: 'whatsapp',
     });
 
-    recordMessage({
+    const echoRow = recordMessage({
       phone: normalizedPhone,
       channel: 'whatsapp',
       direction: 'outbound',
@@ -2087,6 +2097,13 @@ export const whatsappService = {
       meta: metaFromMediaRef(mediaRef),
       parent_id: echoParent?.id || null,
     });
+
+    // A file sent from the phone app also lives only on Meta — keep our copy.
+    if (mediaRef?.id) {
+      mirrorMetaMediaNow(echoRow).catch((err) =>
+        console.warn('phone echo media mirror failed:', err.message)
+      );
+    }
 
     const settings = mergeBotSettings(db.getSettings());
     if (settings.aiPauseOnHumanReply) {
