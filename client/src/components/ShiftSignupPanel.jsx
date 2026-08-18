@@ -72,6 +72,17 @@ const CLASS_CHIP = {
 
 /** „חופשה מאימונים” אינה משמרת שמישהו נרשם אליה — היא ביטול של אימונים. */
 const NOT_A_SHIFT_TYPE = 'training_vacation';
+/** למה סימון לא נכנס ללוח החוגים. „כיסא תפוס” הוא החלטה שלו, ולכן הוא ניתן לביטול. */
+const SKIP_LABELS = {
+  trainer_taken: 'לחוג כבר יש מדריך קבוע — לא הוחלף',
+  already: 'כבר עוזר בחוג הזה',
+  already_trainer: 'כבר המדריך של החוג',
+  not_certified: 'לא מסומן בתפקיד הזה',
+  role_not_needed: 'התפקיד לא מבוקש בחוג הזה',
+  group_missing: 'החוג לא נמצא',
+  inactive_employee: 'העובד אינו פעיל',
+};
+
 
 /**
  * תגית סוג הפעילות, בצבע ובאייקון שלה ביומן.
@@ -448,6 +459,29 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     : slots;
 
   /**
+   * החוגים שנבחרו, אחד לכל חוג ולא אחד לכל מפגש.
+   *
+   * הבורר מחזיר מפגשים מתוארכים, כי זו השאלה שהוא נשאל. טופס לוח החוגים שואל
+   * שאלה אחרת — באילו חוגים — ולכן המפגשים מתקפלים בחזרה לחוג שממנו באו.
+   */
+  const chosenClasses = source !== 'classes' ? [] : [...new Map(
+    (candidates || [])
+      .filter((c) => pickedIds.includes(c.id) && c.group_id)
+      .map((c) => [c.group_id, c])
+  ).values()].map((c) => ({
+    group_id: c.group_id,
+    label: c.label,
+    day: new Date(`${c.date}T12:00:00`).getDay(),
+    time: c.start_time,
+    duration: Math.max(15, Math.round(
+      (Number(c.end_time.slice(0, 2)) * 60 + Number(c.end_time.slice(3)))
+      - (Number(c.start_time.slice(0, 2)) * 60 + Number(c.start_time.slice(3)))
+    )),
+    ageCategory: c.ageCategory || '',
+    needs: c.needs || [],
+  }));
+
+  /**
    * למה הרשימה ריקה.
    *
    * אין כאן עוד סינון לפי תפקיד, ולכן רשימה ריקה פירושה טווח ריק — וזה הדבר
@@ -470,13 +504,25 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     setError('');
     setBusy(true);
     try {
+      // לוח החוגים אינו טווח תאריכים אלא רשימת חוגים: השיבוץ שם קבוע לשנה,
+      // ולכן הטופס נשמר כמושבים ולא כמשמרות.
+      const payload = source === 'classes'
+        ? {
+          kind: 'class_board',
+          title,
+          note,
+          deadline: deadline || null,
+          recipients,
+          seats: chosenClasses,
+        }
+        : {
+          title, work_type: workType, note, deadline: deadline || null,
+          recipients, slots: chosenSlots,
+        };
       const created = await callApi('/api/shift-signup/windows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title, work_type: workType, note, deadline: deadline || null,
-          recipients, slots: chosenSlots,
-        }),
+        body: JSON.stringify(payload),
       });
       onCreated(created);
     } catch (e) {
@@ -716,13 +762,16 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         <button
           className="btn btn-primary btn-sm"
           onClick={create}
-          disabled={busy || !chosenSlots.length || !title.trim() || recipientsCleared}
+          disabled={busy || !(source === 'classes' ? chosenClasses.length : chosenSlots.length)
+            || !title.trim() || recipientsCleared}
           title={recipientsCleared
             ? 'לא נבחר אף עובד — סמנו למי לשלוח'
             : (!chosenSlots.length ? 'קודם שלפו משמרות וסמנו מה להציע' : '')}
         >
           <Plus size={14} /> יצירת הטופס
-          {chosenSlots.length > 0 ? ` (${chosenSlots.length})` : ''}
+          {(source === 'classes' ? chosenClasses.length : chosenSlots.length) > 0
+            ? ` (${source === 'classes' ? chosenClasses.length : chosenSlots.length})`
+            : ''}
         </button>
       </div>
     </div>
@@ -799,7 +848,8 @@ function SignupBoard({ windowId, onChanged }) {
       for (const seat of slot.seats || []) {
         const draft = (seat.claimants || []).filter((p) => !p.assigned && picked.has(keyOf(slot.id, p.employee_id))).length;
         if (seat.assigned + draft > seat.needed) {
-          out.push(`${dayLabel(slot.date)} ${slot.start_time}${seat.role ? ` · ${seat.role}` : ''} — ${seat.assigned + draft} אנשים למקום של ${seat.needed}`);
+          const where = slot.date ? `${dayLabel(slot.date)} ${slot.start_time}` : (slot.label || '');
+          out.push(`${where}${seat.role ? ` · ${seat.role}` : ''} — ${seat.assigned + draft} אנשים למקום של ${seat.needed}`);
         }
         for (const person of seat.claimants || []) {
           if (!picked.has(keyOf(slot.id, person.employee_id)) && !person.assigned) continue;
@@ -818,14 +868,17 @@ function SignupBoard({ windowId, onChanged }) {
     return out;
   }, [data, picked]);
 
-  const approve = async () => {
+  const isClassBoard = data?.kind === 'class_board';
+
+  const approve = async (replace = []) => {
     setBusy(true);
     setError('');
     try {
-      const body = await callApi(`/api/shift-signup/windows/${encodeURIComponent(windowId)}/assign`, {
+      const route = isClassBoard ? 'assign-class' : 'assign';
+      const body = await callApi(`/api/shift-signup/windows/${encodeURIComponent(windowId)}/${route}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ picks }),
+        body: JSON.stringify(isClassBoard ? { picks, replace } : { picks }),
       });
       setResult(body);
       await load();
@@ -848,11 +901,14 @@ function SignupBoard({ windowId, onChanged }) {
   return (
     <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-        סמנו מי לוקח כל משמרת, ואז „אישור ושליחה”. כל עובד יקבל הודעה אחת עם כל המשמרות שלו.
+        {isClassBoard
+          ? 'סמנו מי מקבל כל חוג, ואז „אישור ושליחה”. השיבוץ נכתב ללוח החוגים והוא קבוע לשנה.'
+          : 'סמנו מי לוקח כל משמרת, ואז „אישור ושליחה”. כל עובד יקבל הודעה אחת עם כל המשמרות שלו.'}
         <div style={{ marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11 }}>
           <span><Square size={11} style={{ verticalAlign: '-1px' }} /> פנוי — הודיע שהוא יכול</span>
           <span><UserPlus size={11} style={{ verticalAlign: '-1px' }} /> לשיבוץ — ייכנס באישור</span>
-          <span><Check size={11} style={{ verticalAlign: '-1px' }} /> משובץ — כבר ביומן העבודה</span>
+          <span><Check size={11} style={{ verticalAlign: '-1px' }} />
+            {isClassBoard ? ' משובץ — כבר בלוח החוגים' : ' משובץ — כבר ביומן העבודה'}</span>
         </div>
       </div>
 
@@ -873,9 +929,14 @@ function SignupBoard({ windowId, onChanged }) {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>
-                  {dayLabel(slot.date)} · {slot.start_time}–{slot.end_time}
-                  {slot.label && (
+                  {slot.date
+                    ? `${dayLabel(slot.date)} · ${slot.start_time}–${slot.end_time}`
+                    : `${slot.label || ''}`}
+                  {slot.date && slot.label && (
                     <span style={{ fontWeight: 500, fontSize: 12.5, color: 'var(--text-3)' }}> · {slot.label}</span>
+                  )}
+                  {!slot.date && slot.trainer_name && (
+                    <span style={{ fontWeight: 500, fontSize: 12.5, color: 'var(--text-3)' }}> · מדריך: {slot.trainer_name}</span>
                   )}
                 </div>
                 <span className={`badge ${full ? 'badge-green' : 'badge-amber'}`}>
@@ -917,12 +978,14 @@ function SignupBoard({ windowId, onChanged }) {
                                 className={`btn btn-sm ${person.assigned ? 'btn-primary' : on ? 'btn-secondary' : 'btn-ghost'}`}
                                 disabled={busySlot === key || busy}
                                 title={person.assigned
-                                  ? (person.answered
-                                    ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
-                                    : 'שובץ מהיומן, בלי לענות לטופס — לחיצה מבטלת')
+                                  ? (isClassBoard
+                                    ? 'כבר משובץ בחוג — הסרה נעשית בלוח החוגים'
+                                    : person.answered
+                                      ? 'כבר שובץ — לחיצה מבטלת את השיבוץ ביומן'
+                                      : 'שובץ מהיומן, בלי לענות לטופס — לחיצה מבטלת')
                                   : `ביקש ${person.picked_count} משמרות${person.wanted_count ? `, רוצה ${person.wanted_count}` : ''}`}
                                 onClick={() => (person.assigned
-                                  ? unassign(slot, person)
+                                  ? (isClassBoard ? null : unassign(slot, person))
                                   : togglePick(slot, seat, person))}
                               >
                                 {busySlot === key
@@ -934,7 +997,8 @@ function SignupBoard({ windowId, onChanged }) {
                                     הודיע שהוא פנוי. */}
                                 {person.assigned && (
                                   <span style={{ fontSize: 10.5, opacity: 0.8 }}>
-                                    {' · משובץ'}{!person.answered ? ' מהיומן' : ''}
+                                    {' · משובץ'}
+                                    {!person.answered ? (isClassBoard ? ' בלוח' : ' מהיומן') : ''}
                                   </span>
                                 )}
                                 {!person.assigned && on && (
@@ -986,7 +1050,9 @@ function SignupBoard({ windowId, onChanged }) {
       {result && (
         <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontSize: 13, fontWeight: 700 }}>
-            {result.created === 1 ? 'שיבוץ אחד נכתב' : `${result.created} שיבוצים נכתבו`} ליומן העבודה
+            {isClassBoard
+              ? `${(result.updated || []).length === 1 ? 'חוג אחד עודכן' : `${(result.updated || []).length} חוגים עודכנו`} בלוח החוגים`
+              : `${result.created === 1 ? 'שיבוץ אחד נכתב' : `${result.created} שיבוצים נכתבו`} ליומן העבודה`}
           </div>
           {(result.notified || []).map((row) => (
             <div key={row.employee_id} style={{ fontSize: 12, color: row.ok ? 'var(--text-2)' : 'var(--red)' }}>
@@ -995,11 +1061,29 @@ function SignupBoard({ windowId, onChanged }) {
                 : `✗ ${row.name} — ${row.reason}`}
             </div>
           ))}
-          {(result.skipped || []).length > 0 && (
+          {(result.skipped || []).length > 0 && (isClassBoard ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {result.skipped.map((row, i) => (
+                <div key={`${row.group_id}-${i}`} style={{ fontSize: 12, color: 'var(--amber)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {SKIP_LABELS[row.reason] || row.reason}
+                  {row.reason === 'trainer_taken' && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      disabled={busy}
+                      title="המדריך הקיים יוחלף בחוג הזה"
+                      onClick={() => approve([row.group_id])}
+                    >
+                      להחליף בכל זאת
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
               {result.skipped.length} סימונים דולגו (כבר שובצו או שהמשמרת עברה)
             </div>
-          )}
+          ))}
         </div>
       )}
 
