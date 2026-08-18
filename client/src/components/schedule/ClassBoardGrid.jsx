@@ -76,7 +76,17 @@ export function visibleDaysOf(groups = [], pref = null) {
  * `enrolledCount` ריק מסתיר את שורת התפוסה לגמרי — הטופס הציבורי נפתח בלי
  * התחברות, ואין סיבה שהוא יספר לעובד כמה מתאמנים יש בכל קבוצה.
  */
-export function GroupBlock({ group, enrolledCount, selected, onClick, onContextMenu, children }) {
+export function GroupBlock({
+  group,
+  enrolledCount,
+  selected,
+  onClick,
+  onContextMenu,
+  children,
+  // מי מדריך את החוג. בטופס הציבורי אין מה למלא כאן, ו„ללא מדריך” על חוג שיש
+  // לו מדריך הוא שקר — עדיף בלי השורה.
+  showStaff = true,
+}) {
   const c    = AGE_COLORS[group.ageCategory] || DEF_COLOR;
   const top  = topPx(group.time);
   const h    = heightPx(group.duration);
@@ -120,7 +130,7 @@ export function GroupBlock({ group, enrolledCount, selected, onClick, onContextM
       </div>
 
       {/* Trainer, then assistants on the next line when assigned. */}
-      {h >= 55 && (
+      {showStaff && h >= 55 && (
         <div title={staffTitle} style={{ marginTop: 1, flexShrink: 0, minWidth: 0 }}>
           <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
             <Users size={9} style={{ flexShrink: 0, opacity: 0.55, color: 'rgba(255,255,255,0.45)' }} />

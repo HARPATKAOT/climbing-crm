@@ -14,6 +14,7 @@ import { CalendarCheck, Check, CheckCircle, Loader2 } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import AppSelect from './AppSelect.jsx';
+import PublicClassBoardSignup from './PublicClassBoardSignup.jsx';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -96,6 +97,15 @@ export default function PublicShiftSignup() {
    * לחיצה על אותו תפקיד מבטלת; לחיצה על תפקיד אחר באותה משמרת מחליפה, כי אי
    * אפשר לעבוד בשני תפקידים באותה שעה.
    */
+  /** הסרה מלאה של הבחירה במשמרת אחת — קליק ימני, או כפתור ה-× שבכרטיס. */
+  const clearSeat = (slotId) => {
+    setPicked((current) => {
+      const next = current.filter((p) => p.slot_id !== slotId);
+      setWanted((n) => (n > next.length ? next.length : n));
+      return next;
+    });
+  };
+
   const claimSeat = (slotId, role) => {
     setPicked((current) => {
       const mine = current.find((p) => p.slot_id === slotId);
@@ -195,10 +205,10 @@ export default function PublicShiftSignup() {
       <div className="event-card">
         <div className="event-hero">
           <div className="event-brand-logo"><img src={brandLogo} alt={brandName} /></div>
-          <div className="event-brand">הרשמה למשמרות</div>
+          <div className="event-brand">{data.kind === 'class_board' ? 'שיבוץ לחוגים' : 'הרשמה למשמרות'}</div>
           <h1>{data.title}</h1>
           <div className="event-meta">
-            <span>{(data.slots || []).length} משמרות</span>
+            <span>{data.kind === 'class_board' ? `${(data.seats || []).length} חוגים` : `${(data.slots || []).length} משמרות`}</span>
             {data.deadline && <span>אפשר לענות עד {dayLabel(data.deadline)}</span>}
           </div>
           {data.note && <p className="event-body">{data.note}</p>}
@@ -241,6 +251,22 @@ export default function PublicShiftSignup() {
               )}
             </section>
 
+            {data.kind === 'class_board' ? (
+              <PublicClassBoardSignup
+                data={data}
+                picks={picked}
+                employee={employeeId}
+                canFill={canTake}
+                note={note}
+                onNote={setNote}
+                onClaim={claimSeat}
+                onClear={clearSeat}
+                onSubmit={submit}
+                submitting={submitting}
+                error={error}
+              />
+            ) : (
+              <>
             <section>
               <h2 style={{ padding: 0 }}>מה מתאים לכם?</h2>
               <p className="event-hint">
@@ -346,6 +372,8 @@ export default function PublicShiftSignup() {
                 {submitting ? 'שולח...' : 'שליחת הזמינות'}
               </button>
             </div>
+              </>
+            )}
           </form>
         )}
       </div>
