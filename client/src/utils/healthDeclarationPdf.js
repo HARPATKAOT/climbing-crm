@@ -201,6 +201,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
   const activityWhen = activityDates.length === 2 && activityDates[0] !== activityDates[1]
     ? `${activityDates[0]} — ${activityDates[1]}`
     : (activityDates[0] || '');
+  const activityDetails = String(activity?.details || '').trim();
 
   return `
     <div id="hd-cert-root" dir="rtl" style="
@@ -233,6 +234,10 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         #hd-cert-root .activity-label { font-size: 11px; color: #9a3412; margin-bottom: 3px; }
         #hd-cert-root .activity-name { font-size: 15px; font-weight: 800; color: #7c2d12; }
         #hd-cert-root .activity-when { font-size: 12px; color: #9a3412; margin-top: 2px; }
+        #hd-cert-root .activity-details {
+          white-space: pre-wrap; font-size: 11px; line-height: 1.5; color: #7c2d12;
+          border-top: 1px solid #fed7aa; margin-top: 8px; padding-top: 8px;
+        }
         #hd-cert-root .value { font-size: 14px; font-weight: 700; color: #0f172a; }
         #hd-cert-root h2 { font-size: 15px; margin: 18px 0 10px; color: #ea580c; }
         #hd-cert-root .qa {
@@ -281,6 +286,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         <div class="activity-label">האישור ניתן עבור</div>
         <div class="activity-name">${escapeHtml(activityName)}</div>
         ${activityWhen ? `<div class="activity-when">${escapeHtml(activityWhen)}</div>` : ''}
+        ${activityDetails ? `<div class="activity-details">${escapeHtml(activityDetails)}</div>` : ''}
       </div>` : ''}
 
       <div class="grid">

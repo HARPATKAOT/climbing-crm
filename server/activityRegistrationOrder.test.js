@@ -122,6 +122,7 @@ test('paid parent and two children reserve three slots and price units', async (
     name: 'טיול',
     date: '2026-09-04',
     end_date: '2026-09-05',
+    registration_page_body: 'תוכנית הטיול: יום טיפוס מלא בכל יום.',
     price: 100,
     price_includes_vat: true,
     max_participants: 10,
@@ -166,6 +167,7 @@ test('paid parent and two children reserve three slots and price units', async (
     row.form_snapshot.activity?.name === 'טיול'
     && row.form_snapshot.activity?.date === '2026-09-04'
     && row.form_snapshot.activity?.endDate === '2026-09-05'
+    && row.form_snapshot.activity?.details === 'תוכנית הטיול: יום טיפוס מלא בכל יום.'
   )));
   assert.equal(result.registrations[0].student_id, db.store.students.find((s) => s.isAdult)?.id);
   assert.equal(db.store.students.filter((s) => s.isAdult).length, 1);

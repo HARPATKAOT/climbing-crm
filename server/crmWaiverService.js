@@ -541,6 +541,14 @@ export async function saveCrmParticipants({
         ).trim(),
         date: signedActivityRow.date || '',
         endDate: signedActivityRow.end_date || signedActivityRow.endDate || '',
+        // The outing's description exactly as the event page showed it to the
+        // signer — same field order as the public payload builds page_body.
+        details: String(
+          signedActivityRow.registration_page_body
+          || signedActivityRow.registrationPageBody
+          || signedActivityRow.description
+          || ''
+        ).trim(),
       }
     : null;
   const savedParticipants = [];
