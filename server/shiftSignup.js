@@ -234,6 +234,21 @@ export const CLASS_SOURCE_TYPE = 'class';
  * סביר בהיעדר מידע. ובסוף תפקיד ריק, שפירושו „מי שמתאים”: עדיף להציע משמרת בלי
  * לדעת מה היא צריכה מאשר לא להציע אותה בכלל.
  */
+/**
+ * מה חוג צריך.
+ *
+ * מה שנכתב על החוג גובר; בלעדיו — מדריך אחד, שזו האמת של רוב החוגים. עוזר
+ * מדריך הוא תוספת שנבחרת לחוג מסוים, ולכן הוא לא נכנס לברירת המחדל: טופס
+ * שמבקש עוזר לכל חוג בקיר מזמין התנדבות שאיש לא ביקש.
+ */
+export function classNeedsFor(savedNeeds, classRoles = []) {
+  const explicit = normalizeNeeds(savedNeeds, 0);
+  if (explicit[0]?.role) return explicit;
+  return classRoles.length
+    ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
+    : [{ role: '', count: 1 }];
+}
+
 export function needsForActivity(activity, rolesByType, type) {
   const explicit = normalizeNeeds(activity?.staff_needs, 0);
   if (explicit[0]?.role) return explicit;
@@ -315,6 +330,8 @@ export function calendarSlotCandidates({
   assignments = [],
   rolesByType = {},
   classRoles = [],
+  // מה שנשמר על כל חוג. המודול לא יודע על טבלאות, ולכן המפה מגיעה מהמסלול.
+  classNeedsByGroup = {},
   from,
   to,
   types = null,
@@ -429,11 +446,7 @@ export function calendarSlotCandidates({
 
       if (!offeredClass) continue;
 
-      // חוג צריך מי שמדריך אותו. `classRoles` הם התפקידים שיכולים לקחת חוג,
-      // והראשון שבהם הוא ההדרכה עצמה — עוזר מדריך הוא תוספת, לא תחליף.
-      const classNeeds = classRoles.length
-        ? [{ role: cleanText(classRoles[0], 60), count: 1 }]
-        : [{ role: '', count: 1 }];
+      const classNeeds = classNeedsFor(classNeedsByGroup[group.id], classRoles);
 
       for (const date of dates) {
         candidates.push({

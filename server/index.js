@@ -12836,6 +12836,7 @@ function allCatalogLabels(catalog) {
  * נועד לו. מזהה השורה הוא מזהה האירוע, כך שאין חיפוש ואין שתי שורות לאירוע אחד.
  */
 const STAFF_NEEDS_TABLE = 'activity_staff_needs';
+const CLASS_NEEDS_TABLE = 'class_staff_needs';
 
 function propagateRoleRename(from, to) {
   let touched = 0;
@@ -12876,10 +12877,12 @@ function propagateRoleRename(from, to) {
   // צרכי האיוש של אירועים ושל טפסי המשמרות. בלי אלה שינוי שם תפקיד היה משאיר
   // טופס שנשלח לצוות מבקש תפקיד שכבר לא קיים — מושב שאיש אינו מסומן בו, ולכן
   // איש לא יכול לקחת אותו.
-  for (const row of db.get(STAFF_NEEDS_TABLE) || []) {
-    const needs = Array.isArray(row.needs) ? row.needs : [];
+  for (const row of [...(db.get(STAFF_NEEDS_TABLE) || []).map((r) => [STAFF_NEEDS_TABLE, r]),
+    ...(db.get(CLASS_NEEDS_TABLE) || []).map((r) => [CLASS_NEEDS_TABLE, r])]) {
+    const [table, needsRow] = row;
+    const needs = Array.isArray(needsRow.needs) ? needsRow.needs : [];
     if (!needs.some((need) => need.role === from)) continue;
-    db.update(STAFF_NEEDS_TABLE, row.id, {
+    db.update(table, needsRow.id, {
       needs: needs.map((need) => (need.role === from ? { ...need, role: to } : need)),
     });
     touched += 1;
@@ -14754,6 +14757,36 @@ app.put('/api/activities/:id/staff-needs', (req, res) => {
   res.json({ needs: saved.needs });
 });
 
+function classNeedsRowFor(groupId) {
+  const row = db.getOne(CLASS_NEEDS_TABLE, String(groupId || ''));
+  return Array.isArray(row?.needs) ? row.needs : [];
+}
+
+/** כל דרישות החוגים במפה אחת, כפי שבורר המשמרות מבקש אותן. */
+function classNeedsByGroupMap() {
+  return Object.fromEntries((db.get(CLASS_NEEDS_TABLE) || []).map((row) => [row.id, row.needs]));
+}
+
+app.get('/api/groups/:id/staff-needs', (req, res) => {
+  res.json({ needs: classNeedsRowFor(req.params.id) });
+});
+
+app.put('/api/groups/:id/staff-needs', (req, res) => {
+  const group = db.getOne('groups', req.params.id);
+  if (!group) return res.status(404).json({ error: 'החוג לא נמצא' });
+  // רשימה ריקה היא „מדריך אחד, כרגיל” — מחיקה של ההגדרה, לא אפס אנשים.
+  const needs = normalizeNeeds(req.body?.needs, 0).filter((need) => need.role);
+  const existing = db.getOne(CLASS_NEEDS_TABLE, String(group.id));
+  if (!needs.length) {
+    if (existing) db.delete(CLASS_NEEDS_TABLE, existing.id);
+    return res.json({ needs: [] });
+  }
+  const saved = existing
+    ? db.update(CLASS_NEEDS_TABLE, existing.id, { needs })
+    : db.insert(CLASS_NEEDS_TABLE, { id: String(group.id), needs });
+  res.json({ needs: saved.needs });
+});
+
 /**
  * איזה תפקיד מתאים לאיזו רשומה ביומן — כפי שבורר המשמרות צריך לראות את זה.
  *
@@ -14843,6 +14876,7 @@ app.get('/api/shift-signup/calendar-slots', async (req, res) => {
       assignments,
       rolesByType: catalog.rolesByType,
       classRoles: catalog.classRoles,
+    classNeedsByGroup: classNeedsByGroupMap(),
       from: req.query.from,
       to: req.query.to,
       // רשימת סוגים מופרדת בפסיקים, כפי שהמסך מסמן אותם. ריק פירושו „הכל”,

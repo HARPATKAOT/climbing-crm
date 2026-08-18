@@ -5,7 +5,7 @@ import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, His
 import { DAYS_FULL } from '../mockData.js';
 import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
-  fetchRoleCatalog, roleLabelOf,
+  fetchRoleCatalog, roleLabelOf, payableRolesOf, useRoleCatalog,
 } from '../utils/staffRoles.js';
 import { canConductSafetyTest, employeesFor } from '../utils/operationalEmployees.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
@@ -47,6 +47,7 @@ import {
 import ClassBoardGrid, {
   GroupBlock, occupancyOf, topPx, heightPx, visibleDaysOf,
 } from './schedule/ClassBoardGrid.jsx';
+import StaffNeedsEditor from './StaffNeedsEditor.jsx';
 import { StatusPill } from './AttendanceList.jsx';
 import StudentFileButton from './StudentFileButton.jsx';
 import {
@@ -989,6 +990,7 @@ function PeoplePicker({ options, selected, onToggle, onClear, placeholder, multi
 // ─── Group Form Modal (Add / Edit) ────────────────────────────────────────────
 function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const roleLabels = useStaffRoleLabels();
+  const roleCatalog = useRoleCatalog();
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
   const [trainingDays, setTrainingDays] = useState(() => {
@@ -1218,6 +1220,19 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                 />
               )}
             </div>
+
+            {/* מה החוג צריך, בנפרד ממי שמשובץ בו כרגע: זו הדרישה שהטופס מציג
+                לצוות, ובלעדיה חוג יכול לבקש רק מדריך אחד. */}
+            {group?.id && (
+              <div className="form-group">
+                <StaffNeedsEditor
+                  endpoint={`/api/groups/${encodeURIComponent(group.id)}/staff-needs`}
+                  roleOptions={payableRolesOf(roleCatalog)}
+                  title="מה החוג צריך"
+                  emptyLabel="מדריך אחד, כרגיל"
+                />
+              </div>
+            )}
 
             <div className="form-grid-2">
               <div className="form-group">
