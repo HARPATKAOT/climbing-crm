@@ -426,9 +426,16 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
     setError('');
     setBusy(true);
     try {
+      // ללוח החוגים אין טווח: שבוע אחד קדימה מכסה כל חוג שבועי בדיוק פעם אחת,
+      // והתאריכים ממילא מתקפלים בחזרה לחוג שממנו באו.
+      const classRange = () => {
+        const start = todayStr();
+        return { from: start, to: addDays(start, 6) };
+      };
+      const range = source === 'classes' ? classRange() : { from, to };
       const query = new URLSearchParams({
-        from,
-        to,
+        from: range.from,
+        to: range.to,
         types: source === 'classes' ? CLASS_CHIP.id : wantedTypes.join(','),
       });
       const body = await callApi(`/api/shift-signup/calendar-slots?${query}`);
@@ -630,6 +637,9 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         </div>
       )}
 
+      {/* לוח החוגים אינו טווח תאריכים: השיבוץ בו קבוע לשנה, והשאלה היא רק
+          אילו חוגים — לכן אין שם מה למלא. */}
+      {source !== 'classes' && (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
           מתאריך
@@ -652,6 +662,7 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
           </>
         )}
       </div>
+      )}
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: 'var(--text-3)' }}>
         הסבר שיופיע בטופס (לא חובה)

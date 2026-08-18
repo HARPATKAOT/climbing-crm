@@ -1389,7 +1389,7 @@ function useStaffAttendance({ group, employees, date }) {
     && isActiveEmployee(e)
     && (canFillRole(e, roleLabels.trainer) || canFillRole(e, roleLabels.assistant)));
 
-  const mark = async (employeeId, { status, role, substituteFor }) => {
+  const mark = async (employeeId, { status, role, substituteFor, substitutedBy }) => {
     const previous = marks[employeeId] || null;
     setSaving(employeeId);
     setMarks(prev => {
@@ -1408,6 +1408,7 @@ function useStaffAttendance({ group, employees, date }) {
           status: status || 'none',
           role,
           substitute_for: substituteFor || null,
+          substituted_by: substitutedBy || null,
         }),
       });
       if (!res.ok) {
@@ -1429,16 +1430,29 @@ function useStaffAttendance({ group, employees, date }) {
     }
   };
 
-  const addSubstitute = (employeeId) => {
+  const addSubstitute = (employeeId, replacesId = null) => {
     const emp = (employees || []).find(e => e.id === employeeId);
     if (!emp) return;
-    // מי שמוסמך כמדריך ממלא את מקום המדריך; אחרת הוא נכנס כעוזר מתנדב.
-    const role = canFillRole(emp, roleLabels.trainer) ? 'trainer' : 'assistant';
+    // התפקיד נגזר ממי שמוחלף: מי שנכנס במקום המדריך הוא המדריך של אותו יום,
+    // גם אם ביום-יום הוא עוזר. בלי מוחלף — לפי ההסמכה, כמו קודם.
+    const replaced = replacesId ? String(replacesId) : null;
+    const role = replaced
+      ? (replaced === String(group.trainer) ? 'trainer' : 'assistant')
+      : (canFillRole(emp, roleLabels.trainer) ? 'trainer' : 'assistant');
     setExtra(prev => prev.some(x => x.id === employeeId) ? prev : [...prev, {
       id: employeeId,
       role,
-      substitute_for: role === 'trainer' ? (group.trainer || null) : null,
+      substitute_for: replaced,
     }]);
+    // מי שהוחלף מסומן „הוחלף” באותה פעולה — שני צדי ההחלפה נכתבים יחד,
+    // ואיש מהם אינו נספר כהברזה.
+    if (replaced) {
+      mark(replaced, {
+        status: 'substituted',
+        role: replaced === String(group.trainer) ? 'trainer' : 'assistant',
+        substitutedBy: employeeId,
+      });
+    }
   };
 
   const removeSubstitute = async (employeeId) => {
@@ -1461,8 +1475,10 @@ function useStaffAttendance({ group, employees, date }) {
 function StaffAttendanceSection({
   staff, marks, saving, onMark, pendingCount, vacation, roleLabels,
   substitutes, substituteOptions, onAddSubstitute, onRemoveSubstitute,
+  employees = [],
 }) {
   const [adding, setAdding] = useState('');
+  const employeesById = new Map((employees || []).map((e) => [String(e.id), e]));
 
   if (staff.length === 0 && substitutes.length === 0) return null;
 
@@ -1496,6 +1512,7 @@ function StaffAttendanceSection({
     const mark = marks[emp.id]?.status || null;
     const isPresent = mark === 'present';
     const isAbsent = mark === 'absent';
+    const isSubstituted = mark === 'substituted';
     const role = roleLabel === roleLabels.trainer ? 'trainer' : 'assistant';
     const btn = (label, active, color, next) => (
       <button
@@ -1518,7 +1535,9 @@ function StaffAttendanceSection({
       <div key={emp.id} style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
         padding: 10, background: '#111827', borderRadius: 8,
-        border: `1px solid ${isPresent ? 'rgba(52,211,153,0.4)' : isAbsent ? 'rgba(248,113,113,0.4)' : 'var(--border)'}`,
+        border: `1px solid ${isPresent ? 'rgba(52,211,153,0.4)'
+          : isAbsent ? 'rgba(248,113,113,0.4)'
+            : isSubstituted ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
       }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1526,7 +1545,14 @@ function StaffAttendanceSection({
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
             {roleLabel}
-            {substituteFor ? ` · מחליף` : ''}
+            {substituteFor
+              ? ` · מחליף את ${(employeesById.get(String(substituteFor)) || {}).name || ''}`
+              : ''}
+            {mark === 'substituted'
+              ? ` · הוחלף${marks[emp.id]?.substituted_by
+                ? ` על ידי ${(employeesById.get(String(marks[emp.id].substituted_by)) || {}).name || ''}`
+                : ''}`
+              : ''}
             {role === 'assistant' ? ' · התנדבות' : ''}
             {saving === emp.id ? ' · שומר...' : ''}
           </div>
@@ -1572,22 +1598,43 @@ function StaffAttendanceSection({
       }))}
 
       {substituteOptions.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <AppSelect
-            className="input input-sm"
-            value={adding}
-            onChange={(e) => {
-              const id = e.target.value;
-              setAdding('');
-              if (id) onAddSubstitute(id);
-            }}
-            style={{ flex: 1 }}
-          >
-            <option value="">הוסף מחליף שהיה באימון...</option>
-            {substituteOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>{opt.name}</option>
-            ))}
-          </AppSelect>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <AppSelect
+              className="input input-sm"
+              value={adding}
+              onChange={(e) => setAdding(e.target.value)}
+              style={{ flex: 1 }}
+            >
+              <option value="">הוסף מחליף שהיה באימון...</option>
+              {substituteOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.name}</option>
+              ))}
+            </AppSelect>
+          </div>
+          {adding && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {/* את מי הוא מחליף — מתוך צוות החוג. „אף אחד” הוא תוספת ליום,
+                  לא החלפה, ומי שנבחר מסומן „הוחלף” באותה פעולה. */}
+              <AppSelect
+                className="input input-sm"
+                value=""
+                onChange={(e) => {
+                  const replaces = e.target.value;
+                  const id = adding;
+                  setAdding('');
+                  onAddSubstitute(id, replaces === 'none' ? null : replaces);
+                }}
+                style={{ flex: 1 }}
+              >
+                <option value="">את מי הוא מחליף?</option>
+                {staff.map((emp) => (
+                  <option key={emp.id} value={emp.id}>{emp.name}</option>
+                ))}
+                <option value="none">אף אחד — תוספת ליום הזה</option>
+              </AppSelect>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1883,6 +1930,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                   {...staffAtt}
                   pendingCount={pendingCount}
                   vacation={dayVacation}
+                  employees={employees}
                 />
               </div>
             )
@@ -2633,6 +2681,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                   {...staffAtt}
                   pendingCount={pendingCount}
                   vacation={attVacation}
+                  employees={employees}
                 />
               </div>
             )}
