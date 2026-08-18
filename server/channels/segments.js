@@ -144,7 +144,12 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
     }
   }
 
-  const recipients = [];
+  /** מי שכבר בפנים: הרשמה חיה, לא ליד ולא מי שהיה רשום בעבר. */
+const REGISTERED_STATUSES = new Set([
+  'registered', 'active', 'awaiting_centre_confirmation', 'awaiting_parent_confirmation',
+]);
+
+const recipients = [];
   const removed = [];
   let childCount = 0;
   for (const entry of byPhone.values()) {
@@ -175,6 +180,10 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
       recipientKind,
       excludedByAudienceType,
       windowOpen: siblings.some((card) => canSendFreeform(card, 'whatsapp')),
+      // „ההרשמה נפתחה! מהרו לשריין מקום” הגיעה למשפחות שכבר רשומות, וארבע מהן
+      // ענו בבלבול — „אבל כבר נרשמתי לא?”. מי שיש לו ילד משובץ ורשום כבר
+      // עשה את מה שההודעה מבקשת ממנו.
+      hasActiveRegistration: kids.some((kid) => REGISTERED_STATUSES.has(String(kid.status || ''))),
       students: kids,
       // Legacy fields for existing consumers (recipients viewer, old jobs).
       studentName: kids.map((k) => k.name).filter(Boolean).join(' · '),

@@ -308,6 +308,36 @@ export function liveBlockReason(job, recipient, {
   return '';
 }
 
+/**
+ * שליחה אחת לכל נמען, גם כששני מופעים של השרת רצים במקביל.
+ *
+ * `activeJobs` שומר רק בתוך התהליך הזה. בזמן פריסה המופע היוצא ממשיך לנקז את
+ * המשימה בעוד החדש רואה אותה כ„sending” ומתחיל אותה מהתחלה — 265 אנשים קיבלו
+ * את אותו דיוור פעמיים בהפרש 74 שניות. השורה ב-`automation_sends` היא מפתח
+ * ייחודי במסד, ולכן רק מי שהספיק ראשון שולח.
+ */
+async function claimRecipientSend(recipient) {
+  const id = `bcr-${recipient?.id || ''}`;
+  if (!recipient?.id) return { claimed: true, id: '' };
+  if (typeof db.appendOnly !== 'function') return { claimed: true, id, durable: false };
+  const result = await db.appendOnly('automation_sends', {
+    id,
+    event: 'broadcast_recipient',
+    job_id: recipient.job_id || null,
+    phone: recipient.phone || '',
+    status: 'claimed',
+    claimed_at: new Date().toISOString(),
+  });
+  return { claimed: result?.ok !== false, id, durable: true };
+}
+
+async function releaseRecipientSend(recipient) {
+  const id = `bcr-${recipient?.id || ''}`;
+  if (!recipient?.id) return;
+  if (typeof db.deleteDurable === 'function') await db.deleteDurable('automation_sends', id);
+  else if (typeof db.delete === 'function') db.delete('automation_sends', id);
+}
+
 async function processJob(jobId) {
   if (activeJobs.has(jobId)) return;
   activeJobs.add(jobId);
@@ -348,6 +378,21 @@ async function processJob(jobId) {
           return;
         }
 
+        // Two instances, one job. `activeJobs` only guards this process, and a
+        // deploy leaves the outgoing instance draining while the new one picks
+        // the job up as 'sending': 265 people got the same broadcast twice,
+        // 74 seconds apart. The claim is durable and unique, so whichever
+        // process gets there first is the only one that sends.
+        const claim = await claimRecipientSend(recipient);
+        if (!claim.claimed) {
+          db.update('broadcast_recipients', recipient.id, {
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            error: null,
+          });
+          return;
+        }
+
         try {
           const result = await sendToRecipient(current, recipient, {
             template: isTemplateSend ? template : null,
@@ -362,6 +407,9 @@ async function processJob(jobId) {
             sent_count: (jobRow(jobId)?.sent_count || 0) + 1,
           });
         } catch (err) {
+          // Release the claim: a failure has to stay retryable, and a resend
+          // of the failed recipients must not find the seat taken.
+          await releaseRecipientSend(recipient).catch(() => {});
           db.update('broadcast_recipients', recipient.id, {
             status: 'failed',
             error: err.message,
