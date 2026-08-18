@@ -62,6 +62,8 @@ import {
   CUSTOMER_STATUSES,
   loadBrandedBotSettings,
   decideBotGate,
+  staffHandlingThread,
+  recentConversation,
   pauseBotForPhone,
   recordBotHandoff,
   optOutPhone,
@@ -85,7 +87,7 @@ import {
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
-import { readCentreMessage } from './customerIntent.js';
+import { readCentreMessage, continuesStaffThread } from './customerIntent.js';
 import { alertRecipients } from './staffAlerts.js';
 import { sendManagerAlert } from './staffNotify.js';
 import { replyOffersForm } from './formFollowUp.js';
@@ -1813,6 +1815,25 @@ export const whatsappService = {
 
     // 5. Bot decision gates
     const gate = decideBotGate(settings, parent, students, text, { isSimulator });
+
+    // A person is on this conversation. That is not a reason to go quiet for a
+    // week — a customer who asks something new deserves an answer — but it is
+    // a reason not to talk over them: the bot wrote "מעביר לצוות" three times
+    // into a birthday booking the team was already arranging. So the only
+    // question is whether this message is still their subject, and it is the
+    // model that answers it, not a timer.
+    if (!isSimulator && gate.action !== 'silence' && gate.action !== 'reactivate') {
+      const handler = staffHandlingThread(normalizedPhone, { resumedAt: parent?.bot_resumed_at });
+      if (handler && await continuesStaffThread({
+        transcript: recentConversation(normalizedPhone),
+        message: text,
+        callModel: callGeminiChat,
+        apiKey: process.env.GEMINI_API_KEY,
+      })) {
+        console.log(`🤖 Bot silence (staff_thread) for ${normalizedPhone}`);
+        return { parent, student, isNew, replied: false, skippedReason: 'staff_thread' };
+      }
+    }
 
     if (gate.action === 'reactivate') {
       await optOutPhone(normalizedPhone, false);

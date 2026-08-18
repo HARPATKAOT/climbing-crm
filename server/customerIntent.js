@@ -76,6 +76,56 @@ export async function askAboutMessage({
   }
 }
 
+/**
+ * האם ההודעה החדשה ממשיכה את מה שאיש הצוות כבר מטפל בו.
+ *
+ * הבוט נכנס באמצע שיחה שאדם ניהל: הוא כתב „מעביר לצוות” שלוש פעמים בזמן
+ * שהצוות עצמו כבר תיאם יום הולדת באותה שיחה. שתיקה מוחלטת אחרי כל תשובה של
+ * אדם היא לא הפתרון — לקוח ששואל משהו חדש צריך תשובה. מה שצריך להכריע הוא
+ * *האם זה אותו נושא*, וזאת הבנה, לא טיימר.
+ *
+ * זו השאלה היחידה כאן שמקבלת היסטוריה: „כן, 14:00 מעולה” אינו מובן בלעדיה.
+ *
+ * @param {Array<{who: string, text: string}>} transcript סוף השיחה, לפי הסדר
+ * @param {string} message ההודעה החדשה של הלקוח
+ * @param {boolean} fallback ברירת המחדל היא כן — אדם נמצא בשיחה, ושתיקה שלנו
+ *   אינה משאירה אף אחד בלי מענה
+ */
+export async function continuesStaffThread({
+  transcript = [],
+  message,
+  callModel,
+  apiKey,
+  fallback = true,
+} = {}) {
+  const text = String(message || '').trim();
+  if (!text || typeof callModel !== 'function') return fallback;
+
+  const history = transcript
+    .map((row) => `${row.who}: ${String(row.text || '').replace(/\s+/g, ' ').trim()}`)
+    .filter((line) => line.length > 3)
+    .join('\n');
+
+  try {
+    const { content, error } = await callModel({
+      contents: [{ role: 'user', parts: [{ text: `${history}\n\nההודעה החדשה של הלקוח:\n${text}` }] }],
+      systemInstruction: [
+        'בעסק לחוגי טיפוס. איש צוות אנושי מטפל כרגע בלקוח הזה בשיחה שלפניך.',
+        'השאלה: האם ההודעה החדשה ממשיכה את מה שאיש הצוות מטפל בו?',
+        'תשובה, אישור, סירוב, תיאום מועד או שעה, תודה, או שאלת המשך על אותו',
+        'נושא — כן. פנייה לנושא חדש שאיש הצוות לא עסק בו — לא.',
+        'ענה במילה אחת בלבד: כן או לא. בלי הסבר ובלי סימני פיסוק.',
+      ].join('\n'),
+      declarations: [],
+      apiKey,
+    });
+    if (error || !content) return fallback;
+    return firstText(content).replace(/[^\p{L}]/gu, '').startsWith('כן');
+  } catch {
+    return fallback;
+  }
+}
+
 export const REPORTS_CENTRE_REGISTRATION = [
   'האם הלקוח מודיע בהודעה הזו שההרשמה במתנ״ס כבר בוצעה והושלמה?',
   '„נרשמנו”, „נרשמתי”, „סיימנו את ההרשמה”, „שילמנו במתנ״ס” — כן.',

@@ -511,6 +511,68 @@ export function isHumanOutboundLog(log) {
 }
 
 /**
+ * One conversation's whatsapp rows, newest first, each row once.
+ *
+ * `messages` is the source of truth; `whatsapp_logs` is a local mirror of it
+ * and can lag or be rebuilt. Reading the mirror alone is how a staff reply
+ * sent from the CRM at 10:18 went unseen, and the bot answered the customer
+ * at 10:21 — three minutes into a hold that is supposed to last ten.
+ */
+function conversationRows(phone) {
+  const normalized = normalizeWaPhone(phone) || phone;
+  if (!normalized) return [];
+  const seen = new Set();
+  return [...(db.get('messages') || []), ...(db.get('whatsapp_logs') || [])]
+    .filter((l) => (l.channel || 'whatsapp') === 'whatsapp'
+      && phonesMatch(l.phone || l.to || l.from, normalized))
+    .filter((l) => {
+      const key = `${l.id || ''}|${l.created_at || ''}|${l.direction || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+/** How long after a person's last message the thread is still theirs to answer. */
+export const STAFF_THREAD_HOURS = 24 * 7;
+
+/**
+ * The message a person last wrote here, if they are still handling the thread.
+ *
+ * Different from the timed pause above, which is a hard minute of silence. This
+ * one lasts a week and does not silence anything by itself — it only says that
+ * a human is on this conversation, so the next inbound is worth one question to
+ * the model before the bot opens its mouth. Bot messages after the human's do
+ * not release it: the bot talking over somebody is the bug, not a handover.
+ */
+export function staffHandlingThread(phone, { resumedAt = null, now = Date.now() } = {}) {
+  const rows = conversationRows(phone).filter((l) => l.direction === 'outbound');
+  const resumedTs = resumedAt ? new Date(resumedAt).getTime() : 0;
+  const human = rows.find((l) => isHumanOutboundLog(l));
+  if (!human) return null;
+  const at = new Date(human.created_at || 0).getTime();
+  if (resumedTs && at <= resumedTs) return null;
+  if (now - at > STAFF_THREAD_HOURS * 60 * 60 * 1000) return null;
+  return { at: human.created_at || '', text: String(human.message || '') };
+}
+
+/**
+ * The tail of the conversation, oldest first, labelled by who wrote each line.
+ * The model needs it to tell "כן, 14:00 מעולה" from a new question.
+ */
+export function recentConversation(phone, limit = 8) {
+  return conversationRows(phone)
+    .slice(0, limit)
+    .reverse()
+    .map((row) => ({
+      who: row.direction === 'inbound' ? 'לקוח' : (isHumanOutboundLog(row) ? 'צוות' : 'בוט'),
+      text: String(row.message || ''),
+    }))
+    .filter((row) => row.text.trim());
+}
+
+/**
  * If staff already wrote to this customer, the next inbound belongs to that
  * human thread — the bot must not jump in (even if the timed pause was lost
  * after a server restart).
@@ -534,18 +596,7 @@ export function shouldDeferToHumanStaff(phone, { resumedAt = null, withinMinutes
   // and can lag or be rebuilt. Reading the mirror alone is how a staff reply
   // sent from the CRM at 10:18 went unseen, and the bot answered the customer
   // at 10:21 — three minutes into a hold that is supposed to last ten.
-  const rows = [...(db.get('messages') || []), ...(db.get('whatsapp_logs') || [])];
-  const seen = new Set();
-  const logs = rows
-    .filter((l) => (l.channel || 'whatsapp') === 'whatsapp'
-      && phonesMatch(l.phone || l.to || l.from, normalized))
-    .filter((l) => {
-      const key = `${l.id || ''}|${l.created_at || ''}|${l.direction || ''}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  const logs = conversationRows(normalized);
 
   for (const log of logs) {
     if (log.direction === 'inbound') continue;
