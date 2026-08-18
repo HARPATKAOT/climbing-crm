@@ -6,7 +6,7 @@
 
 | # | מה | סטטוס | מה נדרש מהבעלים |
 |---|---|---|---|
-| B1 | משיכת בנק/אשראי חיה (מרכנתיל + Max) | הספרייה מותקנת בדיפלוי; השרת שודרג ל-standard (אושר 16.08) | הזנת credentials ב-Render env: `BANK_MERCANTILE_ID`, `BANK_MERCANTILE_PASSWORD`, `BANK_MERCANTILE_NUM`, `BANK_MAX_USERNAME`, `BANK_MAX_PASSWORD` — לעולם לא בצ'אט |
+| B1 | ~~משיכת בנק/אשראי חיה (מרכנתיל + Max)~~ **הושלם 18.08**: שתי המשיכות חיות (מקס 227 חיובים, מרכנתיל 59 תנועות + 14 התאמות סליקה). החשבון העסקי נכנס דרך `LOGIN_PAGE_SME` בזרימה שלנו (`bankProviders.js`), לא דרך הספרייה; Chrome מותקן בפקודת הבנייה | המלצה פתוחה: להחליף למשתמש בנק ייעודי בהרשאת צפייה בלבד |
 | B2 | Gmail — קריאת חשבוניות מהתיבה | interface + mock, flag כבוי | יצירת OAuth ב-Google Cloud + `GMAIL_INVOICES_REFRESH_TOKEN` ב-Render |
 | B3 | מיגרציית SQL של הטבלאות המנורמלות | קובץ SQL מוכן, לא הורץ | הרצה ידנית ב-Supabase SQL editor (לא חוסם — הכול רץ על kv) |
 | B4 | OCR לחשבוניות סרוקות (תמונה בלי שכבת טקסט) | לא מומש | החלטה על ספק OCR — בינתיים נקלט עם confidence נמוך לשיוך ידני |
