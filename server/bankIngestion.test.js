@@ -254,6 +254,11 @@ test('mercantile needs three credential fields, max two — no shared shape', ()
   };
   assert.deepEqual(credentialsFromEnv('mercantile', env), { id: '123', password: 'x', num: 'u1' });
   assert.deepEqual(credentialsFromEnv('max', env), { username: 'biz', password: 'y' });
+  // חשבון עסקי: אין קוד משתמש — שני שדות מספיקים, והשלישי נשלח ריק
+  assert.deepEqual(
+    credentialsFromEnv('mercantile', { BANK_MERCANTILE_ID: '123', BANK_MERCANTILE_PASSWORD: 'x' }),
+    { id: '123', password: 'x', num: '' },
+  );
   assert.equal(credentialsFromEnv('mercantile', { BANK_MERCANTILE_ID: '123' }), null);
   assert.throws(() => credentialsFromEnv('leumi', env));
 });

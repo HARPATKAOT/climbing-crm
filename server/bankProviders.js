@@ -22,7 +22,11 @@ export const PROVIDER_CATALOG = {
   mercantile: {
     label: 'מרכנתיל דיסקונט',
     accountType: 'bank',
-    credentialFields: ['id', 'password', 'num'], // ת״ז, סיסמה, קוד משתמש
+    credentialFields: ['id', 'password'], // ת״ז, סיסמה
+    // חשבון עסקי במרכנתיל נכנס בת״ז וסיסמה בלבד; בכניסה הפרטית יש גם קוד
+    // משתמש. הספרייה ממלאת טופס עם שלושת השדות, ולכן חסר מתורגם למחרוזת
+    // ריקה — לא לחסימת ההגדרה כולה.
+    optionalCredentialFields: ['num'],
     envPrefix: 'BANK_MERCANTILE',
   },
   max: {
@@ -33,7 +37,7 @@ export const PROVIDER_CATALOG = {
   },
 };
 
-/** קורא credentials מ-env לפי הקטלוג. חסר שדה ⇒ null, לא שגיאה. */
+/** קורא credentials מ-env לפי הקטלוג. חסר שדה חובה ⇒ null, לא שגיאה. */
 export function credentialsFromEnv(providerKey, env = process.env) {
   const spec = PROVIDER_CATALOG[providerKey];
   if (!spec) throw new Error(`ספק לא מוכר: ${providerKey}`);
@@ -42,6 +46,9 @@ export function credentialsFromEnv(providerKey, env = process.env) {
     const value = env[`${spec.envPrefix}_${field.toUpperCase()}`];
     if (!value) return null;
     credentials[field] = value;
+  }
+  for (const field of spec.optionalCredentialFields || []) {
+    credentials[field] = env[`${spec.envPrefix}_${field.toUpperCase()}`] || '';
   }
   return credentials;
 }
