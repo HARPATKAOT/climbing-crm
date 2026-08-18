@@ -135,9 +135,19 @@ export async function icountPost(endpoint, fields = {}, { timeoutMs = 0 } = {}) 
     throw wrapped;
   }
 
+  const raw = await res.text();
+  // כשהקצב גבוה מדי iCount מחזיר טקסט חופשי ("Too may requests"), לא JSON.
+  // בלי זיהוי מפורש זה נראה כמו תשובה פגומה, המתקשר מנסה שוב מיד — ונחסם
+  // שוב. הקוד שמושך מסמכים בכמות (סנכרון) חייב להבדיל כדי להאט באמת.
+  if (res.status === 429 || /too\s+ma\w+\s+requests/i.test(raw)) {
+    const err = new Error(`iCount הגביל את קצב הקריאות (${endpoint})`);
+    err.code = 'rate_limited';
+    throw err;
+  }
+
   let data;
   try {
-    data = await res.json();
+    data = JSON.parse(raw);
   } catch {
     const err = new Error(`iCount returned non-JSON (${res.status})`);
     err.code = 'bad_response';

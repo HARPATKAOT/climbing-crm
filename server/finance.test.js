@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDashboard, buildPaymentsReport, buildSalesBreakdown, chooseExpenseRows, classifyDocument, expenseFingerprint, reconcileExpenses } from './finance.js';
+import { buildDashboard, buildPaymentsReport, buildSalesBreakdown, chooseExpenseRows, classifyDocument, documentOpenBalance, expenseFingerprint, reconcileExpenses } from './finance.js';
 
 test('recognizes only accounting revenue documents', () => {
   assert.equal(classifyDocument('invoice').recognized, true);
@@ -392,4 +392,43 @@ test('regression: fully paid rows outside the window stay hidden', () => {
     to: '2026-08-16',
   });
   assert.equal(report.rows.length, 0);
+});
+
+test('a paid-on-issue document is never an open debt, whatever remaining_sum says', () => {
+  // חשבונית מס קבלה נוצרת רק כנגד כסף שהתקבל. הסנכרון רשם לה יתרה מלאה
+  // מפני שלא הצליח למשוך את פרטי הפירעון — זה לא הופך אותה לחוב.
+  const doc = {
+    id: 'icount:invrec:3818', doctype: 'invrec', docnum: '3818', document_date: '2026-02-16',
+    total_gross: 150, total_net: 150, remaining_sum: 150, paid_amount: 0, client_name: '',
+  };
+  assert.equal(documentOpenBalance(doc), 0);
+  const report = buildPaymentsReport({ documents: [doc], from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(report.summary.open_amount, 0);
+  assert.equal(report.summary.open_count, 0);
+});
+
+test('a document whose payment status was never fetched is not counted as debt', () => {
+  const unknown = {
+    id: 'icount:invoice:900', doctype: 'invoice', docnum: '900', document_date: '2025-03-04',
+    total_gross: 4000, total_net: 3418.8, remaining_sum: 4000, paid_amount: 0,
+    payment_status_known: false,
+  };
+  assert.equal(documentOpenBalance(unknown), 0);
+  // אותו מסמך בדיוק, אחרי שנמשכו פרטיו: היתרה אמיתית ונספרת.
+  assert.equal(documentOpenBalance({ ...unknown, payment_status_known: true, remaining_sum: 1200 }), 1200);
+});
+
+test('a cancelled iCount document carries no debt', () => {
+  const cancelled = {
+    id: 'icount:invoice:4093', doctype: 'invoice', docnum: '4093', document_date: '2026-08-01',
+    total_gross: 1150, total_net: 1150, remaining_sum: 1150, paid_amount: 0,
+    payment_status_known: true, client_name: 'לקוח', is_cancelled: true,
+  };
+  assert.equal(documentOpenBalance(cancelled), 0);
+});
+
+test('an open balance never exceeds the document total', () => {
+  assert.equal(documentOpenBalance({
+    doctype: 'invoice', total_gross: 300, remaining_sum: 5000, payment_status_known: true,
+  }), 300);
 });

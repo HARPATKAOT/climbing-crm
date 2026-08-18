@@ -2,6 +2,9 @@ import { hostChargeBreakdown } from './activityPricing.js';
 
 const REVENUE_DOC_TYPES = new Set(['invoice', 'invrec']);
 const PIPELINE_DOC_TYPES = new Set(['deal', 'offer', 'proforma']);
+// מסמכים שהפירעון שלהם הוא חלק מהמסמך עצמו: „חשבונית מס קבלה” וקבלה נוצרות
+// רק כנגד כסף שהתקבל, ולכן לעולם אין להן יתרה לגבייה.
+const SELF_SETTLED_DOC_TYPES = new Set(['invrec', 'receipt']);
 const CREDIT_DOC_TYPES = new Set(['refund', 'credit', 'creditinvoice', 'credit_invoice']);
 const COMPLETED_PAYMENT_STATUSES = new Set(['paid', 'completed']);
 
@@ -24,6 +27,30 @@ export function classifyDocument(doctype, { isStorno = false, total = 0 } = {}) 
   if (REVENUE_DOC_TYPES.has(type)) return { bucket: 'revenue', sign: (isStorno || Number(total) < 0) ? -1 : 1, recognized: true };
   if (PIPELINE_DOC_TYPES.has(type)) return { bucket: 'pipeline', sign: Number(total) < 0 ? -1 : 1, recognized: false };
   return { bucket: 'other', sign: 1, recognized: false };
+}
+
+/**
+ * היתרה שבאמת נותרה לגבייה על מסמך iCount.
+ *
+ * remaining_sum לבדו אינו מספיק: כשמשיכת פרטי המסמך (doc/info) נכשלת —
+ * למשל כשה-API מגביל את קצב הקריאות — הסנכרון לא יודע כמה שולם, וחישוב
+ * "סכום פחות מה ששולם" הפך כל מסמך ישן לחוב בגובה מלוא הסכום. כך נולד
+ * „חוב לגבייה” של מאות אלפי שקלים שכולו הכנסות שכבר נגבו.
+ */
+export function documentOpenBalance(document = {}) {
+  if (document.is_cancelled || document.is_storno) return 0;
+  const doctype = cleanText(document.doctype).replace(/ /g, '_');
+  if (SELF_SETTLED_DOC_TYPES.has(doctype)) return 0;
+  // מסמך שלא נמשכו עבורו פרטי פירעון אינו ראיה לחוב. בשורות ישנות השדה
+  // חסר לגמרי, ולכן חוסר ראיה מזוהה גם דרך העדרם של פרטי המסמך.
+  const detailMissing = document.payment_status_known === false
+    || (document.payment_status_known === undefined
+      && !Number(document.paid_amount)
+      && !document.client_name
+      && !document.source_url);
+  if (detailMissing) return 0;
+  const total = Math.abs(Number(document.total_gross) || 0);
+  return roundFinance(Math.max(0, Math.min(Number(document.remaining_sum) || 0, total)));
 }
 
 export function dateInRange(value, from, to) {
@@ -169,7 +196,7 @@ export function buildDashboard({ documents = [], expenses = [], payments = [], f
 
   const recognizedDocs = docs.filter((doc) => classifyDocument(doc.doctype, { isStorno: doc.is_storno, total: doc.total_gross }).recognized);
   const customerIds = new Set(recognizedDocs.map((doc) => doc.client_id).filter(Boolean));
-  const openDebt = recognizedDocs.reduce((sum, doc) => sum + Math.max(0, Number(doc.remaining_sum) || 0), 0);
+  const openDebt = recognizedDocs.reduce((sum, doc) => sum + documentOpenBalance(doc), 0);
   const mapped = reconciledPeriod.filter((row) => row.reconciliation_status === 'matched').length;
   const needsReview = reconciledPeriod.filter((row) => row.reconciliation_status === 'review').length;
 
@@ -940,7 +967,7 @@ export function buildPaymentsReport({
     // חשבונית iCount שטרם נפרעה במלואה היא חוב פתוח — לא "שולם": היתרה
     // נשארת פתוחה, ורק מה שבאמת נגבה נספר כגבייה. חוב מוצג תמיד.
     const isCredit = classification.sign < 0;
-    const remaining = isCredit ? 0 : Math.max(0, Math.min(Number(document.remaining_sum) || 0, total));
+    const remaining = isCredit ? 0 : documentOpenBalance(document);
     if (!(remaining > 0) && !dateInRange(document.document_date, from, to)) continue;
     const documentLines = linesByDocument.get(String(document.id)) || [];
     const events = eventsByDocument.get(String(document.id)) || [];

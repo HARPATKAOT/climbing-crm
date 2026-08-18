@@ -208,10 +208,14 @@ function monthRanges(from, to) {
 
 function normalizeIcountDoc(row, detail = null) {
   const info = detail?.doc_info || detail?.doc || row;
+  // רק doc/info מחזיק את נתוני הפירעון. בלעדיו יש בידינו סכום בלבד, ואסור
+  // להסיק ממנו ששולם או שלא שולם.
+  const hasPaymentDetail = Boolean(detail?.doc_info || detail?.doc);
   const doctype = String(row.doctype || row.doc_type || '').toLowerCase();
   const gross = Number(info.totalwithvat ?? info.total ?? row.total ?? 0);
   const net = Number(info.totalsum ?? info.afterdiscount ?? row.total_before_vat ?? row.total_net ?? gross);
   const paidAmount = Number(info.totalpaid ?? info.paid ?? 0);
+  const reportedRemaining = Number(info.remainingsum ?? row.remainingsum);
   return {
     id: `icount:${doctype}:${row.docnum ?? row.doc_num ?? row.doc_id}`,
     source: 'icount',
@@ -228,7 +232,14 @@ function normalizeIcountDoc(row, detail = null) {
     exchange_rate: Number(info.rate || row.rate || 1),
     paid: paidAmount !== 0 || row.paid === true || Number(row.paid) === 1,
     paid_amount: roundFinance(paidAmount),
-    remaining_sum: roundFinance(info.remainingsum ?? row.remainingsum ?? Math.max(0, gross - paidAmount)),
+    payment_status_known: hasPaymentDetail,
+    // gross פחות המשולם הוא יתרה אמיתית רק כשידוע כמה שולם. כשה-doc/info לא
+    // הגיע, החישוב הזה הפך כל מסמך למלוא סכומו „חוב” — ראו documentOpenBalance.
+    remaining_sum: roundFinance(
+      Number.isFinite(reportedRemaining)
+        ? Math.max(0, reportedRemaining)
+        : (hasPaymentDetail ? Math.max(0, gross - paidAmount) : 0)
+    ),
     is_storno: Boolean(info.is_cancellation || row.is_cancellation),
     is_cancelled: Boolean(info.is_cancelled || row.is_cancelled),
     source_url: info.doc_url || null,
@@ -250,12 +261,17 @@ async function mapConcurrency(rows, limit, worker) {
 
 async function docInfoWithRetry(row) {
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
       return await icount.getDocInfo({ doctype: row.doctype, docnum: row.docnum });
     } catch (error) {
       lastError = error;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      if (attempt >= 5) break;
+      // הגבלת קצב אינה תקלה אלא בקשה להאט. המתנה של מאיות שנייה רק שורפת
+      // ניסיון נוסף, והמסמך נשמר בסוף בלי פרטי הפירעון שלו — וזה בדיוק מה
+      // שהפך מסמכים משולמים ל„חוב פתוח” על המסך.
+      const wait = error?.code === 'rate_limited' ? 3000 * (attempt + 1) : 200 * (attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
   throw lastError;
@@ -390,6 +406,11 @@ export function financeSyncStatus() {
     lastRun: runs.slice().sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0] || null,
     counts: {
       documents: db.get('finance_documents').length,
+      // מסמכים שלא נמשכו עבורם פרטי פירעון. אלה לא נספרים כחוב (ראו
+      // documentOpenBalance), ולכן חוב אמיתי שביניהם עדיין לא מוצג —
+      // משיכה מלאה מאפסת את המספר הזה.
+      documents_without_payment_detail: db.get('finance_documents')
+        .filter((row) => row.source === 'icount' && row.payment_status_known !== true).length,
       expenses: db.get('finance_expenses').length,
       suppliers: db.get('finance_suppliers').length,
     },
