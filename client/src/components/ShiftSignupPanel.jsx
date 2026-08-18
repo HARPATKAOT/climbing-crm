@@ -445,9 +445,16 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
       setByType(body.byType || []);
       // ברירת המחדל היא רק מה שעוד לא מאויש — כדי שלא יישלח לצוות טופס שרובו
       // משמרות שכבר סגורות.
-      setPickedIds((body.candidates || [])
-        .filter((c) => c.staffed < (c.needs || []).reduce((sum, n) => sum + n.count, 0))
-        .map((c) => c.id));
+      if (source === 'classes') {
+        // בלוח החוגים בוחרים חוגים, לא מפגשים — וכולם מסומנים עד שמורידים.
+        setPickedIds([...new Set((body.candidates || [])
+          .filter((c) => c.group_id)
+          .map((c) => c.group_id))]);
+      } else {
+        setPickedIds((body.candidates || [])
+          .filter((c) => c.staffed < (c.needs || []).reduce((sum, n) => sum + n.count, 0))
+          .map((c) => c.id));
+      }
     } catch (e) {
       setError(e.message);
       setCandidates(null);
@@ -472,9 +479,28 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
    * הבורר מחזיר מפגשים מתוארכים, כי זו השאלה שהוא נשאל. טופס לוח החוגים שואל
    * שאלה אחרת — באילו חוגים — ולכן המפגשים מתקפלים בחזרה לחוג שממנו באו.
    */
+  /** החוגים שנשלפו, מקופלים חזרה מהמפגשים — כרטיס אחד לכל חוג. */
+  const classCandidates = source !== 'classes' ? [] : [...new Map(
+    (candidates || [])
+      .filter((c) => c.group_id)
+      .map((c) => [c.group_id, c])
+  ).values()].map((c) => ({
+    group_id: c.group_id,
+    id: c.group_id,
+    name: c.label,
+    day: new Date(`${c.date}T12:00:00`).getDay(),
+    time: c.start_time,
+    duration: Math.max(15, Math.round(
+      (Number(c.end_time.slice(0, 2)) * 60 + Number(c.end_time.slice(3)))
+      - (Number(c.start_time.slice(0, 2)) * 60 + Number(c.start_time.slice(3)))
+    )),
+    ageCategory: c.ageCategory || '',
+    needs: c.needs || [],
+  }));
+
   const chosenClasses = source !== 'classes' ? [] : [...new Map(
     (candidates || [])
-      .filter((c) => pickedIds.includes(c.id) && c.group_id)
+      .filter((c) => pickedIds.includes(c.group_id) && c.group_id)
       .map((c) => [c.group_id, c])
   ).values()].map((c) => ({
     group_id: c.group_id,
@@ -675,12 +701,61 @@ function NewWindowForm({ roleOptions, employees, onCancel, onCreated }) {
         />
       </label>
 
-      {source !== 'pattern' && candidates !== null && (
+      {source === 'classes' && candidates !== null && (
+        <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+            {classCandidates.length === 0
+              ? emptyReason
+              : `${classCandidates.length} חוגים בלוח. לחיצה מורידה חוג מהטופס ומחזירה אותו:`}
+          </div>
+          {/* הלוח עצמו — אותה פריסה ואותם צבעי שכבות גיל שבמסך החוגים. */}
+          <ClassBoardGrid
+            groups={classCandidates}
+            renderBlock={(g, day) => {
+              const on = pickedIds.includes(g.group_id);
+              return (
+                <GroupBlock
+                  key={`${g.group_id}-${day}`}
+                  group={g}
+                  enrolledCount={null}
+                  showStaff={false}
+                  selected={on}
+                  onClick={() => toggleCandidate(g.group_id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setPickedIds((current) => current.filter((x) => x !== g.group_id));
+                  }}
+                >
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2 }}>
+                    {on ? (g.needs || []).filter((n) => n.role).map((need) => (
+                      <span key={need.role} style={{
+                        fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 999,
+                        background: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.8)',
+                      }}>
+                        {need.role} ×{need.count}
+                      </span>
+                    )) : (
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 999,
+                        background: 'rgba(248,113,113,0.18)', color: '#FCA5A5',
+                      }}>
+                        לא בטופס
+                      </span>
+                    )}
+                  </div>
+                </GroupBlock>
+              );
+            }}
+          />
+        </div>
+      )}
+
+      {source === 'calendar' && candidates !== null && (
         <div style={{ background: 'var(--bg-input)', borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
             {candidates.length === 0
               ? emptyReason
-              : `${candidates.length} משמרות ${source === 'classes' ? 'מלוח החוגים' : 'ביומן'}. סמנו מה להציע לצוות:`}
+              : `${candidates.length} משמרות ביומן. סמנו מה להציע לצוות:`}
             {withoutHours > 0 && ` (${withoutHours} רשומות ביומן בלי שעות — אי אפשר להציע אותן להרשמה)`}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
