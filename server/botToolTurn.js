@@ -8,6 +8,11 @@
 import { callGeminiChat } from './aiChat.js';
 import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools } from './botTools.js';
 import { enabledToolNames } from './botCapabilities.js';
+import {
+  askAboutMessage,
+  ASKS_TO_CROSS_AGE_BANDS,
+  REPORTS_CENTRE_REGISTRATION,
+} from './customerIntent.js';
 import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
 import { customerAllowsIntro, replyMentionsIntro } from './introOfferPolicy.js';
 
@@ -501,8 +506,19 @@ export function unbackedClaimHandoffText(unbacked = []) {
  * the tool is deterministic, and the alternative the customer actually got was
  * being told twice in twenty minutes that nothing had reached the system.
  */
-async function recordReportedRegistration({ incoming, tools, allowed, successfulCalls, toolsUsed }) {
-  if (!isExplicitCentreRegistrationReport(incoming)) return null;
+async function recordReportedRegistration({
+  incoming, tools, allowed, successfulCalls, toolsUsed, callModel, apiKey,
+}) {
+  // Asked, not matched: "נרשמנו" on its own is the whole answer, and no word
+  // list ever holds every way of saying it. Unknown means do nothing.
+  const reports = await askAboutMessage({
+    question: REPORTS_CENTRE_REGISTRATION,
+    message: incoming,
+    callModel,
+    apiKey,
+    fallback: false,
+  });
+  if (!reports) return null;
   if (!allowed.has('reportCentreRegistration')) return null;
   if (successfulCalls.some((call) => call.name === 'reportCentreRegistration')) return null;
   try {
@@ -525,20 +541,6 @@ async function recordReportedRegistration({ incoming, tools, allowed, successful
   }
 }
 
-export function isExplicitCentreRegistrationReport(text) {
-  const value = String(text || '').trim();
-  const reportsPast = /(?:נרש(?:ם|מ(?:תי|נו|ה|ו))|השלמ(?:תי|נו|ה|ו).{0,30}הרשמ|הרשמ.{0,30}(?:הושלמ|בוצע|סודר)|רשמנו\s+(?:אותו|אותה|את))/u
-    .test(value);
-  if (!reportsPast) return false;
-  if (/(?:מתנ[״"']?ס|הרשמ)/u.test(value)) return true;
-  // „נרשמנו”, on its own, right after we asked them to register and tell us.
-  // Requiring the word מתנ״ס or הרשמ missed the shortest and most natural
-  // answer there is — the one the bot's own message asks for — and a mother
-  // who wrote exactly that was told her group placement was being handed to
-  // the team. A bare past-tense verb only counts as a report when it is
-  // practically the whole message; anything longer needs the subject named.
-  return value.replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).length <= 3;
-}
 
 function directEligibilityInstruction(eligibility) {
   if (!eligibility) return '';
@@ -580,29 +582,21 @@ function textOf(content) {
  * changing handoffs for refunds, cancellations and other human-only topics.
  */
 /**
- * A request to put a child somewhere the age band does not put them.
+ * The answer a customer gets when a handoff is about breaking the age band.
  *
- * „לאיזו קבוצה הוא מתאים?” is not that question — the age on the card answers
- * it, and answering it was the bot's job all along. What no table can answer
- * is „אפשר להכניס את הבן שלי מכיתה ד׳ לקבוצה של אחיו מכיתה ה׳?”: that is a
- * request to break the band, and it belongs to whoever runs the group.
+ * „לאיזו קבוצה הוא מתאים?” is not that request — the age on the card answers
+ * it, and answering it is the bot's job. „אפשר להכניס את הבן שלי מכיתה ד׳
+ * לקבוצה של אחיו מכיתה ה׳?” is, and it belongs to whoever runs the group.
+ * Which of the two a message is gets decided by the model — see customerIntent
+ * — because the wording of a request like that has no end of variations.
+ *
+ * The wording only matters when the model handed over without saying why: a
+ * bare handoff then reads as "I did not understand you".
  */
-export function asksToCrossAgeBands(text) {
-  const value = String(text || '').trim();
-  if (!value) return false;
-  const together = /(?:יחד\s+עם|באותה\s+קבוצה|עם\s+אח(?:יו|ותו|ות|ים)?\b|עם\s+האח|עם\s+החבר|באותו\s+חוג)/u.test(value);
-  const twoGrades = /(?:כיתה|כיתות)\s*[א-י].{0,40}(?:כיתה|כיתות)\s*[א-י]/u.test(value);
-  const asksException = /(?:חריג|לעשות\s+יוצא|אפשר\s+בכל\s+זאת|למרות\s+הגיל|למרות\s+שהוא\s+קטן|מבוגר\s+מדי|צעיר\s+מדי)/u.test(value);
-  return asksException || twoGrades || (together && /קבוצ|חוג/u.test(value));
-}
-
-/**
- * The answer a customer gets when they asked to break the band. It names the
- * thing they asked for, so the handoff does not read as "I did not understand".
- */
-export function crossBandHandoffText(fallbackText = '') {
+export function crossBandHandoffText(fallbackText = '', crossesBands = false) {
   const written = String(fallbackText || '').trim();
   if (written) return written;
+  if (!crossesBands) return written;
   return 'שיבוץ מחוץ לשכבת הגיל הוא החלטה של הצוות שמפעיל את הקבוצה, ולכן אני מעביר את הבקשה אליהם.\n'
     + 'מישהו יחזור אליכם בהקדם.';
 }
@@ -940,7 +934,7 @@ export async function runCustomerToolTurn({
         // not asking about an action — they were reporting one. Recording it
         // is what they wanted, and the tool for it exists.
         const recorded = await recordReportedRegistration({
-          incoming, tools, allowed, successfulCalls, toolsUsed,
+          incoming, tools, allowed, successfulCalls, toolsUsed, callModel, apiKey,
         });
         if (recorded) return recorded;
         return {
@@ -956,12 +950,18 @@ export async function runCustomerToolTurn({
       // it having been written down. Whatever the model chose to say about it,
       // the report is the thing they wanted recorded.
       const reported = await recordReportedRegistration({
-        incoming, tools, allowed, successfulCalls, toolsUsed,
+        incoming, tools, allowed, successfulCalls, toolsUsed, callModel, apiKey,
       });
       if (reported) return reported;
 
       const customerText = handoff
-        ? (asksToCrossAgeBands(incoming) ? crossBandHandoffText(text) : text)
+        ? crossBandHandoffText(text, await askAboutMessage({
+          question: ASKS_TO_CROSS_AGE_BANDS,
+          message: incoming,
+          callModel,
+          apiKey,
+          fallback: false,
+        }))
         : text;
       return { text: customerText, handoff, unsure, toolsUsed, reason: 'ok' };
     }
@@ -987,7 +987,17 @@ export async function runCustomerToolTurn({
         });
         continue;
       }
-      if (call.name === 'reportCentreRegistration' && !isExplicitCentreRegistrationReport(incoming)) {
+      const vetoRegistrationClaim = call.name === 'reportCentreRegistration'
+        && !(await askAboutMessage({
+          question: REPORTS_CENTRE_REGISTRATION,
+          message: incoming,
+          callModel,
+          apiKey,
+          // The model already judged this from the whole conversation; when the
+          // second opinion cannot be had, its judgement stands.
+          fallback: true,
+        }));
+      if (vetoRegistrationClaim) {
         responseParts.push({
           functionResponse: {
             name: call.name,

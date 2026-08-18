@@ -1164,8 +1164,13 @@ test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב ז�
       phone: PARENT.phone,
       incomingText: 'היי השלמנו הרשמה אשמח לאשר',
       apiKey: 'test-key',
-      callModel: async () => ({
-        content: { role: 'model', parts: [{ text: 'מעולה, עדכנתי שההרשמה במתנ״ס הושלמה' }] },
+      // The one-word intent question is answered separately: whether a
+      // message reports a completed registration is the model's call now,
+      // not a word list's — see customerIntent.
+      callModel: async (args = {}) => ({
+        content: /ענה במילה אחת/u.test(String(args.systemInstruction || ''))
+          ? { role: 'model', parts: [{ text: 'כן' }] }
+          : { role: 'model', parts: [{ text: 'מעולה, עדכנתי שההרשמה במתנ״ס הושלמה' }] },
         error: '',
       }),
     });

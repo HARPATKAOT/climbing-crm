@@ -7,13 +7,12 @@ import {
   unknownUrlsInReply,
   unbackedReplyClaims,
   unbackedClaimHandoffText,
+  crossBandHandoffText,
   CUSTOMER_TOOL_RULES,
-  asksToCrossAgeBands,
   confirmsLastBotQuestion,
   separateMultiChildGradeQuestion,
   directRestrictedEligibility,
   contradictsDirectEligibility,
-  isExplicitCentreRegistrationReport,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
@@ -27,10 +26,28 @@ import {
 import { statusAfterHealthSignature } from './crmWaiverService.js';
 import { db } from './db.js';
 
-/** A model stand-in: replies with whatever script the test hands it. */
-function scriptedModel(steps) {
+/**
+ * Is this the one-word intent question rather than the conversation turn?
+ * The classifier is a separate, tiny call — see customerIntent.
+ */
+function isIntentQuestion(args = {}) {
+  return !(args.declarations || []).length
+    && /ענה במילה אחת/u.test(String(args.systemInstruction || ''));
+}
+
+/**
+ * A model stand-in: replies with whatever script the test hands it.
+ *
+ * Intent questions are answered separately and do not consume a step, so a
+ * test that scripts a conversation does not have to know the classifier
+ * exists. `intent` says what it answers — 'לא' unless the test is about it.
+ */
+function scriptedModel(steps, { intent = 'לא' } = {}) {
   let i = 0;
-  return async () => {
+  return async (args = {}) => {
+    if (isIntentQuestion(args)) {
+      return { content: { role: 'model', parts: [{ text: intent }] }, error: '' };
+    }
     const step = steps[Math.min(i, steps.length - 1)];
     i += 1;
     return { content: step, error: '' };
@@ -72,20 +89,31 @@ test('a request to break the age band names what it is handing over', async () =
   assert.equal(turn.handoff, true);
   assert.equal(turn.text, 'קיבלנו 🙏 מעביר לצוות שלנו.');
 
+  // A handoff that said nothing, on a message the model reads as a request to
+  // break the band, gets the wording that names what is being handed over.
   const bare = await runCustomerToolTurn({
-    incomingText: "אפשר לשבץ אותם יחד באותה קבוצה?",
+    incomingText: 'אפשר לשבץ אותם יחד באותה קבוצה?',
     apiKey: 'test-key',
-    callModel: scriptedModel([textReply('HANDOFF')]),
+    callModel: scriptedModel([textReply('HANDOFF')], { intent: 'כן' }),
   });
   assert.match(bare.text, /שיבוץ מחוץ לשכבת הגיל/);
+
+  // An ordinary handoff stays silent rather than inventing a reason.
+  const other = await runCustomerToolTurn({
+    incomingText: 'אני רוצה החזר',
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('HANDOFF')], { intent: 'לא' }),
+  });
+  assert.equal(other.text, '');
 });
 
-test('asking which group a child fits is not a request to break the band', () => {
-  assert.equal(asksToCrossAgeBands("לאיזו קבוצה רועי מתאים שנה הבאה בכיתה ה'?"), false);
-  assert.equal(asksToCrossAgeBands('אני רוצה החזר'), false);
-  assert.equal(asksToCrossAgeBands("אפשר להכניס את הבן שלי מכיתה ד' עם אחיו מכיתה ה'?"), true);
-  assert.equal(asksToCrossAgeBands('אפשר לשבץ אותו עם אחותו באותה קבוצה?'), true);
-  assert.equal(asksToCrossAgeBands('אפשר בכל זאת למרות הגיל?'), true);
+test('the band-crossing wording only fills in for a handoff that said nothing', () => {
+  // Whether a message is a request to break the band is the model's call now;
+  // this is only about what the customer reads when the model handed over
+  // without saying why.
+  assert.equal(crossBandHandoffText('מעביר לצוות שלנו.', true), 'מעביר לצוות שלנו.');
+  assert.equal(crossBandHandoffText('', false), '');
+  assert.match(crossBandHandoffText('', true), /שיבוץ מחוץ לשכבת הגיל/);
 });
 
 test('an UNSURE prefix is stripped and is not a handoff', async () => {
@@ -268,8 +296,9 @@ test('choosing a proposed group defaults to direct signup without offering an in
 
 test('the intro tool is exposed only after the customer asks or declines direct signup', async () => {
   const declarationsByTurn = [];
-  const callModel = async ({ declarations }) => {
-    declarationsByTurn.push(declarations.map((row) => row.name));
+  const callModel = async (args) => {
+    if (isIntentQuestion(args)) return { content: textReply('לא'), error: '' };
+    declarationsByTurn.push((args.declarations || []).map((row) => row.name));
     return { content: textReply('נמשיך בהרשמה הישירה.'), error: '' };
   };
   await runCustomerToolTurn({ incomingText: 'יום שלישי מתאים', apiKey: 'test-key', callModel });
@@ -362,20 +391,6 @@ test('generic squad rule gives stored returning or approved eligibility priority
 });
 
 test('only the current message can report completed community-centre registration', async () => {
-  assert.equal(isExplicitCentreRegistrationReport('נרשמנו במתנ״ס'), true);
-  assert.equal(isExplicitCentreRegistrationReport('הוא נרשם במתנס'), true);
-  assert.equal(isExplicitCentreRegistrationReport('השלמתי את ההרשמה'), true);
-  assert.equal(isExplicitCentreRegistrationReport('בוצע התשלום על הציוד'), false);
-  assert.equal(isExplicitCentreRegistrationReport('איך נרשמים במתנ״ס?'), false);
-  // The shortest answer there is, and the one the bot's own message asks for.
-  // A mother who wrote exactly this was told her placement was being handed
-  // to the team, because the word מתנ״ס was missing.
-  assert.equal(isExplicitCentreRegistrationReport('נרשמנו'), true);
-  assert.equal(isExplicitCentreRegistrationReport('נרשמתי'), true);
-  // Longer than a confirmation, so the subject still has to be named.
-  assert.equal(isExplicitCentreRegistrationReport('מתי נרשמים לחוג של יום שלישי בבוקר'), false);
-  assert.equal(isExplicitCentreRegistrationReport('נירשם בשבוע הבא'), false);
-
   const turn = await runCustomerToolTurn({
     history: [
       { role: 'user', parts: [{ text: 'נרשמנו במתנ״ס' }] },
@@ -418,6 +433,9 @@ test('כן תודה is treated as approval of the last bot question, not a reaso
     incomingText: 'כן תודה',
     apiKey: 'test-key',
     callModel: async (args) => {
+      // The intent classifier carries its own instruction; this test is about
+      // the conversation turn's.
+      if (isIntentQuestion(args)) return { content: textReply('לא'), error: '' };
       instruction = args.systemInstruction;
       return { content: textReply('ממשיך לשיבוץ'), error: '' };
     },
