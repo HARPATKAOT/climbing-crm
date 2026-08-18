@@ -1653,6 +1653,33 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
   });
 });
 
+test('שאלה של הלקוח אינה שם משפחה', async () => {
+  // ליבי שאלה „באיזה עיר”, ולא היה בזה סימן שאלה ולא מילה מרשימת המילים —
+  // אז הכרטיס שלה נשמר בשם „ליבי באיזה עיר”. אחרי זה היא עזבה.
+  const says = (word) => async () => ({ content: { role: 'model', parts: [{ text: word }] }, error: '' });
+  await withSeed({ parents: [NEW_CARD] }, async () => {
+    const phone = NEW_CARD.phone;
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי', { callModel: says('כן') });
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'ליבי', { callModel: says('כן') });
+
+    const asked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'באיזה עיר', {
+      callModel: says('לא'),
+    });
+    // השאלה עוברת למודל שיענה עליה, והשם עדיין לא נשמר.
+    assert.equal(asked.nameDeferred, true);
+    assert.equal(asked.pendingMessage, 'באיזה עיר');
+    assert.equal(cardById('p-fresh').name, NEW_CARD.name);
+    assert.ok(!String(cardById('p-fresh').name || '').includes('באיזה'));
+
+    // ושם משפחה אמיתי אחר כך נשמר כרגיל.
+    const named = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'כהן', {
+      callModel: says('כן'),
+    });
+    assert.equal(named.done, true);
+    assert.equal(named.parent.name, 'ליבי כהן');
+  });
+});
+
 test('כרטיס כפול שהועבר לארכיון אינו חוסם את קישור הציוד', async () => {
   // תמר נשאלה „תרצו שאשלח את הקישור להסדרת הציוד?”, ענתה „כן”, וקיבלה העברה
   // לצוות. בכרטיס של נעמי היו שני רישומים באותו שם — אחד מהם קליפה שנשארה

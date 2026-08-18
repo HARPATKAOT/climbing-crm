@@ -11,6 +11,8 @@ import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.
 import { enrichGroupsWithBotMeta } from './groupMetadata.js';
 import { currentSeason, eligibilityForStudent, latestLevelTest } from './placementEligibility.js';
 import { isMailingPreferenceRequest } from './mailingPreferences.js';
+import { callGeminiChat } from './aiChat.js';
+import { askAboutMessage, ANSWERS_WITH_A_NAME } from './customerIntent.js';
 
 export const LEAD_STATUSES = new Set([
   'lead_new',
@@ -1022,6 +1024,29 @@ export function customerNameWords(input) {
   return words;
 }
 
+/**
+ * Is this reply a name at all, or the customer asking us something?
+ *
+ * `customerNameWords` cleans a name; it cannot tell one from a sentence. It
+ * used a question mark and a list of non-name words, and „באיזה עיר” has
+ * neither — so a woman who asked twice where we are located ended up filed as
+ * „ליבי באיזה עיר”, and the card carries her question as her surname.
+ *
+ * The list would never have been finished. This is a question about meaning,
+ * so the model answers it. When the model cannot be reached the answer is yes:
+ * an outage must not leave every new customer unable to register.
+ */
+export async function replyIsAName(text, { callModel } = {}) {
+  const model = callModel || callGeminiChat;
+  return askAboutMessage({
+    question: ANSWERS_WITH_A_NAME,
+    message: text,
+    callModel: model,
+    apiKey: process.env.GEMINI_API_KEY,
+    fallback: true,
+  });
+}
+
 export function parseCustomerFullName(input) {
   const words = customerNameWords(input);
   if (words.length < 2) return null;
@@ -1222,7 +1247,7 @@ async function handleTraineeLinkAnswer(phone, parent, incomingText, prior) {
  * the two name fields, then returns the first customer question so the bot can
  * answer it without making the customer repeat themselves.
  */
-export async function advanceCustomerNameCapture(phone, parent, incomingText) {
+export async function advanceCustomerNameCapture(phone, parent, incomingText, { callModel } = {}) {
   const linkPrior = { ...(getIntake(parent) || {}) };
   if (linkPrior.step === 'trainee_link_confirm') {
     return handleTraineeLinkAnswer(phone, parent, incomingText, linkPrior);
@@ -1269,6 +1294,12 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
     if (!words.length) {
       return askAgainOrHandOff(phone, prior, 'איך קוראים לך?');
     }
+    // Somebody who asks a question instead of answering deserves an answer, not
+    // "סליחה, לא הבנתי" — and certainly not to be filed under their question.
+    if (!await replyIsAName(text, { callModel })) {
+      await setIntake(phone, { ...prior, pendingMessage: text });
+      return { done: true, parent, pendingMessage: text, nameDeferred: true };
+    }
     if (words.length === 1) {
       await setIntake(phone, {
         ...prior,
@@ -1286,6 +1317,10 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
 
   const lastWords = customerNameWords(text);
   if (!lastWords.length) return askAgainOrHandOff(phone, prior, 'מה שם המשפחה?');
+  if (!await replyIsAName(text, { callModel })) {
+    await setIntake(phone, { ...prior, pendingMessage: text });
+    return { done: true, parent, pendingMessage: text, nameDeferred: true };
+  }
   const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
   if (!firstName) {
     await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });

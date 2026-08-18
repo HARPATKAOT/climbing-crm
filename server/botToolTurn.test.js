@@ -536,6 +536,13 @@ test('a model that keeps claiming an action it never performed still ends with a
 
 test('the fallback says what happens next, in the customer\'s words', () => {
   assert.match(unbackedClaimHandoffText(['placement']), /שינוי שיבוץ נעשה מול הקבוצה/);
+  // Two families reported „נרשמתי במתנס” the morning after being placed, and
+  // both were answered as though they had asked to change groups: the seat was
+  // taken in the previous turn, so no write tool ran in this one.
+  assert.deepEqual(unbackedReplyClaims('המקום נשמר עבורך', []), ['placement']);
+  assert.deepEqual(unbackedReplyClaims('המקום נשמר עבורך', [], { placementOnFile: true }), []);
+  // A seat nobody holds is still an invention.
+  assert.deepEqual(unbackedReplyClaims('שיבצתי אותך לקבוצה', [], { placementOnFile: false }), ['placement']);
   assert.match(unbackedClaimHandoffText(['cancellation']), /שינוי שיבוץ נעשה מול הקבוצה/);
   assert.match(unbackedClaimHandoffText(['birth_date']), /עדכון הפרטים בכרטיס/);
   assert.match(unbackedClaimHandoffText(['follow_up']), /שיחזרו אליכם במועד/);

@@ -1098,6 +1098,21 @@ export function checkAgeAgainstBand(student, group) {
   return { ok: false, age: ageLabelFor(birthDate), range };
 }
 
+/**
+ * The trainee is sitting in a group right now — placed, held, or registered.
+ *
+ * Not the same question as "did this turn place them". A seat taken yesterday
+ * is still taken today, and a reply that mentions it is telling the truth.
+ */
+export function holdsASeat(student) {
+  const status = String(student?.status || '');
+  if (['archived', 'cancelled', 'waitlist'].includes(status)) return false;
+  const groups = [student?.groupId, student?.group_id, ...(student?.groupIds || [])]
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  return groups.length > 0;
+}
+
 export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }

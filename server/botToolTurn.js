@@ -6,7 +6,8 @@
  * runs first, and a failed turn falls back to the old heuristic reply.
  */
 import { callGeminiChat } from './aiChat.js';
-import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools } from './botTools.js';
+import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools, holdsASeat } from './botTools.js';
+import { studentsForParent } from './whatsappBot.js';
 import { enabledToolNames } from './botCapabilities.js';
 import {
   askAboutMessage,
@@ -303,7 +304,11 @@ function resultShowsOpenEquipment(value) {
  * rule enforceable. Only a successful write tool from this exact turn can back
  * a first-person past-tense claim.
  */
-export function unbackedReplyClaims(text, successfulCalls = []) {
+/**
+ * @param {object} facts What the database already says, so a true sentence is
+ *   not treated as an invention. Only `placementOnFile` for now: the seat.
+ */
+export function unbackedReplyClaims(text, successfulCalls = [], facts = {}) {
   const reply = String(text || '');
   const names = successfulToolNames(successfulCalls);
   const claims = [];
@@ -311,8 +316,15 @@ export function unbackedReplyClaims(text, successfulCalls = []) {
   const claimsPlacement = /(?:שיבצתי|שיבצנו|שריינתי|שריינו)/.test(reply)
     || /(?:העברתי|העברנו)[^\n.!?]*(?:לקבוצה|לקבוצת|ליום|לשעה|שיבוץ|חוג)/.test(reply)
     || /(?:שובץ|שובצה|השיבוץ\s+(?:בוצע|הושלם)|המקום\s+נשמר|הקבוצה\s+עודכנה)/.test(reply);
+  // The seat may have been taken in an earlier turn. „נרשמתי במתנס” came in
+  // the turn *after* the placement, the model quite correctly answered that
+  // the place was being held, and this guard — which only knew about tools
+  // called in the present turn — replaced that with „שינוי שיבוץ נעשה מול
+  // הקבוצה עצמה, אז אני מעביר את זה לצוות”. Two families were told their
+  // registration report was a request to move groups, on the same morning.
   if (claimsPlacement
-      && !names.has('startSignup') && !names.has('joinWaitlist')) {
+      && !names.has('startSignup') && !names.has('joinWaitlist')
+      && !facts.placementOnFile) {
     claims.push('placement');
   }
   if (/(?:ביטלתי|ביטלנו|הסרתי|הסרנו)[^\n.!?]*(?:שיבוץ|קבוצה|חוג)|(?:השיבוץ\s+בוטל|הוסר(?:ה)?[^\n.!?]*מהקבוצה)/.test(reply)
@@ -878,7 +890,9 @@ export async function runCustomerToolTurn({
         };
       }
 
-      const unbacked = unbackedReplyClaims(text, successfulCalls);
+      const unbacked = unbackedReplyClaims(text, successfulCalls, {
+        placementOnFile: (parent ? studentsForParent(parent) : []).some(holdsASeat),
+      });
       // Not a handoff: the customer is one tap from finishing, and the useful
       // answer is the item that is still open — not a person calling back.
       if (unbacked.includes('equipment_settled')) {
