@@ -187,7 +187,8 @@ export default function ExpenseCenter({ from, to, onAddExpense }) {
               </td>
               <td>
                 <div className="finance-inbox-actions">
-                  {row.invoice_status === 'missing' && <label className="btn btn-ghost btn-sm" title="צירוף חשבונית">
+                  {['missing', 'exempt'].includes(row.invoice_status) && <label className="btn btn-ghost btn-sm"
+                    title={row.invoice_status === 'exempt' ? 'צירוף תלוש או אסמכתא' : 'צירוף חשבונית'}>
                     <Paperclip size={14} />צרף
                     <input type="file" hidden accept="application/pdf,image/jpeg,image/png"
                       onChange={(event) => attachInvoice(row, event.target.files?.[0])} />

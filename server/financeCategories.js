@@ -41,11 +41,11 @@ export const DEFAULT_CATEGORIES = [
   { id: 'cat_marketing', name: 'שיווק ופרסום', parent_id: null, cost_behavior: 'variable', legacy_labels: ['שיווק', 'פרסום', 'קידום'] },
   // כוח אדם
   { id: 'cat_hr', name: 'כוח אדם', parent_id: null },
-  { id: 'cat_hr_wages', name: 'שכר עובדים', parent_id: 'cat_hr', cost_behavior: 'semi', vat_deductible_rate: 0, legacy_labels: ['שכר', 'משכורות', 'עובדים'] },
-  { id: 'cat_hr_social', name: 'ביטוח לאומי והפרשות', parent_id: 'cat_hr', cost_behavior: 'semi', vat_deductible_rate: 0, legacy_labels: ['ביטוח לאומי', 'פנסיה'] },
+  { id: 'cat_hr_wages', name: 'שכר עובדים', parent_id: 'cat_hr', cost_behavior: 'semi', vat_deductible_rate: 0, no_invoice_required: true, legacy_labels: ['שכר', 'משכורות', 'עובדים'] },
+  { id: 'cat_hr_social', name: 'ביטוח לאומי והפרשות', parent_id: 'cat_hr', cost_behavior: 'semi', vat_deductible_rate: 0, no_invoice_required: true, legacy_labels: ['ביטוח לאומי', 'פנסיה'] },
   // מימון
   { id: 'cat_finance', name: 'מימון ועמלות', parent_id: null },
-  { id: 'cat_finance_bank', name: 'עמלות בנק', parent_id: 'cat_finance', cost_behavior: 'fixed', vat_deductible_rate: 0, legacy_labels: ['עמלות', 'עמלות בנק'] },
+  { id: 'cat_finance_bank', name: 'עמלות בנק', parent_id: 'cat_finance', cost_behavior: 'fixed', vat_deductible_rate: 0, no_invoice_required: true, legacy_labels: ['עמלות', 'עמלות בנק'] },
   { id: 'cat_finance_clearing', name: 'עמלות סליקה', parent_id: 'cat_finance', cost_behavior: 'variable', vat_deductible_rate: 1, legacy_labels: ['סליקה', 'עמלות אשראי'] },
 ];
 
@@ -55,19 +55,35 @@ const CATEGORY_DEFAULTS = {
   is_income: false,
   vat_deductible_rate: 1,
   tax_deductible_rate: 1,
+  // שכר, ביטוח לאומי ועמלות בנק אינם מגיעים עם חשבונית ספק — תנועה
+  // שמתויגת אליהם אינה "חסרה חשבונית".
+  no_invoice_required: false,
   legacy_labels: [],
 };
 
 /** זריעה idempotent: קיים לא נדרס — התאמות של המשתמש שורדות. */
 export function seedCategories(store) {
-  const existing = new Set(store.get('finance_categories').map((row) => row.id));
+  const existingRows = new Map(store.get('finance_categories').map((row) => [row.id, row]));
   let inserted = 0;
+  let updated = 0;
   DEFAULT_CATEGORIES.forEach((category, index) => {
-    if (existing.has(category.id)) return;
+    const current = existingRows.get(category.id);
+    if (current) {
+      // שדה שנולד אחרי שהקטגוריה כבר נזרעה: משלימים אותו בלי לגעת בשאר —
+      // התאמות של המשתמש שורדות.
+      if (current.no_invoice_required === undefined) {
+        store.update('finance_categories', category.id, {
+          ...current,
+          no_invoice_required: Boolean(category.no_invoice_required),
+        });
+        updated += 1;
+      }
+      return;
+    }
     store.insert('finance_categories', { ...CATEGORY_DEFAULTS, sort_order: index, ...category });
     inserted += 1;
   });
-  return { inserted, total: store.get('finance_categories').length };
+  return { inserted, updated, total: store.get('finance_categories').length };
 }
 
 /** תווית חופשית ישנה → קטגוריה בעץ, לפי legacy_labels. */

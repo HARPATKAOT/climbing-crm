@@ -209,3 +209,36 @@ test('bundles split under the size cap and resends update the same delivery row'
   assert.equal(first.id, second.id);
   assert.equal(second.attempts, 2);
 });
+
+test('a transaction categorized as wages is exempt from the missing-invoice chase', () => {
+  const categories = [
+    { id: 'cat_hr', name: 'כוח אדם', parent_id: null },
+    { id: 'cat_hr_wages', name: 'שכר עובדים', parent_id: 'cat_hr', no_invoice_required: true },
+  ];
+  const center = buildExpenseCenter({
+    transactions: [{
+      id: 'txn-salary', kind: 'expense', status: 'booked', booking_date: '2026-08-16',
+      amount_agorot: 65000, raw_description: 'העברה ליניב ומיקה נחמיא', account_id: 'acc-bank',
+      category_id: 'cat_hr_wages',
+    }],
+    accounts: [{ id: 'acc-bank', type: 'bank' }],
+    categories,
+    from: '2026-08-01',
+    to: '2026-08-31',
+  });
+  const row = center.rows.find((item) => item.id === 'txn:txn-salary');
+  assert.equal(row.invoice_status, 'exempt');
+  assert.equal(center.summary.missing_invoice, 0);
+  // אותה תנועה בלי קטגוריה — עדיין נרדפת
+  const untagged = buildExpenseCenter({
+    transactions: [{
+      id: 'txn-salary', kind: 'expense', status: 'booked', booking_date: '2026-08-16',
+      amount_agorot: 65000, raw_description: 'העברה ליניב ומיקה נחמיא', account_id: 'acc-bank',
+    }],
+    accounts: [{ id: 'acc-bank', type: 'bank' }],
+    categories,
+    from: '2026-08-01',
+    to: '2026-08-31',
+  });
+  assert.equal(untagged.summary.missing_invoice, 1);
+});

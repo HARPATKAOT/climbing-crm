@@ -44,6 +44,15 @@ export function buildExpenseCenter({
   to,
 } = {}) {
   const categoryById = new Map(categories.map((category) => [String(category.id), category]));
+  // קטגוריה שמסומנת "לא נדרשת חשבונית" — הדגל תקף גם לצאצאיה.
+  const invoiceExempt = (categoryId) => {
+    let current = categoryById.get(String(categoryId || ''));
+    for (let depth = 0; current && depth < 6; depth += 1) {
+      if (current.no_invoice_required) return true;
+      current = categoryById.get(String(current.parent_id || ''));
+    }
+    return false;
+  };
   const supplierById = new Map(suppliers.map((supplier) => [String(supplier.id), supplier]));
   const accountById = new Map(accounts.map((account) => [String(account.id), account]));
   const deliveryByExpense = new Map(deliveries
@@ -128,7 +137,7 @@ export function buildExpenseCenter({
         account?.type === 'bank' ? 'bank' : 'credit_card',
         ...documentSides.map((entry) => entry.side.source_tag),
       ])],
-      invoice_status: best ? (confirmed ? 'matched' : 'proposed') : 'missing',
+      invoice_status: best ? (confirmed ? 'matched' : 'proposed') : (invoiceExempt(transaction.category_id) ? 'exempt' : 'missing'),
       invoice: best ? {
         document_id: String(best.match.document_id),
         doc_number: best.side.doc_number,
@@ -166,7 +175,7 @@ export function buildExpenseCenter({
       description: expense.name || '',
       amount_agorot: -toAgorot(gross),
       source_tags: [side.source_tag],
-      invoice_status: side.has_file ? 'attached' : 'missing',
+      invoice_status: side.has_file ? 'attached' : (invoiceExempt(category?.id) ? 'exempt' : 'missing'),
       invoice: side.has_file ? { document_id: String(expense.id), doc_number: side.doc_number, download_url: side.download_url } : null,
       category_id: category?.id || null,
       category_name: category?.name || null,

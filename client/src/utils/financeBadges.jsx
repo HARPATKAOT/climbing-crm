@@ -50,9 +50,11 @@ export function ExpenseSourceTag({ tag }) {
 // סטטוס חשבונית של הוצאה — ✓ ברור למה שיש, אדום בולט למה שחסר.
 export const INVOICE_STATUS_BADGES = {
   matched: { label: 'חשבונית מותאמת', badge: 'badge badge-green', Icon: CheckCircle2 },
-  attached: { label: 'חשבונית מצורפת', badge: 'badge badge-green', Icon: CheckCircle2 },
+  attached: { label: 'מסמך מצורף', badge: 'badge badge-green', Icon: CheckCircle2 },
   proposed: { label: 'התאמה מוצעת', badge: 'badge badge-purple', Icon: Link2 },
   missing: { label: 'חסרה חשבונית', badge: 'badge badge-red', Icon: FileQuestion },
+  // שכר, ביטוח לאומי, עמלות בנק — אין חשבונית מטבע הדברים, ואין מה לרדוף
+  exempt: { label: 'לא נדרשת חשבונית', badge: 'badge badge-gray', Icon: CheckCircle2 },
 };
 
 export function InvoiceStatusTag({ status }) {

@@ -713,11 +713,11 @@ financeRouter.post('/ai-tagging/run', async (_req, res) => {
 
 financeRouter.get('/categories', async (_req, res) => {
   try {
-    if (!db.get('finance_categories').length) {
-      const store = durableRecordingStore();
-      seedCategories(store);
-      await store.flush();
-    }
+    // הזריעה תמיד רצה — היא idempotent: משלימה קטגוריות ושדות שנוספו מאז,
+    // ולא נוגעת בהתאמות קיימות. flush רק כשמשהו באמת השתנה.
+    const store = durableRecordingStore();
+    const seeded = seedCategories(store);
+    if (seeded.inserted || seeded.updated) await store.flush();
     res.json({ categories: db.get('finance_categories').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)) });
   } catch (error) {
     res.status(500).json({ error: error.message || 'טעינת הקטגוריות נכשלה' });
