@@ -234,7 +234,7 @@ export const CLASS_SOURCE_TYPE = 'class';
  * סביר בהיעדר מידע. ובסוף תפקיד ריק, שפירושו „מי שמתאים”: עדיף להציע משמרת בלי
  * לדעת מה היא צריכה מאשר לא להציע אותה בכלל.
  */
-function needsForActivity(activity, rolesByType, type) {
+export function needsForActivity(activity, rolesByType, type) {
   const explicit = normalizeNeeds(activity?.staff_needs, 0);
   if (explicit[0]?.role) return explicit;
   if (activity?.staff_role) return [{ role: cleanText(activity.staff_role, 60), count: 1 }];

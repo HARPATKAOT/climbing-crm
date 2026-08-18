@@ -26,6 +26,8 @@ function useStaffRoleLabels() {
 }
 import {
   getGroupDays,
+  normalizeAssistants,
+  assistantNamesOf,
   localDateStr,
   dateToWeekday,
   ATT_STATUS,
@@ -42,6 +44,9 @@ import {
   DEF_COLOR,
   shortGroupLabel,
 } from '../scheduleUtils.js';
+import ClassBoardGrid, {
+  GroupBlock, occupancyOf, topPx, heightPx, visibleDaysOf,
+} from './schedule/ClassBoardGrid.jsx';
 import { StatusPill } from './AttendanceList.jsx';
 import StudentFileButton from './StudentFileButton.jsx';
 import {
@@ -103,13 +108,6 @@ async function saveAttendanceMark(record) {
 // AGE_COLORS / DEF_COLOR now live in scheduleUtils.js — the pickers on the
 // customer file paint their cards from the same table.
 
-// Grid: 1.5px per minute, starting at 14:00, ending at 22:00
-const START_MIN  = 14 * 60;   // 840 min
-const END_MIN    = 22 * 60;   // 1320 min
-const PX_PER_MIN = 1.5;
-const HOUR_H     = 60 * PX_PER_MIN;  // 90px
-const GRID_H     = (END_MIN - START_MIN) * PX_PER_MIN; // 720px
-const HOURS      = Array.from({ length: 9 }, (_, i) => 14 + i); // 14..22
 const WEEK_DAYS_PREF_KEY = 'schedule.visibleWeekDays';
 
 // A group can span two bands — the Sunday and Wednesday sessions take middle
@@ -865,144 +863,9 @@ function StudentNameLink({ student, parent = null, onOpen, size = 13, truncate =
   );
 }
 
-/** Assistant ids on a group, tolerant of older rows that have no list at all. */
-function normalizeAssistants(value) {
-  return Array.isArray(value) ? value.filter(id => typeof id === 'string' && id) : [];
-}
-
-/** Names of the assistants assigned to a group, skipping ids we can't resolve. */
-function assistantNamesOf(group, employees = []) {
-  return normalizeAssistants(group?.assistants)
-    .map(id => employees.find(e => e.id === id))
-    .filter(Boolean)
-    .map(e => e.name);
-}
-
 /** Employees carry `is_active`; older seeded rows only had `active`. */
 function isActiveEmployee(emp) {
   return emp?.is_active !== false && emp?.active !== false;
-}
-
-function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
-function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
-function heightPx(dur) { return dur * PX_PER_MIN; }
-
-// ─── Occupancy colour ─────────────────────────────────────────────────────────
-/**
- * A capacity bar is read at a glance and should answer one question: which
- * groups still need selling. So it is coloured by how full the group is, not
- * by age category — the age colour is already the card's border and repeating
- * it on the bar carried no information of its own.
- */
-const OCCUPANCY_BANDS = [
-  { min: 100, bar: '#38BDF8', text: '#7DD3FC', label: 'מלא'         }, // blue
-  { min: 80,  bar: '#34D399', text: '#6EE7B7', label: 'כמעט מלא'    }, // green
-  { min: 50,  bar: '#FBBF24', text: '#FCD34D', label: 'חצי מלא'     }, // amber
-  { min: 0,   bar: '#F87171', text: '#FCA5A5', label: 'תפוסה נמוכה' }, // red
-];
-const NO_CAPACITY = { bar: 'rgba(255,255,255,0.25)', text: 'var(--text-3)', label: 'לא הוגדרה תפוסה' };
-
-/** Bar colour, count colour and a hover line, from a count against a capacity. */
-function occupancyOf(count, maxSlots) {
-  if (!(maxSlots > 0)) return { pct: 0, ...NO_CAPACITY, title: NO_CAPACITY.label };
-  const pct  = (count / maxSlots) * 100;
-  const band = OCCUPANCY_BANDS.find(b => pct >= b.min);
-  // Over capacity is not the same as full: somebody has to be moved out.
-  const over = count > maxSlots;
-  const label = over ? `חריגה · ${count - maxSlots} מעל התפוסה` : band.label;
-  return {
-    pct,
-    bar:  band.bar,
-    text: over ? '#FCA5A5' : band.text,
-    label,
-    title: `תפוסה ${Math.round(pct)}% · ${label}`,
-  };
-}
-
-// ─── Positioned Group Block ───────────────────────────────────────────────────
-function GroupBlock({ group, enrolledCount, selected, onClick }) {
-  const c    = AGE_COLORS[group.ageCategory] || DEF_COLOR;
-  const top  = topPx(group.time);
-  const h    = heightPx(group.duration);
-  const occ  = occupancyOf(enrolledCount, group.maxSlots);
-
-  // Short label
-  const label = shortGroupLabel(group.name);
-
-  const assistantNames = Array.isArray(group.assistantNames) ? group.assistantNames : [];
-  const staffTitle = [
-    group.trainerName ? `מדריך: ${group.trainerName}` : 'ללא מדריך',
-    assistantNames.length ? `עוזרי מדריך: ${assistantNames.join(', ')}` : '',
-  ].filter(Boolean).join(' · ');
-
-  return (
-    <div onClick={onClick} style={{
-      position: 'absolute',
-      top: `${top}px`,
-      height: `${h}px`,
-      left: '3px',
-      right: '3px',
-      background: c.bg,
-      border: `1.5px solid ${selected ? c.text : c.border}`,
-      borderRadius: 7,
-      padding: '4px 7px',
-      cursor: 'pointer',
-      overflow: 'hidden',
-      boxShadow: selected ? `0 0 0 2px ${c.text}44, 0 4px 16px ${c.bg}` : '0 1px 4px rgba(0,0,0,0.2)',
-      transition: 'box-shadow 0.15s, border-color 0.15s',
-      zIndex: selected ? 10 : 2,
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between',
-    }}>
-      {/* Name */}
-      <div style={{ fontSize: Math.min(12, h > 65 ? 12 : 10), fontWeight: 700, color: c.text,
-        lineHeight: 1.2, overflow: 'hidden', display: '-webkit-box', flexShrink: 0,
-        WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>
-        {label}
-      </div>
-
-      {/* Trainer, then assistants on the next line when assigned. */}
-      {h >= 55 && (
-        <div title={staffTitle} style={{ marginTop: 1, flexShrink: 0, minWidth: 0 }}>
-          <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-            <Users size={9} style={{ flexShrink: 0, opacity: 0.55, color: 'rgba(255,255,255,0.45)' }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
-              {group.trainerName || 'ללא מדריך'}
-            </span>
-          </div>
-          {assistantNames.length > 0 && (
-            <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4,
-              minWidth: 0, marginTop: 1 }}>
-              <UserPlus size={9} style={{ flexShrink: 0, opacity: 0.5, color: 'rgba(255,255,255,0.45)' }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                color: 'rgba(255,255,255,0.55)' }}>
-                {assistantNames.join(', ')}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Time + capacity share the bottom row so staff keeps its own lines. */}
-      {h >= 55 && (
-        <div title={occ.title} style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto',
-          paddingTop: 2, flexShrink: 0 }}>
-          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', flexShrink: 0 }}>
-            {group.time} · {group.duration}′
-          </span>
-          <div style={{ flex: 1, height: 2.5, borderRadius: 2, background: 'rgba(255,255,255,0.1)' }}>
-            <div style={{ width: `${Math.min(occ.pct, 100)}%`, height: '100%', borderRadius: 2,
-              background: occ.bar }} />
-          </div>
-          <span style={{ fontSize: 9, fontWeight: 700, color: occ.text }}>
-            {enrolledCount}/{group.maxSlots}
-          </span>
-        </div>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -3468,13 +3331,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 
   // כמה חוגים יש בכל יום, וכתוצאה מזה אילו עמודות מוצגות בלוח השבועי.
-  const dayCounts = DAYS_FULL.map((_, i) => groups.filter(g => getGroupDays(g).includes(i)).length);
-  const autoVisibleDays = dayCounts.some(c => c > 0)
-    ? DAYS_FULL.map((_, i) => i).filter(i => dayCounts[i] > 0)
-    : DAYS_FULL.map((_, i) => i);
-  const visibleDays = visibleDayPref
-    ? DAYS_FULL.map((_, i) => i).filter(i => visibleDayPref.includes(i))
-    : autoVisibleDays;
+  const { dayCounts, visibleDays } = visibleDaysOf(groups, visibleDayPref);
 
   const toggleDay = (day) => {
     const next = visibleDays.includes(day)
@@ -3757,88 +3614,20 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
 
       {/* ── Week View ──────────────────────────────────────────────────────── */}
       {viewMode === 'week' && (
-        <div className="card" style={{ overflow: 'auto' }}>
-          <div style={{ minWidth: 140 + visibleDays.length * 120, display: 'flex', flexDirection: 'column' }}>
-            {/* Day headers */}
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ width: 52, flexShrink: 0, padding: '10px 6px', fontSize: 10, color: 'var(--text-3)' }}>שעה</div>
-              {visibleDays.map((i, pos) => {
-                const count = dayCounts[i];
-                return (
-                  <div key={i} style={{
-                    flex: 1, padding: '10px 8px',
-                    fontSize: 12, fontWeight: 600, color: count ? 'var(--text-1)' : 'var(--text-3)',
-                    textAlign: 'center',
-                    borderLeft: pos > 0 ? '1px solid var(--border)' : 'none',
-                  }}>
-                    {DAYS_FULL[i]}
-                    {count > 0 && (
-                      <span style={{ marginRight: 5, fontSize: 10, color: 'var(--text-3)' }}>({count})</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Grid body */}
-            <div style={{ display: 'flex', position: 'relative' }}>
-              {/* Time labels column */}
-              <div style={{ width: '52px', flexShrink: 0, position: 'relative', height: `${GRID_H}px` }}>
-                {HOURS.map((h, i) => (
-                  <div key={h} style={{
-                    position: 'absolute', top: `${i * HOUR_H}px`,
-                    width: '100%', padding: '3px 6px',
-                    fontSize: 10, color: 'var(--text-3)',
-                  }}>
-                    {String(h).padStart(2, '0')}:00
-                  </div>
-                ))}
-              </div>
-
-              {/* Day columns — only the days the user chose to show */}
-              {visibleDays.map((day) => {
-                const dayGroups = formattedGroups.filter(g => getGroupDays(g).includes(day));
-                return (
-                  <div key={day} style={{
-                    flex: 1, position: 'relative', height: `${GRID_H}px`,
-                    borderLeft: '1px solid var(--border)',
-                  }}>
-                    {/* Hour grid lines */}
-                    {HOURS.map((_, i) => (
-                      <div key={i} style={{
-                        position: 'absolute', top: `${i * HOUR_H}px`,
-                        width: '100%', borderTop: `1px solid var(--border)`,
-                        pointerEvents: 'none',
-                      }} />
-                    ))}
-                    {/* 30-min sub-lines */}
-                    {HOURS.map((_, i) => (
-                      <div key={`h${i}`} style={{
-                        position: 'absolute', top: `${i * HOUR_H + HOUR_H / 2}px`,
-                        width: '100%', borderTop: '1px dashed rgba(255,255,255,0.04)',
-                        pointerEvents: 'none',
-                      }} />
-                    ))}
-
-                    {/* Group blocks */}
-                    {dayGroups.map(g => {
-                      const enrolledCount = getEnrolledCount(g.id);
-                      return (
-                        <GroupBlock
-                          key={`${g.id}-${day}`}
-                          group={g}
-                          enrolledCount={enrolledCount}
-                          selected={selectedGroup?.id === g.id}
-                          onClick={() => openPanel(g)}
-                        />
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <ClassBoardGrid
+          groups={formattedGroups}
+          days={visibleDays}
+          dayCounts={dayCounts}
+          renderBlock={(g, day) => (
+            <GroupBlock
+              key={`${g.id}-${day}`}
+              group={g}
+              enrolledCount={getEnrolledCount(g.id)}
+              selected={selectedGroup?.id === g.id}
+              onClick={() => openPanel(g)}
+            />
+          )}
+        />
       )}
 
       {/* ── List View ──────────────────────────────────────────────────────── */}
