@@ -3,7 +3,7 @@ import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
   Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode,
-  AtSign, MessageCircle, SmartphoneNfc, AlertTriangle,
+  AtSign, MessageCircle, SmartphoneNfc, AlertTriangle, CalendarDays,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -222,6 +222,10 @@ export default function PosSale({
   const [showContactFields, setShowContactFields] = useState(false);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
+  // אירועים מהיומן שממתינים לגבייה מהמזמין — מוצגים בקטגוריית „פעילויות”.
+  const [unpaidActivities, setUnpaidActivities] = useState([]);
+  // אירוע שהמחיר שלו טרם נקבע: הסכום שסוכם מוקלד במפורש לפני ההוספה לעגלה.
+  const [activityPriceDraft, setActivityPriceDraft] = useState(null);
   const [cashSessionOpen, setCashSessionOpen] = useState(false);
   // מסוף הסליקה הפיזי: האם הוא מחובר, והאם ממתינים לו כרגע.
   const [emvInfo, setEmvInfo] = useState({ available: false, reason: '' });
@@ -270,7 +274,7 @@ export default function PosSale({
 
   const refresh = useCallback(async () => {
     try {
-      const [pRes, sRes, parRes, cRes, sessRes, emvRes] = await Promise.all([
+      const [pRes, sRes, parRes, cRes, sessRes, emvRes, actRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/students'),
         fetch('/api/parents'),
@@ -279,8 +283,11 @@ export default function PosSale({
         // זמינות מסוף הסליקה. תשובה שלילית אינה שגיאת טעינה — היא רק מסתירה
         // את אמצעי התשלום הזה, ושאר הקופה ממשיכה לעבוד.
         fetch('/api/pos/emv/status').catch(() => null),
+        // אירועים פתוחים לגבייה. כישלון כאן לא מפיל את הקופה — הקטגוריה
+        // פשוט תציג רשימה ריקה עד הרענון הבא.
+        fetch('/api/pos/unpaid-activities').catch(() => null),
       ]);
-      const [p, s, par, cats, sess, emv] = await Promise.all([
+      const [p, s, par, cats, sess, emv, act] = await Promise.all([
         pRes.ok ? pRes.json() : [],
         sRes.ok ? sRes.json() : [],
         parRes.ok ? parRes.json() : [],
@@ -291,12 +298,14 @@ export default function PosSale({
         emvRes?.ok
           ? emvRes.json().catch(() => ({ available: false }))
           : Promise.resolve({ available: false }),
+        actRes?.ok ? actRes.json().catch(() => null) : Promise.resolve(null),
       ]);
       // תקלת רשת רגעית לא מסירה אמצעי תשלום מהמסך באמצע משמרת — רק תשובה
       // מפורשת מהשרת משנה את הזמינות.
       if (emvRes?.ok) {
         setEmvInfo({ available: !!emv?.available, reason: emv?.reason || '' });
       }
+      if (Array.isArray(act)) setUnpaidActivities(act);
       setPricelist(
         Array.isArray(p)
           ? p
@@ -418,6 +427,16 @@ export default function PosSale({
     });
   }, [pricelist, productFilter, activeCat]);
 
+  // אירועי היומן בקטגוריית „פעילויות” — אותה שורת חיפוש מסננת גם אותם.
+  const visibleUnpaidActivities = useMemo(() => {
+    const q = productFilter.trim().toLowerCase();
+    if (!q) return unpaidActivities;
+    return unpaidActivities.filter((a) => (
+      String(a.name || '').toLowerCase().includes(q)
+      || String(a.host_name || '').toLowerCase().includes(q)
+    ));
+  }, [unpaidActivities, productFilter]);
+
   const normalizePhoneDigits = (phone) => String(phone || '').replace(/\D/g, '');
 
   const customerSuggestions = useMemo(() => {
@@ -535,6 +554,7 @@ export default function PosSale({
     setEditingDiscountId(null);
     setShowCustomForm(false);
     setCustomDraft({ name: '', price: '', quantity: '1' });
+    setActivityPriceDraft(null);
     setShowQuoteOptions(false);
     setDocumentsBlock(null);
     setDocumentsLink(null);
@@ -890,6 +910,72 @@ export default function PosSale({
     setShowCustomForm(false);
   };
 
+  /** תאריך קצר לשורת העגלה ולכרטיס האירוע — 24.8, בלי שנה. */
+  const activityDateLabel = (activity) => {
+    if (!activity?.date) return '';
+    const d = new Date(`${activity.date}T00:00:00`);
+    return Number.isNaN(d.getTime())
+      ? String(activity.date)
+      : d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
+  };
+
+  /** שם השורה בעגלה ובחשבונית: שם האירוע + תאריך — שיהיה ברור על מה שולם. */
+  const activityLineName = (activity) =>
+    [activity?.name || 'אירוע מהיומן', activityDateLabel(activity)].filter(Boolean).join(' · ');
+
+  /**
+   * אירוע מהיומן נכנס לעגלה כשורה אחת על כל הסכום, והתשלום עליה — במזומן,
+   * במסוף או בקישור — הוא מה שמסמן את האירוע כ„שולם”.
+   *
+   * אירוע בלי מחיר לא מנחש: נפתחת שורת הקלדה לסכום שסוכם. זה אותו כלל כמו
+   * בדף המזמין — „המחיר טרם נקבע” עדיף על מספר שאיש לא קבע.
+   */
+  const addActivityToCart = (activity, priceOverride = null) => {
+    const amount = priceOverride != null ? Number(priceOverride) : Number(activity.charge);
+    if (!(amount > 0)) {
+      setActivityPriceDraft({ activity, price: '' });
+      return;
+    }
+    if (cart.some((line) => String(line.activity_id || '') === String(activity.id))) {
+      setError('האירוע הזה כבר בעגלה');
+      return;
+    }
+    setResult(null);
+    setError('');
+    setCart((prev) => [
+      ...prev,
+      {
+        cartLineId: makeCartLineId(),
+        pricelist_id: null,
+        activity_id: activity.id,
+        name: activityLineName(activity),
+        description: activityLineName(activity),
+        listPrice: roundMoney(amount),
+        unitprice: roundMoney(amount),
+        quantity: 1,
+        product_type: 'product',
+        discountType: null,
+        discountValue: 0,
+        isCustom: false,
+        isActivity: true,
+      },
+    ]);
+    setActivityPriceDraft(null);
+    // המזמין הוא הלקוח לחיוב: כשיש לו תיק, הוא נבחר מעצמו והחשבונית על שמו.
+    if (!selectedParentId && !selectedStudentId && !anonymousSale && activity.host_parent_id) {
+      const hostParent = parents.find((p) => String(p.id) === String(activity.host_parent_id));
+      if (hostParent) {
+        selectCustomer({
+          type: 'parent',
+          id: hostParent.id,
+          name: hostParent.name || 'לקוח',
+          phone: hostParent.phone || '',
+          email: hostParent.email || '',
+        });
+      }
+    }
+  };
+
   /**
    * מי המשתתפים בשורה — כשמשלמים על כמה ילדים של אותו הורה יחד.
    *
@@ -1219,6 +1305,8 @@ export default function PosSale({
             : 'הקישור נוצר, אבל לא נשלח בוואטסאפ — בדקו מספר טלפון'
         );
       }
+      // הכסף נגבה אבל האירוע ביומן לא סומן — זה חייב להיאמר, אחרת איש לא ישלים.
+      if (data.activityError) setError(data.activityError);
 
       if (data.changeGiven != null) {
         setLastChange(Number(data.changeGiven));
@@ -1550,6 +1638,114 @@ export default function PosSale({
               })}
             </div>
           ) : (
+            <>
+            {activeCat === 'פעילויות' && (
+              <div style={{ marginBottom: 14 }}>
+                {/* אירוע מהיומן נגבה כאן בדיוק כמו מוצר: לחיצה מוסיפה שורה על
+                    מלוא הסכום, והתשלום — מזומן, מסוף או קישור — מסמן את
+                    האירוע כ„שולם”. */}
+                <div style={{
+                  fontSize: 12, fontWeight: 700, color: 'var(--text-2)',
+                  display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8,
+                }}>
+                  <CalendarDays size={13} color="#6EE7B7" /> אירועים מהיומן — לגבייה מהמזמין
+                </div>
+                {visibleUnpaidActivities.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>
+                    אין אירועים פתוחים לגבייה. אירוע מופיע כאן כשהוא ביומן במצב „המזמין משלם” וטרם שולם.
+                  </div>
+                ) : (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                    gap: 8,
+                    maxHeight: 300,
+                    overflow: 'auto',
+                  }}>
+                    {visibleUnpaidActivities.map((activity) => {
+                      const inCart = cart.some((line) => String(line.activity_id || '') === String(activity.id));
+                      return (
+                        <button
+                          key={activity.id}
+                          type="button"
+                          onClick={() => addActivityToCart(activity)}
+                          className="card"
+                          disabled={inCart}
+                          style={{
+                            padding: 12,
+                            textAlign: 'right',
+                            cursor: inCart ? 'default' : 'pointer',
+                            border: '1px solid var(--border)',
+                            opacity: inCart ? 0.55 : 1,
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-1)', marginBottom: 4 }}>
+                            {activity.name || 'אירוע'}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>
+                            {[
+                              [activityDateLabel(activity), activity.start_time].filter(Boolean).join(' · '),
+                              activity.host_name ? `מזמין: ${activity.host_name}` : '',
+                            ].filter(Boolean).join(' — ')}
+                          </div>
+                          {inCart ? (
+                            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-3)' }}>בעגלה ✓</div>
+                          ) : activity.charge > 0 ? (
+                            <div style={{ fontWeight: 800, color: '#6EE7B7' }}>
+                              ₪{Number(activity.charge).toLocaleString()}
+                            </div>
+                          ) : (
+                            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--amber, #F59E0B)' }}>
+                              המחיר טרם נקבע — לחצו והקלידו את הסכום שסוכם
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {activityPriceDraft && (
+                  <div style={{
+                    marginTop: 8,
+                    padding: 10,
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    background: 'var(--bg-input)',
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}>
+                    <div className="form-group" style={{ margin: 0, flex: '1 1 180px' }}>
+                      <label className="form-label">
+                        הסכום שסוכם עבור „{activityPriceDraft.activity.name || 'האירוע'}”
+                      </label>
+                      <input
+                        className="input input-sm"
+                        type="number"
+                        min="1"
+                        step="0.01"
+                        autoFocus
+                        value={activityPriceDraft.price}
+                        onChange={(e) => setActivityPriceDraft((d) => ({ ...d, price: e.target.value }))}
+                        placeholder="0"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={!(Number(activityPriceDraft.price) > 0)}
+                      onClick={() => addActivityToCart(activityPriceDraft.activity, activityPriceDraft.price)}
+                    >
+                      <Plus size={13} /> הוסף לעגלה
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setActivityPriceDraft(null)}>
+                      ביטול
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
@@ -1606,10 +1802,12 @@ export default function PosSale({
                   </div>
                 </button>
               ))}
-              {filteredProducts.length === 0 && (
+              {filteredProducts.length === 0
+                && !(activeCat === 'פעילויות' && visibleUnpaidActivities.length > 0) && (
                 <div style={{ color: 'var(--text-3)', fontSize: 13, padding: 12 }}>אין פריטים תואמים</div>
               )}
             </div>
+            </>
           )}
           <div style={{ borderTop: '1px solid var(--border)', marginTop: 14, paddingTop: 12 }}>
             <button
@@ -2071,6 +2269,9 @@ export default function PosSale({
                           {line.isCustom ? (
                             <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500 }}> · מותאם</span>
                           ) : null}
+                          {line.isActivity ? (
+                            <span style={{ fontSize: 11, color: '#6EE7B7', fontWeight: 500 }}> · אירוע מהיומן</span>
+                          ) : null}
                         </div>
                         {/* The payer stays the selected parent. Participants can
                             be siblings, or an approved child from another file. */}
@@ -2218,39 +2419,45 @@ export default function PosSale({
                         >
                           <Percent size={11} /> הנחה
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setQty(line.cartLineId, line.quantity - 1)}
-                          aria-label="הקטנת כמות"
-                        >
-                          <Minus size={12} />
-                        </button>
-                        <input
-                          className="input input-sm"
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={line.quantity}
-                          onChange={(e) => setQty(line.cartLineId, e.target.value)}
-                          style={{
-                            width: 56,
-                            padding: '4px 6px',
-                            fontSize: 13,
-                            fontWeight: 700,
-                            textAlign: 'center',
-                          }}
-                          title="מספר יחידות"
-                          aria-label="כמות"
-                        />
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setQty(line.cartLineId, line.quantity + 1)}
-                          aria-label="הגדלת כמות"
-                        >
-                          <Plus size={12} />
-                        </button>
+                        {/* אירוע נגבה פעם אחת על מלוא הסכום — „כמות 2” הייתה
+                            גובה יום הולדת פעמיים, ולכן אין בורר כמות. */}
+                        {!line.isActivity && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setQty(line.cartLineId, line.quantity - 1)}
+                              aria-label="הקטנת כמות"
+                            >
+                              <Minus size={12} />
+                            </button>
+                            <input
+                              className="input input-sm"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={line.quantity}
+                              onChange={(e) => setQty(line.cartLineId, e.target.value)}
+                              style={{
+                                width: 56,
+                                padding: '4px 6px',
+                                fontSize: 13,
+                                fontWeight: 700,
+                                textAlign: 'center',
+                              }}
+                              title="מספר יחידות"
+                              aria-label="כמות"
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setQty(line.cartLineId, line.quantity + 1)}
+                              aria-label="הגדלת כמות"
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"

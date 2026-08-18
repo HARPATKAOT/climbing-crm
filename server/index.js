@@ -214,6 +214,7 @@ import {
   normalizeTemplatePayload as normalizeActivityTemplatePayload,
   normalizeTemplateCategory,
   openUnpaidActivities,
+  resolveRegistrationMode,
   listActivityTemplates,
   groupTemplatesByCategory,
   ensureSeedActivityTemplates,
@@ -12178,6 +12179,14 @@ app.post('/api/icount/webhook', async (req, res) => {
           if (sale.checkout_link_id) {
             await closePaidCheckoutLink(sale, updated?.paid_at);
           }
+
+          // אירוע מהיומן שנגבה בקישור מהקופה מסומן „שולם” באותו רגע — בדיוק
+          // כמו גבייה במזומן או במסוף.
+          await markActivitiesPaidForSale({
+            lines,
+            paymentId: payment.id,
+            paidAt: updated?.paid_at,
+          });
         } else if (sale?.id && Object.keys(clearFields).length) {
           const patchedSale = db.update('pos_sales', sale.id, {
             ...clearFields,
@@ -16079,9 +16088,62 @@ function mapCartLines(cart) {
         : [],
       track_inventory: fromCatalog && item.track_inventory === true,
       stock_qty: item.stock_qty,
+      // אירוע מהיומן שנגבה בדלפק. המזהה נשמר על השורה כדי שסגירת המכירה —
+      // וגם קישור ששולם מאוחר יותר — ידעו לסמן את האירוע עצמו כ„שולם”.
+      activity_id: line.activity_id ? String(line.activity_id) : null,
       item,
     };
   });
+}
+
+/**
+ * שורת אירוע בעגלה נבדקת מול היומן לפני שכסף עובר.
+ *
+ * שני מסופים יכולים לחייב את אותה יום הולדת, או שהמזמין שילם בינתיים בקישור —
+ * חיוב כפול על אירוע נראה תקין לגמרי בעגלה, ולכן הסירוב חייב לבוא מהשרת.
+ */
+function assertActivityLinesSellable(lines) {
+  for (const line of lines || []) {
+    if (!line.activity_id) continue;
+    const activity = db.getOne('activities', line.activity_id);
+    if (!activity) {
+      throw Object.assign(new Error('האירוע שבעגלה לא נמצא ביומן — רעננו את המסך ונסו שוב'), { status: 400 });
+    }
+    if (['cancelled', 'archived'].includes(String(activity.status || '').toLowerCase())) {
+      throw Object.assign(new Error(`האירוע "${activity.name || ''}" בוטל ביומן — אין מה לגבות עליו`), { status: 400 });
+    }
+    if (resolveRegistrationMode(activity) !== 'host_pays') {
+      throw Object.assign(new Error(`באירוע "${activity.name || ''}" כל משתתף משלם בנפרד — אין דמי הזמנה לגבות מהמזמין`), { status: 400 });
+    }
+    const pay = normalizeHostPaymentStatus(activity.payment_status);
+    if (pay === 'paid') {
+      throw Object.assign(new Error(`האירוע "${activity.name || ''}" כבר מסומן כשולם`), { status: 400 });
+    }
+  }
+}
+
+/**
+ * קושרים את רשומת התשלום לאירוע רק כשהמכירה היא האירוע בלבד: סכום התשלום הוא
+ * מה שמסך האירוע מציג כ„שולם”, ועגלה מעורבת (אירוע + קרטיבים) הייתה מציגה שם
+ * סכום שכולל דברים אחרים. בלי הקישור המסך נופל לסכום שהוקפא על האירוע — נכון.
+ */
+function activityPaymentLinkId(lines, paymentId) {
+  const rows = (lines || []).filter(Boolean);
+  return rows.length === 1 && rows[0].activity_id ? paymentId || null : null;
+}
+
+/** סימון „שולם” לכל אירועי היומן שבשורות מכירה שהושלמה. */
+async function markActivitiesPaidForSale({ lines, paymentId, paidAt }) {
+  const linkId = activityPaymentLinkId(lines, paymentId);
+  for (const line of (lines || []).filter((row) => row?.activity_id)) {
+    await markHostedActivityPaid({
+      db,
+      persist: persistCore,
+      activityId: line.activity_id,
+      paymentId: linkId,
+      paidAt,
+    });
+  }
 }
 
 function cancellationPoliciesForSaleLines(lines = []) {
@@ -16919,6 +16981,20 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       }
     }
 
+    // מכירה שסימנה אירוע מהיומן כ„שולם” — הזיכוי מחזיר גם את האירוע, באותם
+    // סימנים שמסלול הזיכוי של דף המזמין משאיר (applyHostRefundMarks).
+    for (const lineItem of sale.items || []) {
+      if (!lineItem?.activity_id) continue;
+      const activity = db.getOne('activities', lineItem.activity_id);
+      if (!activity || normalizeHostPaymentStatus(activity.payment_status) !== 'paid') continue;
+      const revertedActivity = db.update('activities', activity.id, {
+        payment_status: 'refunded',
+        host_paid_at: null,
+        updated_at: new Date().toISOString(),
+      });
+      if (revertedActivity) await persistCore('activities', revertedActivity);
+    }
+
     const updatedSale = db.update('pos_sales', sale.id, {
       status: 'refunded',
       refunded_at: new Date().toISOString(),
@@ -17721,6 +17797,32 @@ app.get('/api/pos/emv/orphan-charges', async (req, res) => {
   }
 });
 
+/**
+ * אירועים מהיומן שממתינים לגבייה — לקטגוריית „פעילויות” בקופה.
+ *
+ * הסכום כאן הוא חיוב המזמין (מה שהוקפא על האירוע, או חישוב חי) — לא מחיר
+ * המשתתף הבודד. הוא נחשף לכל מי שמוכר בקופה מאותה סיבה שסכום לתשלום מופיע
+ * על כל מכירה: אי אפשר לגבות סכום בלי לראות אותו. אירוע בלי מחיר חוזר
+ * `unpriced` ולא ניחוש — הדלפקיסט מקליד את הסכום שסוכם, במפורש.
+ */
+app.get('/api/pos/unpaid-activities', (req, res) => {
+  const rows = openUnpaidActivities(db).map((a) => {
+    const charge = hostChargeFor(a);
+    return {
+      id: a.id,
+      name: a.name || '',
+      type: a.type || '',
+      date: a.date || '',
+      start_time: a.start_time || '',
+      host_name: a.host_name || a.contact_name || '',
+      host_parent_id: a.host_parent_id || null,
+      charge: charge > 0 ? charge : null,
+      unpriced: !(charge > 0),
+    };
+  });
+  res.json(rows);
+});
+
 app.post('/api/pos/sale', async (req, res) => {
   // ההדפסה בדלפק ממתינה לתשובה הזאת: מספר המסמך מודפס על הקבלה, ולכן אי אפשר
   // להדפיס לפני שהוא קיים. המשמעות היא שכל קריאה חיצונית שיושבת כאן נמדדת
@@ -17771,6 +17873,8 @@ app.post('/api/pos/sale', async (req, res) => {
     phase('eligibility');
     const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
     requireCounterPolicyAcceptance(req, cancellationPolicies);
+    // לפני שכסף עובר: אירוע ששולם בינתיים בקישור, או במסוף השני, נעצר כאן.
+    assertActivityLinesSellable(lines);
 
     // The register only previews a coupon — the benefit is recomputed here so a
     // stale screen or a hand-edited request can never hand out a bigger discount.
@@ -18016,7 +18120,7 @@ app.post('/api/pos/sale', async (req, res) => {
       });
     }
 
-    db.insert('payments', {
+    let paymentRow = db.insert('payments', {
       parent_id: syncedParent?.id || null,
       student_id: student?.id || null,
       amount: total,
@@ -18036,6 +18140,33 @@ app.post('/api/pos/sale', async (req, res) => {
       paid_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+
+    // אירוע מהיומן בעגלה: הכסף כבר ביד, ולכן האירוע מסומן „שולם” עכשיו.
+    // כישלון כאן אינו מפיל את המכירה — הוא מדווח לצידה, והסימון מושלם ביד
+    // במסך האירוע.
+    let activityError = null;
+    if (lines.some((line) => line.activity_id)) {
+      try {
+        if (activityPaymentLinkId(lines, paymentRow.id)) {
+          paymentRow = db.update('payments', paymentRow.id, {
+            activity_host_payment: true,
+            activity_id: lines.find((line) => line.activity_id).activity_id,
+            price_includes_vat: true,
+          }) || paymentRow;
+          // בדרך כלל רשומת התשלום של הדלפק חיה רק בזיכרון; כאן מסך האירוע
+          // יקרא אותה (סכום + מסמך), ולכן היא נשמרת עמידה.
+          await persistCore('payments', paymentRow);
+        }
+        await markActivitiesPaidForSale({
+          lines,
+          paymentId: paymentRow.id,
+          paidAt: paymentRow.paid_at,
+        });
+      } catch (markErr) {
+        console.error('⚠️ [POS] activity mark-paid failed:', markErr.message);
+        activityError = 'המכירה נקלטה, אבל סימון האירוע כ„שולם” ביומן נכשל — סמנו אותו ידנית במסך האירוע.';
+      }
+    }
 
     // Paying for an intro training is the moment the funnel can advance on its
     // own — nobody has to remember to change the status afterwards.
@@ -18139,6 +18270,7 @@ app.post('/api/pos/sale', async (req, res) => {
       // החיוב עבר אבל החשבונית לא יצאה — נאמר במפורש, כדי שיושלם ולא ייעלם.
       documentError: docError,
       fulfillmentError,
+      activityError,
       emv: emvCharge
         ? {
           confirmationCode: emvCharge.confirmationCode,
@@ -18799,6 +18931,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
     lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
     const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
     requireCounterPolicyAcceptance(req, cancellationPolicies);
+    // גם קישור נעצר על אירוע ששולם כבר — לא שולחים למזמין חוב שאינו קיים.
+    assertActivityLinesSellable(lines);
 
     const {
       sale: updatedSale,
