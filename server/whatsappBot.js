@@ -1297,11 +1297,13 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText, { 
     return { done: false, reply: 'היי, איך קוראים לך?' };
   }
 
+  // Somebody who asks a question instead of answering deserves an answer, and
+  // never "סליחה, לא הבנתי". A woman asking whether we have bouldering for her
+  // five-year-old niece was told that twice and then handed to the team, all
+  // without her question being read. Whether the reply is a name is the
+  // model's call; `customerNameWords` only cleans one once it is.
   const words = customerNameWords(text);
-  if (!words.length) return askAgainOrHandOff(phone, prior, 'איך קוראים לך?');
-  // Somebody who asks a question instead of answering deserves an answer, not
-  // "סליחה, לא הבנתי" — and certainly not to be filed under their question.
-  if (!await replyIsAName(text, { callModel })) {
+  if (!words.length || !await replyIsAName(text, { callModel })) {
     await setIntake(phone, { ...prior, pendingMessage: text });
     return { done: true, parent, pendingMessage: text, nameDeferred: true };
   }

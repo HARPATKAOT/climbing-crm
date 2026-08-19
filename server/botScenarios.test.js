@@ -456,21 +456,23 @@ test('כרטיס שכבר יש בו שם פרטי אינו נשאל דבר', asy
   });
 });
 
-test('שאלה של הלקוח אינה שם — «מזה ai?» לא נשמר כשם משפחה', async () => {
+test('שאלה של הלקוח אינה שם — «מזה ai?» לא נשמר בכרטיס', async () => {
   await withSeed({ parents: [NEW_CARD] }, async () => {
     const phone = NEW_CARD.phone;
     await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
 
     // כך נוצר בכרטיס אמיתי השם «יהודה מזה ai» — 6.8.2026.
     const asked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'מזה ai?');
-    assert.equal(asked.done, false);
+    assert.equal(asked.nameDeferred, true);
     assert.equal(cardById('p-fresh').name, 'לקוח וואטסאפ');
     assert.equal(cardById('p-fresh').lastName || '', '');
 
-    // ובפעם השנייה שהוא לא עונה על השאלה — מעבירים לאדם, לא שואלים שוב.
+    // ולא עונים לו „סליחה, לא הבנתי” פעמיים ואז מעבירים לצוות: מי ששואל
+    // שאלה מקבל תשובה. שם הוא נחמד שיהיה, לא שער שצריך לעבור.
     const again = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'אתה בוט?');
-    assert.equal(again.handoff, true);
-    assert.match(again.reply, /לצוות/);
+    assert.equal(again.handoff, undefined);
+    assert.equal(again.nameDeferred, true);
+    assert.equal(again.pendingMessage, 'אתה בוט?');
     assert.equal(cardById('p-fresh').lastName || '', '');
   });
 });
@@ -1651,6 +1653,15 @@ test('שאלה של הלקוח אינה שם', async () => {
     assert.equal(asked.pendingMessage, 'באיזה עיר');
     assert.equal(cardById('p-fresh').name, NEW_CARD.name);
     assert.ok(!String(cardById('p-fresh').name || '').includes('באיזה'));
+
+    // וגם שאלה שברור שאינה שם — סימן שאלה ומילות שאלה — נענית, ולא נענית
+    // ב„סליחה, לא הבנתי”. כך אבדה מתעניינת ששאלה על אחיינית בת 5.
+    const plainQuestion = await advanceCustomerNameCapture(
+      phone, cardById('p-fresh'), 'יש לכם טרובלו לילדה בת 5?', { callModel: says('לא') }
+    );
+    assert.equal(plainQuestion.nameDeferred, true);
+    assert.equal(plainQuestion.done, true);
+    assert.equal(cardById('p-fresh').name, NEW_CARD.name);
 
     // ושם אמיתי אחר כך נשמר כרגיל.
     const named = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'ליבי', {
