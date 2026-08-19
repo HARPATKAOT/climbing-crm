@@ -5556,7 +5556,7 @@ app.post('/api/public/equipment/:token/own', publicFormRateLimit, async (req, re
     const wanted = Array.isArray(req.body?.itemTypes)
       ? req.body.itemTypes.map((t) => String(t || '').trim())
       : [];
-    const allowed = wanted.filter((t) => equipmentItemTypesForStudent(student).includes(t));
+    const allowed = wanted.filter((t) => equipmentItemTypesForStudent(student, db).includes(t));
     if (!allowed.length) {
       return res.status(400).json({ error: 'בחרו לפחות פריט אחד שכבר יש למתאמן' });
     }
@@ -5619,7 +5619,7 @@ async function createFamilyEquipmentPayment(req, res, checkout) {
     const selected = [...new Set(
       (Array.isArray(entry.itemTypes) ? entry.itemTypes : [])
         .map((type) => String(type || '').trim())
-        .filter((type) => equipmentItemTypesForStudent(student).includes(type) && unpaidTypes.has(type))
+        .filter((type) => equipmentItemTypesForStudent(student, db).includes(type) && unpaidTypes.has(type))
     )];
     if (!selected.length) continue;
 

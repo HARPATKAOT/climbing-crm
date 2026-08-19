@@ -13,6 +13,7 @@
 
 import {
   EQUIPMENT_ITEM_LABELS,
+  equipmentItemTypesForStudent,
   isEquipmentEligibleStudent,
 } from './equipmentService.js';
 
@@ -66,11 +67,15 @@ export function familyEquipmentStanding(db, { students = [] } = {}) {
       .filter(Boolean);
     const shirt = mine.find((row) => (row.item_type || row.itemType) === 'shirt');
     const owes = OWES_EQUIPMENT_STATUSES.has(String(student.status || ''));
+    // שורה שכבר אינה בערכה של המתאמן (למשל חולצה אצל מי שעבר לקבוצת בוגרים)
+    // לא נחשבת חוב — דף התשלום ממילא לא מציע אותה, ו„נשאר פריט להסדרה” בלי
+    // דרך להסדיר הוא לולאה בלי יציאה. מה ששולם או סומן מהבית נשאר נספר.
+    const applicable = new Set(equipmentItemTypesForStudent(student, db));
     members.push({
       student_id: student.id,
       name: student.name || '',
       first_name: firstNameOf(student.name),
-      unpaid: owes ? pick('unpaid') : [],
+      unpaid: owes ? pick('unpaid').filter((type) => applicable.has(type)) : [],
       paid: pick('paid'),
       own: pick('own'),
       shirt_size: shirt?.shirt_size || null,

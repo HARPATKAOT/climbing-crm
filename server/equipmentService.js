@@ -9,6 +9,7 @@ import {
   appPublicBase,
   buildRedirectUrl,
 } from './publicLinks.js';
+import { activeEnrollmentGroupIds, studentGroupIds } from './studentGroups.js';
 
 export const EQUIPMENT_ITEM_TYPES = ['shoes', 'shirt', 'chalk_bag'];
 
@@ -165,10 +166,31 @@ export function isEquipmentEligibleStudent(student) {
   return true;
 }
 
-/** Adults use shoes and chalk. Children also receive the club shirt option. */
-export function equipmentItemTypesForStudent(student) {
+/** קבוצת בוגרים בלוח החוגים — לפי קטגוריית הגיל שעל הקבוצה. */
+export function isAdultsGroup(group) {
+  return String(group?.ageCategory || group?.age_category || '').includes('בוגר');
+}
+
+/** הקבוצות הפעילות של המתאמן: הרשמות פעילות, ואם אין — השיבוץ שעל הכרטיס. */
+function activeGroupsOf(db, student) {
+  const fromEnrollments = activeEnrollmentGroupIds(db?.get?.('enrollments') || [], student?.id);
+  const ids = fromEnrollments.length ? fromEnrollments : studentGroupIds(student);
+  return ids.map((id) => db?.getOne?.('groups', id)).filter(Boolean);
+}
+
+/**
+ * חולצת החוג שייכת לקבוצות הילדים והנוער, וההשתייכות לקבוצה היא שקובעת:
+ * מתאמנת שמלאו לה 18 אבל מטפסת בקבוצת חטיבה+תיכון עדיין חייבת חולצה, ורק מי
+ * שכל הקבוצות שלו הן קבוצות בוגרים פטור. בלי שיבוץ אין תשובה מהלוח, ואז דגל
+ * הבוגר שעל הכרטיס מכריע. בלי `db` אין גישה ללוח — נשארים עם הדגל בלבד.
+ */
+export function equipmentItemTypesForStudent(student, db = null) {
   if (!isEquipmentEligibleStudent(student)) return [];
-  return isKidStudent(student) ? [...EQUIPMENT_ITEM_TYPES] : ['shoes', 'chalk_bag'];
+  const groups = db ? activeGroupsOf(db, student) : [];
+  const needsShirt = groups.length
+    ? groups.some((group) => !isAdultsGroup(group))
+    : isKidStudent(student);
+  return needsShirt ? [...EQUIPMENT_ITEM_TYPES] : ['shoes', 'chalk_bag'];
 }
 
 export function newEquipmentId(studentId, itemType) {
@@ -182,7 +204,7 @@ export function newCheckoutToken() {
 /** Ensure the applicable kit rows exist for a trainee. Returns existing + created rows. */
 export function ensureStudentEquipment({ db, student, persist } = {}) {
   if (!db || !isEquipmentEligibleStudent(student)) return [];
-  const applicableTypes = equipmentItemTypesForStudent(student);
+  const applicableTypes = equipmentItemTypesForStudent(student, db);
   const parentId = student.parentId || student.parent_id || null;
   const existing = (Array.isArray(db.get('student_equipment')) ? db.get('student_equipment') : []).filter(
     (row) => row && row.student_id === student.id
@@ -500,10 +522,11 @@ export function markEquipmentItemsPaid({
   }
 
   const rows = ensureStudentEquipment({ db, student, persist });
+  const applicable = equipmentItemTypesForStudent(student, db);
   const wanted = new Set(
     (Array.isArray(itemTypes) ? itemTypes : [])
       .map((t) => String(t || '').trim())
-      .filter((t) => equipmentItemTypesForStudent(student).includes(t))
+      .filter((t) => applicable.includes(t))
   );
   if (!wanted.size) return { updated, errors: ['לא נבחרו פריטי ציוד'] };
 

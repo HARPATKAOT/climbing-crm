@@ -108,6 +108,23 @@ function adultMatchesParent(student, parent) {
 }
 
 /**
+ * כרטיס כפול שאוחד ונשאר בארכיון — אותו שם ואותו תאריך לידה כמו כרטיס חי
+ * באותו תיק — הוא שריד טכני של האיחוד, לא אדם נוסף במשפחה. מסמכים חתומים
+ * ממשיכים להצביע עליו ולכן הוא לא נמחק, אבל בסרגל בני הבית מציגים רק את
+ * הכרטיס החי, אחרת אותו ילד מופיע פעמיים.
+ */
+function isMergedAwayDuplicate(student, students) {
+  if (String(student?.status || '') !== 'archived') return false;
+  const name = cleanPersonName(student.name);
+  if (!name) return false;
+  const birth = String(student.birthDate || '');
+  return (students || []).some((other) => other !== student
+    && String(other?.status || '') !== 'archived'
+    && cleanPersonName(other?.name) === name
+    && String(other?.birthDate || '') === birth);
+}
+
+/**
  * One navigation tab per person in the household.
  *
  * Adult self-registrations have both a payer/contact row and a trainee row.
@@ -118,6 +135,7 @@ function adultMatchesParent(student, parent) {
 export function buildFamilyMemberTabs(students, parents) {
   const realStudents = (students || [])
     .filter((student) => !isParentOnlyLead(student))
+    .filter((student, _index, list) => !isMergedAwayDuplicate(student, list))
     .slice()
     .sort((a, b) => {
       const adultDiff = (a?.isAdult ? 0 : 1) - (b?.isAdult ? 0 : 1);

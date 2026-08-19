@@ -92,6 +92,25 @@ test('an adult with a different identity is not collapsed into their parent', ()
   assert.deepEqual(tabs.map((tab) => tab.kind), ['student', 'parent']);
 });
 
+test('a merged-away archived duplicate is hidden from the family tabs', () => {
+  // המבנה שאיחוד כפילות משאיר: כרטיס חי וכרטיס ארכיון עם אותו שם ואותו
+  // תאריך לידה על אותו תיק. המסמכים החתומים מצביעים על הארכיון, אז הוא
+  // לא נמחק — אבל בסרגל בני הבית הוא היה מציג את אותה ילדה פעמיים.
+  const parent = { id: 'p20', name: 'תמר לוי', phone: '972541112233' };
+  const live = { id: 's20', name: 'נעמי לוי', parentId: 'p20', guardianIds: ['p20'], birthDate: '2008-08-04', isAdult: true, status: 'registered' };
+  const merged = { id: 's21', name: 'נעמי לוי', parentId: 'p20', guardianIds: ['p20'], birthDate: '2008-08-04', isAdult: true, status: 'archived' };
+  const tabs = buildFamilyMemberTabs([live, merged], [parent]);
+  assert.deepEqual(
+    tabs.map((tab) => [tab.student?.id || null, tab.kind]),
+    [['s20', 'student'], [null, 'parent']]
+  );
+
+  // מתאמן שבאמת עזב — שם בלי כרטיס חי מקביל — נשאר מוצג בתיק.
+  const past = { id: 's22', name: 'יונתן לוי', parentId: 'p20', guardianIds: ['p20'], status: 'archived' };
+  const withPast = buildFamilyMemberTabs([live, past], [parent]);
+  assert.equal(withPast.filter((tab) => tab.kind === 'student').length, 2);
+});
+
 test('the main parent in the leads row is the trainee primary, not the richer secondary card', () => {
   const primary = { id: 'p10', name: 'הורה ראשי' };
   const richerSecondary = {

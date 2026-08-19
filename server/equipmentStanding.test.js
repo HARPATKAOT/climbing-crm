@@ -90,6 +90,34 @@ test('אין מה לאשר — אין הודעה', () => {
   assert.equal(equipmentReceiptMessage(standing, { firstName: 'יובל' }), '');
 });
 
+test('שורת חולצה שאינה בערכה של המתאמן אינה נספרת כחוב פתוח', () => {
+  const rows = [
+    { id: 'e1', student_id: 's-noami', item_type: 'shirt', payment_status: 'unpaid' },
+    { id: 'e2', student_id: 's-noami', item_type: 'shoes', payment_status: 'paid' },
+    { id: 'e3', student_id: 's-noami', item_type: 'chalk_bag', payment_status: 'paid' },
+  ];
+  const groups = [
+    { id: 'g-adults', ageCategory: 'בוגרים' },
+    { id: 'g-youth', ageCategory: 'חטיבה + תיכון' },
+  ];
+  const db = {
+    get: (table) => (table === 'student_equipment' ? rows : []),
+    getOne: (table, id) => (table === 'groups' ? groups.find((g) => g.id === id) || null : null),
+  };
+
+  // בקבוצת בוגרים אין חולצה בערכה — שורה שנשארה מהעבר לא הופכת את
+  // „תודה, נקלט התשלום” ל„נשאר עוד פריט להסדרה” שאי אפשר לסגור לעולם.
+  const inAdults = { id: 's-noami', name: 'נעמי ברש', status: 'awaiting_centre_confirmation', isAdult: true, groupId: 'g-adults' };
+  let standing = familyEquipmentStanding(db, { students: [inAdults] });
+  assert.equal(standing.hasOpen, false);
+  assert.match(equipmentReceiptMessage(standing, { firstName: 'תמר' }), /אין צורך בפעולות נוספות/);
+
+  // אותה מתאמנת בקבוצת נוער: החולצה כן חוב פתוח, גם כשהכרטיס מסומן „בוגרת”.
+  const inYouth = { ...inAdults, groupId: 'g-youth' };
+  standing = familyEquipmentStanding(db, { students: [inYouth] });
+  assert.deepEqual(standing.open.flatMap((m) => m.unpaid), ['shirt']);
+});
+
 // ─── מה המעקב של מחר באמת שואל ────────────────────────────────────────────────
 
 const ROW = { reason: 'pending_signup', subject: 'אלה פרי דינרי', note: 'ההרשמה במתנ״ס' };

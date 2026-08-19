@@ -111,6 +111,50 @@ test('adult trainees receive shoes and chalk only', () => {
   assert.deepEqual(paid.updated.map((row) => row.item_type), ['shoes', 'chalk_bag']);
 });
 
+test('the shirt follows the group, not the age flag on the card', () => {
+  const db = makeDb({
+    students: [
+      { id: 'n1', isAdult: true, groupId: 'g-youth', status: 'active' },
+      { id: 'b1', isAdult: true, groupId: 'g-adults', status: 'active' },
+      { id: 'k1', isAdult: false, groupId: 'g-adults', status: 'active' },
+    ],
+    groups: [
+      { id: 'g-youth', ageCategory: 'חטיבה + תיכון' },
+      { id: 'g-adults', ageCategory: 'בוגרים' },
+    ],
+  });
+  // בוגרת בקבוצת נוער — חייבת חולצה; הדגל שעל הכרטיס לא פוטר אותה.
+  assert.deepEqual(
+    equipmentItemTypesForStudent(db.getOne('students', 'n1'), db),
+    ['shoes', 'shirt', 'chalk_bag']
+  );
+  // בקבוצת בוגרים אין חולצה — גם כשהכרטיס עוד מסומן כילד.
+  assert.deepEqual(equipmentItemTypesForStudent(db.getOne('students', 'k1'), db), ['shoes', 'chalk_bag']);
+  assert.deepEqual(equipmentItemTypesForStudent(db.getOne('students', 'b1'), db), ['shoes', 'chalk_bag']);
+  // בלי שיבוץ לקבוצה — הדגל שעל הכרטיס מכריע, כמו קודם.
+  assert.deepEqual(equipmentItemTypesForStudent({ id: 'x1', isAdult: true }, db), ['shoes', 'chalk_bag']);
+  assert.deepEqual(
+    equipmentItemTypesForStudent({ id: 'x2', isAdult: false }, db),
+    ['shoes', 'shirt', 'chalk_bag']
+  );
+
+  // הרשמה פעילה גוברת על השיבוץ הישן שנשאר על הכרטיס.
+  const db2 = makeDb({
+    students: [{ id: 'n2', isAdult: true, groupId: 'g-adults', status: 'active' }],
+    groups: [
+      { id: 'g-youth', ageCategory: 'תיכון' },
+      { id: 'g-adults', ageCategory: 'בוגרים' },
+    ],
+    enrollments: [{ id: 'e1', student_id: 'n2', group_id: 'g-youth', status: 'active' }],
+  });
+  assert.deepEqual(
+    equipmentItemTypesForStudent(db2.getOne('students', 'n2'), db2),
+    ['shoes', 'shirt', 'chalk_bag']
+  );
+  const rows = ensureStudentEquipment({ db: db2, student: db2.getOne('students', 'n2') });
+  assert.deepEqual(rows.map((row) => row.item_type).sort(), ['chalk_bag', 'shirt', 'shoes']);
+});
+
 test('adult equipment backfill ignores archived and parent-only cards', () => {
   const db = makeDb({
     students: [
