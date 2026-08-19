@@ -261,9 +261,11 @@ test('forecast rebuild is idempotent and projects enrollments income', () => {
 test('an unpaid iCount invoice books only the collected part as cash income — once', () => {
   const seed = baseSeed();
   seed.payments = [];
+  // בלי payment_status_known היתרה אינה ראיה לחוב (מסמך שפרטיו לא נמשכו),
+  // documentOpenBalance מחזירה 0 והמסמך כולו נספר כנגבה.
   seed.finance_documents = [{
     id: 'icount:invoice:501', doctype: 'invoice', docnum: '501', document_date: '2026-08-03',
-    total_gross: 500, total_net: 423.73, remaining_sum: 200,
+    total_gross: 500, total_net: 423.73, remaining_sum: 200, payment_status_known: true,
   }];
   const store = makeStore(seed);
   rebuildLedger(store, { now: NOW });
