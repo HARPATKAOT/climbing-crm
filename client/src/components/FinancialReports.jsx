@@ -56,8 +56,7 @@ function Metric({ label, value, note, icon: Icon, color = '#38BDF8', plain = fal
     className={`finance-metric ${onClick ? 'is-clickable' : ''}`}
     style={{ '--metric': color }}
     onClick={onClick}
-    role={onClick ? 'button' : undefined}
-    title={onClick ? 'לחיצה מציגה את העסקאות שמאחורי המספר' : undefined}>
+    role={onClick ? 'button' : undefined}>
     {info && <>
       <button type="button" className="finance-metric-info" aria-label={`מה זה ${label}?`}
         onClick={(event) => event.stopPropagation()}><Info size={14} /></button>
