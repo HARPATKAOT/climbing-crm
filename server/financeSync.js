@@ -425,13 +425,14 @@ export function financeSyncStatus() {
   };
 }
 
-export async function runFinanceSync({ full = false, sources = ['notion', 'icount'] } = {}) {
+export async function runFinanceSync({ full = false, sources = ['notion', 'icount'], days = 45 } = {}) {
   if (activeSync) return activeSync;
   const run = {
     id: `finance-sync-${Date.now()}`,
     started_at: new Date().toISOString(),
     status: 'running',
     full: Boolean(full),
+    window_days: full ? null : Math.max(1, days),
     sources,
     results: {},
     errors: [],
@@ -445,7 +446,7 @@ export async function runFinanceSync({ full = false, sources = ['notion', 'icoun
       }
       if (sources.includes('icount')) {
         const to = new Date().toISOString().slice(0, 10);
-        const from = full ? '2010-01-01' : new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+        const from = full ? '2010-01-01' : new Date(Date.now() - Math.max(1, days) * 86400000).toISOString().slice(0, 10);
         try { run.results.icount = await syncIcountFinance({ from, to }); }
         catch (error) { run.errors.push({ source: 'icount', message: error.message }); }
       }

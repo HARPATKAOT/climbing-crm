@@ -177,6 +177,7 @@ import {
 } from './security.js';
 import { financeRouter } from './financeRoutes.js';
 import { runFinanceNightlyIfDue } from './financeNightly.js';
+import { runFinanceSync } from './financeSync.js';
 import {
   accessAtLeast,
   createAccessRole,
@@ -22559,6 +22560,13 @@ app.listen(PORT, () => {
   // מ-04:00. אין cron של Render בחשבון, אז התזמון חי כאן כמו שאר העבודות.
   setInterval(() => {
     runFinanceNightlyIfDue().catch((err) => console.error('finance nightly failed:', err?.message || err));
+  }, 15 * 60 * 1000);
+
+  // מכירה שנרשמה בקופה בצהריים אינה יכולה לחכות ללילה כדי להופיע על
+  // המסך. משיכה קצרה — שלושה ימים אחורה בלבד — כל רבע שעה.
+  setInterval(() => {
+    runFinanceSync({ sources: ['icount'], days: 3 })
+      .catch((err) => console.error('finance intraday sync failed:', err?.message || err));
   }, 15 * 60 * 1000);
 
   // Sunday and Tuesday at 08:00: one question to the community centre carrying
