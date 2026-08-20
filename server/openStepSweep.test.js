@@ -39,7 +39,7 @@ const SIGNED = new Date('2026-08-01T08:00:00.000Z').toISOString();
 function placed(patch = {}) {
   return {
     id: 's1', name: 'יותם כהן', parentId: PARENT.id,
-    status: 'pending_signup', groupId: GROUP.id, ...patch,
+    status: 'awaiting_parent_confirmation', groupId: GROUP.id, ...patch,
   };
 }
 

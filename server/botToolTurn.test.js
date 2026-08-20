@@ -588,7 +588,7 @@ test('placing, moving and unplacing is locked only once a trainee is registered'
   // every step before it is the bot's to arrange. An earlier version also
   // locked a booked intro lesson, which sent a perfectly ordinary signup to
   // the team. Both startSignup and cancelSignup gate on this one predicate.
-  for (const status of ['lead_new', 'health_signed', 'pending_signup',
+  for (const status of ['lead_new', 'health_signed', 'awaiting_parent_confirmation',
     'intro_scheduled', 'intro_paid', 'past_registered', 'waitlist']) {
     assert.equal(isRegisteredTrainee({ status }), false, status);
   }
@@ -744,7 +744,7 @@ test('twice-weekly is offered only with both a configured price and signup link'
 });
 
 test('document signing preserves progress and pending without a group is not shown as placed', () => {
-  for (const status of ['registered', 'active', 'pending_signup', 'details_completed',
+  for (const status of ['registered', 'active', 'details_completed',
     'awaiting_parent_confirmation', 'awaiting_centre_confirmation', 'waitlist',
     'intro_scheduled', 'intro_paid', 'past_registered']) {
     assert.equal(statusAfterHealthSignature(status), status);
@@ -752,10 +752,10 @@ test('document signing preserves progress and pending without a group is not sho
   assert.equal(statusAfterHealthSignature('lead_new'), 'details_completed');
   assert.equal(statusAfterHealthSignature(''), 'details_completed');
 
-  assert.equal(botVisibleStudentStatus({ status: 'pending_signup' }, null), 'details_completed');
+  assert.equal(botVisibleStudentStatus({ status: 'awaiting_parent_confirmation' }, null), 'details_completed');
   assert.equal(
-    botVisibleStudentStatus({ status: 'pending_signup' }, { id: 'g1' }),
-    'pending_signup'
+    botVisibleStudentStatus({ status: 'awaiting_parent_confirmation' }, { id: 'g1' }),
+    'awaiting_parent_confirmation'
   );
 });
 

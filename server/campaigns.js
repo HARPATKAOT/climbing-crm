@@ -50,7 +50,7 @@ export const SEND_STATUS = {
 
 /** Statuses that mean "still a lead" — nobody here has signed up for a class. */
 const LEAD_STATUSES = new Set([
-  'lead_new', 'health_signed', 'details_completed', 'pending_signup',
+  'lead_new', 'health_signed', 'details_completed',
   'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
   'intro_scheduled', 'intro_paid', 'waitlist',
 ]);

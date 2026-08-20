@@ -134,7 +134,6 @@ test('funnel counts one highest stage per family and drops archived families ent
     details_completed: 0,
     health_signed: 1,
     // Legacy rows remain visible during the migration window.
-    pending_signup: 0,
     intro_scheduled: 0,
     intro_paid: 0,
     awaiting_parent_confirmation: 0,

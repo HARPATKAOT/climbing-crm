@@ -32,6 +32,8 @@ export const FOLLOWUP_CANCELLED = 'cancelled';
 /** Why the bot is coming back. The reason decides the wording, not the model. */
 export const FOLLOWUP_REASONS = new Set([
   'customer_asked',   // "תבדוק איתי מחר"
+  // סיבת מעקב, לא סטטוס לקוח: הסטטוס „ממתין להרשמה” בוטל ונבלע ב„שמור · ממתין
+  // לאישור הרשמה”, והשם הזה נשאר כאן כי הוא שמור בשורות מעקב קיימות.
   'pending_signup',   // נשלח קישור הרשמה — לבדוק אם נרשמו
   'equipment_unpaid', // נשלח קישור ציוד — לבדוק אם הוסדר
   'form_not_filled',  // נשלח קישור לטופס — לבדוק אם מולא

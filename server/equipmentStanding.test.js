@@ -7,8 +7,8 @@ import {
 } from './equipmentStanding.js';
 import { followUpMessage } from './botFollowUps.js';
 
-const ELLA = { id: 's-ella', name: 'אלה פרי דינרי', status: 'pending_signup' };
-const EVYATAR = { id: 's-evyatar', name: 'אביתר פרי דינרי', status: 'pending_signup' };
+const ELLA = { id: 's-ella', name: 'אלה פרי דינרי', status: 'awaiting_parent_confirmation' };
+const EVYATAR = { id: 's-evyatar', name: 'אביתר פרי דינרי', status: 'awaiting_parent_confirmation' };
 const LEAD = { id: 's-lead', name: 'יובל דינרי', status: 'lead_new' };
 
 const store = (rows) => ({ get: (table) => (table === 'student_equipment' ? rows : []) });

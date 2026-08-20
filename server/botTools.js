@@ -1129,7 +1129,7 @@ function registrationProgress(student, group) {
 /** A pending placement only exists when it points at a real group. */
 export function botVisibleStudentStatus(student, group = null) {
   const status = String(student?.status || '');
-  if (status === 'pending_signup' && !group) return REGISTRATION_STATUS.DETAILS_COMPLETED;
+  if (status === REGISTRATION_STATUS.AWAITING_PARENT && !group) return REGISTRATION_STATUS.DETAILS_COMPLETED;
   return status;
 }
 
@@ -1926,7 +1926,7 @@ export function buildCustomerTools({
         if (open.length === 1) matches = open;
         else if (open.length > 1) {
           const midRegistration = open.filter((s) => [
-            'pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
+            'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
           ].includes(String(s.status || '')));
           if (midRegistration.length === 1) matches = midRegistration;
           else matches = open;
@@ -3073,7 +3073,7 @@ export function buildCustomerTools({
           קבוצה: group ? describeGroup(group) : '',
           סטטוס: botVisibleStudentStatus(s, group),
           ...introCardSection(s),
-          ...(s.status === 'pending_signup' && !group
+          ...(s.status === REGISTRATION_STATUS.AWAITING_PARENT && !group
             ? { הערת_סטטוס: 'אין קבוצה משובצת, ולכן אין להציג את המתאמן כממתין להרשמה' }
             : {}),
           ...registrationProgress(s, group),

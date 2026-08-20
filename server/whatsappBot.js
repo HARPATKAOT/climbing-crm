@@ -18,7 +18,6 @@ export const LEAD_STATUSES = new Set([
   'lead_new',
   'health_signed',
   'details_completed',
-  'pending_signup',
   'awaiting_parent_confirmation',
   'awaiting_centre_confirmation',
   'waitlist',
@@ -936,7 +935,7 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
       const group = groups.find((g) => g.id === s.groupId);
       const latest = latestLevelTest(db, s.id);
       const eligibility = eligibilityForStudent(db, s.id, { season: currentSeason() });
-      const visibleStatus = s.status === 'pending_signup' && !group
+      const visibleStatus = s.status === 'awaiting_parent_confirmation' && !group
         ? 'details_completed'
         : (s.status || '—');
       lines.push(
@@ -948,7 +947,7 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
           return `${eligibleGroup?.name || row.program}=${row.status}`;
         }).join(', ')}`);
       }
-      if (s.status === 'pending_signup' && !group) {
+      if (s.status === 'awaiting_parent_confirmation' && !group) {
         lines.push('הערת מערכת: אין למתאמן קבוצה, ולכן אסור לומר שהוא משובץ או ממתין להרשמה.');
       }
     }

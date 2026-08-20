@@ -20,7 +20,7 @@ test('the sale is scanned through its lines, flagged or named', () => {
 test('the status only ever moves forward, and only for a real trainee', () => {
   const lines = [{ item: { name: 'אימון היכרות' } }];
   assert.equal(shouldMarkIntroPaid({ id: 's1', status: 'health_signed' }, lines), true);
-  assert.equal(shouldMarkIntroPaid({ id: 's1', status: 'pending_signup' }, lines), true);
+  assert.equal(shouldMarkIntroPaid({ id: 's1', status: 'awaiting_parent_confirmation' }, lines), true);
   assert.equal(shouldMarkIntroPaid({ id: 's1', status: 'intro_scheduled' }, lines), true);
   // Already there, or past it — leave alone.
   assert.equal(shouldMarkIntroPaid({ id: 's1', status: 'intro_paid' }, lines), false);

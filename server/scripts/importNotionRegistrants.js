@@ -47,7 +47,7 @@ const SKIP_STATUSES = new Set(['למחיקה', 'לאשפה מוחלטת', 'לי�
 const STATUS_MAP = {
   'רשום': 'past_registered', // הנחיית הבעלים: השנה נגמרה, אף אחד לא "חוג פעיל"
   'רשימת המתנה': 'waitlist',
-  'מחכה להרשמה': 'pending_signup',
+  'מחכה להרשמה': 'awaiting_parent_confirmation',
   'אימון הכירות שולם': 'intro_paid',
   'השתתף באימון ניסיון': 'intro_scheduled',
   'ליד חדש': 'lead_new',
@@ -64,7 +64,7 @@ const STATUS_MAP = {
 };
 
 const STATUS_RANK = {
-  registered: 50, past_registered: 45, health_signed: 40, pending_signup: 35,
+  registered: 50, past_registered: 45, health_signed: 40, awaiting_parent_confirmation: 35,
   intro_paid: 30, intro_scheduled: 25, waitlist: 20, lead_new: 10, archived: 0,
 };
 

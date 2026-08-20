@@ -84,7 +84,6 @@ const STUDENT_STATUS_RANK = {
   past_registered: 45,
   details_completed: 42,
   health_signed: 40,
-  pending_signup: 35,
   intro_paid: 30,
   lead_contacted: 20,
   lead_new: 10,

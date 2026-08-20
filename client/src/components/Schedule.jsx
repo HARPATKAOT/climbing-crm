@@ -2059,10 +2059,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     'registered', 'active', 'awaiting_parent_confirmation',
     'awaiting_centre_confirmation', 'intro_scheduled', 'intro_paid',
   ]);
-  const localSeatCount = members.filter((student) => (
-    capacityStatuses.has(student.status)
-    || (student.status === 'pending_signup' && student.placement_hold_firm === true)
-  )).length;
+  const localSeatCount = members.filter((student) => capacityStatuses.has(student.status)).length;
   const seatedCount = Math.max(localSeatCount, Number(group.enrolled) || 0);
   const hasDefinedCapacity = Number.isFinite(Number(group.maxSlots)) && Number(group.maxSlots) > 0;
 

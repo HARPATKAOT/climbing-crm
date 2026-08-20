@@ -105,13 +105,13 @@ export function holdNoticeForCustomer({ days = HOLD_DAYS } = {}) {
 /**
  * מי שההחזקה שלו פגה ואיש לא דיווח.
  *
- * הסטטוס לא משתנה — המתאמן עדיין ממתין להרשמה, ומי שיסתכל בכרטיס יראה בדיוק
- * את זה. מה שמשתחרר הוא הכיסא: התפוגה כבר עשתה את זה מעצמה בספירה, וכאן רק
- * מסמנים שהצוות צריך לדעת, כדי שההחלטה מה לעשות תישאר של אדם.
+ * הסטטוס לא משתנה — המתאמן עדיין ממתין לאישור הרשמה, ומי שיסתכל בכרטיס יראה
+ * בדיוק את זה. מה שמשתחרר הוא הכיסא: התפוגה כבר עשתה את זה מעצמה בספירה, וכאן
+ * רק מסמנים שהצוות צריך לדעת, כדי שההחלטה מה לעשות תישאר של אדם.
  */
 export function expiredHolds(students = [], now = new Date()) {
   return (students || []).filter((student) => {
-    if (String(student?.status || '') !== 'pending_signup') return false;
+    if (String(student?.status || '') !== 'awaiting_parent_confirmation') return false;
     if (holdIsFirm(student)) return false;
     if (student.placement_hold_released_at) return false;
     const until = String(student.placement_hold_until || '').trim();

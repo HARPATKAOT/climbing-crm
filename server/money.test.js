@@ -80,21 +80,20 @@ test('an unset capacity is unknown, never twelve', () => {
   assert.equal(unknown.isFull, false);
 });
 
-test('a place held for three days is a real place, until the three days pass', () => {
+test('a held place is a real place', () => {
   // A hold that took no seat was not a hold: the same seat was offered to the
-  // next family while the first was still filling in the form. It takes the
-  // seat while it is live, and gives it back the moment it lapses.
+  // next family while the first was still filling in the form. The lifecycle
+  // releases the hold when it lapses, and the status moves with it.
   const group = { id: 'g1', maxSlots: 3 };
-  const now = new Date('2026-08-11T09:00:00Z');
   const students = [
     { id: 's1', groupId: 'g1', status: 'registered' },
-    { id: 's2', groupId: 'g1', status: 'pending_signup', placement_hold_until: '2026-08-14T09:00:00Z' },
+    { id: 's2', groupId: 'g1', status: 'awaiting_parent_confirmation' },
     { id: 's3', groupId: 'g1', status: 'waitlist' },
-    { id: 's4', groupId: 'g1', status: 'pending_signup', placement_hold_until: '2026-08-09T09:00:00Z' },
+    { id: 's4', groupId: 'g1', status: 'health_signed' },
   ];
-  // s1 is registered and s2 is holding; s3 is waitlisted and s4's hold expired.
-  assert.equal(countEnrolled('g1', students, { now }), 2);
-  assert.equal(spotsLeft(group, students, { now }), 1);
+  // s1 is registered and s2 is holding; s3 is waitlisted and s4 only signed.
+  assert.equal(countEnrolled('g1', students), 2);
+  assert.equal(spotsLeft(group, students), 1);
 });
 
 test('a price never lives inside prose', () => {

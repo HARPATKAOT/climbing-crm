@@ -41,13 +41,16 @@ export function employeeForStudent(db, studentId) {
   )) || null;
 }
 
-// „הנחה למתאמנים רשומים” נועדה למי שסגר הרשמה, ולא לכל מי שמשויך לחוג.
-// שורת השיוך נוצרת כבר בשלב שמירת המקום ובייבוא מהעבר, ולכן היא לבדה נתנה
-// את ההנחה גם למי שעדיין „ממתין להרשמה” או ממתין לאישור הורה או מתנ״ס.
-const REGISTERED_STATUSES = new Set(['registered', 'active']);
+// „הנחה למתאמנים רשומים” נועדה למי שההרשמה שלו כבר סגורה, ולא לכל מי שמשויך
+// לחוג: שורת השיוך נוצרת כבר ברגע ששומרים מקום ובייבוא מהעבר, ולכן היא לבדה
+// נתנה את ההנחה גם למי שעוד לא נרשם בכלל.
+//
+// „ממתין לאישור המתנ״ס” נכלל בכוונה — הלקוח כבר דיווח שנרשם במתנ״ס, ורק
+// האישור מהמתנ״ס חסר. די בדיווח הזה כדי לתת את ההנחה בקופה.
+const CLASS_DISCOUNT_STATUSES = new Set(['registered', 'active', 'awaiting_centre_confirmation']);
 
-function isRegisteredStudent(student) {
-  return REGISTERED_STATUSES.has(String(student?.status || '').toLowerCase());
+function earnsClassDiscount(student) {
+  return CLASS_DISCOUNT_STATUSES.has(String(student?.status || '').toLowerCase());
 }
 
 function activeGroupsFor(db, student) {
@@ -68,7 +71,7 @@ export function ruleMatchesStudent(db, rule, studentId) {
     return Boolean(employee && (employee.certifications || []).map(String).includes(String(rule.role)));
   }
   if (rule.audience === DISCOUNT_AUDIENCES.ACTIVE_CLASS) {
-    if (!isRegisteredStudent(student)) return false;
+    if (!earnsClassDiscount(student)) return false;
     const groups = activeGroupsFor(db, student);
     return rule.group_id ? groups.includes(String(rule.group_id)) : groups.length > 0;
   }

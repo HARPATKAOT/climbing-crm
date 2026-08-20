@@ -1560,6 +1560,8 @@ export function migrationDryRun({
     if (student.status === 'health_signed') {
       plannedHolds.push({ student_id: student.id, from: 'health_signed', to: REGISTRATION_STATUS.DETAILS_COMPLETED, status_only: true });
     }
+    // „ממתין להרשמה” בוטל כסטטוס וכל השורות שנשאו אותו הועברו, אבל המסלול הזה
+    // נשאר: הוא הכלי שממיר שורה ישנה כזאת אם תצוץ עוד אחת מייבוא או מגיבוי.
     if (student.status === 'pending_signup') {
       const selectedIds = uniqueStrings(studentGroupIds(student));
       const selectedGroups = selectedIds.map((id) => groupById.get(String(id))).filter(Boolean);

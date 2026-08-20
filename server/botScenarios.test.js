@@ -708,7 +708,7 @@ test('שיבוץ פעמיים באותה שיחה אינו יוצר שתי תז�
 test('«תוציאו אותו מהקבוצה» — השיבוץ מוסר, והטופס שנחתם נשאר חתום', async () => {
   await withSeed({
     groups: [GROUP_GD],
-    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
     ...signedFormFor(['s-yotam']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
@@ -726,12 +726,12 @@ test('«תוציאו את הילד» כששני ילדים משובצים — ה
   await withSeed({
     groups: [GROUP_GD, GROUP_HV],
     students: [
-      childYotam({ status: 'pending_signup', groupId: GROUP_GD.id }),
+      childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id }),
       {
         id: 's-alma',
         name: 'עלמה כהן',
         parentId: PARENT.id,
-        status: 'pending_signup',
+        status: 'awaiting_parent_confirmation',
         groupId: GROUP_HV.id,
         birthDate: '2015-04-01',
       },
@@ -903,7 +903,7 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
 test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא נסגר', async () => {
   await withSeed({
     parents: [PARENT],
-    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
     groups: [GROUP_GD],
     student_equipment: [
       { id: 'se-open', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
@@ -1138,7 +1138,7 @@ test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב ז�
   // שהפעולה נקלטה במערכת”. היא לא שאלה על פעולה — היא דיווחה על אחת.
   await withSeed({
     parents: [PARENT],
-    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
     groups: [GROUP_GD],
     health_declarations: [declarationFor('s-yotam')],
     participation_waivers: [waiverFor('s-yotam')],
@@ -1174,7 +1174,7 @@ test('הלקוחה מדווחת שנרשמה, והמודל מדבר סביב ז�
 test('נרשם ישירות במתנ״ס — הדיווח מחזיר שחסר טופס ההשתתפות ושאי אפשר לשבץ בלעדיו', async () => {
   await withSeed({
     parents: [PARENT],
-    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
     groups: [GROUP_GD],
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
@@ -1190,7 +1190,7 @@ test('נרשם ישירות במתנ״ס — הדיווח מחזיר שחסר ט
 test('הרשמה במתנ״ס כשהמסמכים חתומים — אין מה לבקש', async () => {
   await withSeed({
     parents: [PARENT],
-    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    students: [childYotam({ status: 'awaiting_parent_confirmation', groupId: GROUP_GD.id })],
     groups: [GROUP_GD],
     ...signedFormFor(['s-yotam']),
   }, async () => {
@@ -1610,13 +1610,13 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
   await withSeed({
     groups: [GROUP_GD],
     students: [
-      childYotam({ groupId: GROUP_GD.id, status: 'pending_signup' }),
+      childYotam({ groupId: GROUP_GD.id, status: 'awaiting_parent_confirmation' }),
       {
         id: 's-alma',
         name: 'עלמה כהן',
         parentId: PARENT.id,
         // סטטוס שנשאר מכרטיס ישן, בלי קבוצה מאחוריו.
-        status: 'pending_signup',
+        status: 'awaiting_parent_confirmation',
         groupId: null,
         birthDate: '2015-04-01',
       },
@@ -1627,7 +1627,7 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
     const card = await tools.getFamilyCard();
 
     const [yotam, alma] = card.ילדים;
-    assert.equal(yotam.סטטוס, 'pending_signup');
+    assert.equal(yotam.סטטוס, 'awaiting_parent_confirmation');
     assert.match(yotam.קבוצה, /ג׳-ד׳/);
     assert.ok(yotam.גיל && yotam.גיל !== 'לא ידוע');
 

@@ -25,9 +25,9 @@ test('waitlist and archived do not take a seat', () => {
   assert.equal(isGroupFull(group, students), true);
 });
 
-test('pending signup records the choice but does not reserve capacity', () => {
+test('a signed declaration records the choice but does not reserve capacity', () => {
   const pending = [
-    { id: 'p1', groupId: 'g1', status: 'pending_signup', placement_hold_firm: true },
+    { id: 'p1', groupId: 'g1', status: 'health_signed' },
   ];
   assert.equal(countEnrolled('g1', pending), 0);
   assert.equal(spotsLeft(group, pending), 2);

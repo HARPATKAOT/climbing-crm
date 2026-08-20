@@ -36,7 +36,6 @@ import { isOptedOut } from './whatsappBot.js';
 export const SWEEPABLE_STATUSES = new Set([
   'details_completed',
   'health_signed',
-  'pending_signup',
   'awaiting_parent_confirmation',
   'registered',
 ]);

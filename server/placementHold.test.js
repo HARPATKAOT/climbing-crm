@@ -75,11 +75,11 @@ test('שלושה ימים, ונאמר להורה בדיוק מה זה אומר',
 test('רק החזקה שפגה ולא דווחה משתחררת', () => {
   const now = new Date('2026-08-11T09:00:00Z');
   const rows = expiredHolds([
-    { id: 'a', status: 'pending_signup', placement_hold_until: '2026-08-09T09:00:00Z' },
-    { id: 'b', status: 'pending_signup', placement_hold_until: '2026-08-09T09:00:00Z', placement_hold_firm: true },
-    { id: 'c', status: 'pending_signup', placement_hold_until: '2026-08-20T09:00:00Z' },
+    { id: 'a', status: 'awaiting_parent_confirmation', placement_hold_until: '2026-08-09T09:00:00Z' },
+    { id: 'b', status: 'awaiting_parent_confirmation', placement_hold_until: '2026-08-09T09:00:00Z', placement_hold_firm: true },
+    { id: 'c', status: 'awaiting_parent_confirmation', placement_hold_until: '2026-08-20T09:00:00Z' },
     { id: 'd', status: 'registered', placement_hold_until: '2026-08-09T09:00:00Z' },
-    { id: 'e', status: 'pending_signup' },
+    { id: 'e', status: 'awaiting_parent_confirmation' },
   ], now);
   assert.deepEqual(rows.map((r) => r.id), ['a']);
 });

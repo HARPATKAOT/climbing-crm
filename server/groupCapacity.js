@@ -26,21 +26,13 @@ export const CAPACITY_INCLUDED_STATUSES = new Set([
   'intro_paid',
 ]);
 
-/**
- * Canonical lifecycle states reserve capacity. Legacy `pending_signup` rows
- * count only while their old hold deadline is still live.
- */
-export function countsTowardCapacity(student, groupId, { now = new Date() } = {}) {
+/** Canonical lifecycle states reserve capacity; nothing else takes a seat. */
+export function countsTowardCapacity(student, groupId) {
   if (!student || !groupId) return false;
   if (!studentInGroup(student, groupId)) return false;
   const status = String(student.status || '');
   if (CAPACITY_EXCLUDED_STATUSES.has(status)) return false;
-  if (CAPACITY_INCLUDED_STATUSES.has(status)) return true;
-  if (status === 'pending_signup') {
-    const until = String(student.placement_hold_until || '').trim();
-    return Boolean(until) && new Date(until).getTime() > new Date(now).getTime();
-  }
-  return false;
+  return CAPACITY_INCLUDED_STATUSES.has(status);
 }
 
 export function countEnrolled(groupId, students = [], options = {}) {

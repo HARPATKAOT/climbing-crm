@@ -414,7 +414,7 @@ function statusEnteredAt(student, status, store = db) {
 }
 
 /**
- * Trainees held as "ממתין להרשמה" for longer than `days`.
+ * Trainees held as "שמור · ממתין לאישור הרשמה" for longer than `days`.
  * @returns {{ student: object, daysWaiting: number }[]}
  */
 export function findStalledSignups({ days = 5, today = israelDateStr(), store = db } = {}) {
@@ -423,9 +423,9 @@ export function findStalledSignups({ days = 5, today = israelDateStr(), store = 
   const todayMs = Date.parse(`${today}T00:00:00`);
   const cutoffMs = todayMs - days * 86400000;
   return (store.get('students') || [])
-    .filter((s) => String(s.status || '') === 'pending_signup')
+    .filter((s) => String(s.status || '') === 'awaiting_parent_confirmation')
     .map((student) => {
-      const enteredAt = statusEnteredAt(student, 'pending_signup', store);
+      const enteredAt = statusEnteredAt(student, 'awaiting_parent_confirmation', store);
       if (!Number.isFinite(enteredAt)) return null;
       if (enteredAt > cutoffMs) return null;
       return {

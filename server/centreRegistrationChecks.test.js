@@ -44,7 +44,7 @@ function testDb(seed = []) {
 function seatedDb() {
   const db = testDb();
   db.store.students = [{
-    id: 'st-shani', name: 'שני שינברג', status: 'pending_signup', groupId: 'g-1', groupIds: ['g-1'],
+    id: 'st-shani', name: 'שני שינברג', status: 'awaiting_parent_confirmation', groupId: 'g-1', groupIds: ['g-1'],
   }];
   db.store.groups = [{ id: 'g-1', name: 'נבחרת בוגרת', maxSlots: 13 }];
   db.store.group_placement_holds = [];
@@ -62,7 +62,7 @@ const SUNDAY_10 = new Date('2026-08-09T10:05:00+03:00');
 const TUESDAY_8 = new Date('2026-08-11T08:05:00+03:00');
 const MONDAY_8 = new Date('2026-08-10T08:05:00+03:00');
 
-const RANI = { id: 'st-rani', name: 'רני חורב', status: 'pending_signup' };
+const RANI = { id: 'st-rani', name: 'רני חורב', status: 'awaiting_parent_confirmation' };
 const MOTHER = { id: 'p-yael', name: 'יעל חורב', phone: '972528310928' };
 
 test('השאלה נשלחת ביום ראשון בבוקר, ושוב בשלישי — לא בכל שעה', () => {
@@ -86,7 +86,7 @@ test('דיווח של הורה נאסף פעם אחת, גם אם הוא חוזר
 test('הודעה אחת לכרמית עם כל השמות, ולא הודעה לכל ילד', async () => {
   const db = testDb();
   await recordParentReport({ db, student: RANI, parent: MOTHER, now: SUNDAY_8 });
-  await recordParentReport({ db, student: { id: 'st-omer', name: 'עומר בזר', status: 'pending_signup' }, parent: MOTHER, now: SUNDAY_8 });
+  await recordParentReport({ db, student: { id: 'st-omer', name: 'עומר בזר', status: 'awaiting_parent_confirmation' }, parent: MOTHER, now: SUNDAY_8 });
 
   const due = dueForDigest(db, SUNDAY_8);
   assert.equal(due.length, 2);
@@ -163,10 +163,10 @@ test('בלי קבוצה אין מה להחזיק — הדיווח נרשם וה�
 
 test('אחרי שהורה דיווח שנרשם לא שואלים אותו שוב אם נרשם', async () => {
   const db = testDb();
-  const sibling = { id: 's-2', name: 'אחיו', status: 'pending_signup' };
+  const sibling = { id: 's-2', name: 'אחיו', status: 'awaiting_parent_confirmation' };
   await recordParentReport({ db, student: RANI, parent: MOTHER, now: SUNDAY_8 });
   const waiting = studentsStillAwaitingRegistration(db, [
-    { ...RANI, status: 'pending_signup' },
+    { ...RANI, status: 'awaiting_parent_confirmation' },
     sibling,
   ]);
   assert.deepEqual(waiting.map((student) => student.id), ['s-2']);

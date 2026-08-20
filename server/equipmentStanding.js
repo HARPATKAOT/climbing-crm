@@ -43,7 +43,7 @@ function firstNameOf(name) {
  * the trainee, not a demand on the parent.
  */
 const OWES_EQUIPMENT_STATUSES = new Set([
-  'pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
+  'awaiting_parent_confirmation', 'awaiting_centre_confirmation',
   'registered', 'active',
 ]);
 

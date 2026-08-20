@@ -4,7 +4,6 @@ export const FUNNEL_STAGES = [
   'lead_new',
   'details_completed',
   'health_signed',
-  'pending_signup',
   'intro_scheduled',
   'intro_paid',
   'awaiting_parent_confirmation',

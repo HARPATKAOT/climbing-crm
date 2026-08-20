@@ -63,7 +63,6 @@ export function findOpenCheck(db, studentId) {
 /** Pending trainees the follow-up may still ask about. A parent report closes the question. */
 export function studentsStillAwaitingRegistration(db, students = []) {
   return (students || []).filter((student) => [
-    'pending_signup',
     REGISTRATION_STATUS.AWAITING_PARENT,
   ].includes(String(student?.status || ''))
     && !findOpenCheck(db, student.id));
@@ -115,7 +114,7 @@ export async function recordParentReport({ db, persist, student, parent, now = n
   }
   // A trainee with no seat at all keeps only the report: there is nothing to
   // hold, and inventing one would promise a place nobody gave them.
-  if (!advanced.ok && String(student.status || '') === 'pending_signup') {
+  if (!advanced.ok && String(student.status || '') === REGISTRATION_STATUS.AWAITING_PARENT) {
     await markPlacementReported({ db, persist, student, now });
   } else if (!advanced.ok) {
     return { ok: false, error: advanced.reason || 'אין שמירת מקום פעילה', reason: advanced.reason };

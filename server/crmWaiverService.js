@@ -169,7 +169,6 @@ function wantsWaiverReuse(participant) {
 const FORM_STATUS_PRESERVE = new Set([
   'registered',
   'active',
-  'pending_signup',
   'details_completed',
   'awaiting_parent_confirmation',
   'awaiting_centre_confirmation',

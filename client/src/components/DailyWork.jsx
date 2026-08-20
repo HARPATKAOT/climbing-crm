@@ -30,7 +30,6 @@ const FUNNEL_PLACEHOLDER = [
   'lead_new',
   'details_completed',
   'health_signed',
-  'pending_signup',
   'intro_scheduled',
   'intro_paid',
   'registered',

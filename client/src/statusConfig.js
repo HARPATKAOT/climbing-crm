@@ -19,8 +19,10 @@ export const STATUSES = {
   lead_new:         { label: 'ליד חדש', badge: 'badge-blue',   color: '#818CF8', icon: UserPlus },
   details_completed:{ label: 'מילא פרטים', badge: 'badge-cyan', color: '#67E8F9', icon: ClipboardList },
   health_signed:    { label: 'חתם הצהרה', badge: 'badge-amber',  color: '#FCD34D', icon: FileHeart },
-  pending_signup:   { label: 'ממתין להרשמה', badge: 'badge-amber',  color: '#FBBF24', icon: Clock3 },
-  awaiting_parent_confirmation: { label: 'שמור · ממתין לאישור הורה', badge: 'badge-amber', color: '#FBBF24', icon: UserCheck },
+  // „ממתין לאישור הרשמה” ולא „לאישור הורה”: מי שנרשם לעצמו אין לו הורה שיאשר,
+  // והמצב זהה — שמור לו מקום והוא עוד לא סגר את ההרשמה. הסטטוס הזה בלע גם את
+  // „ממתין להרשמה” הישן, שאמר בדיוק את אותו הדבר בלי שמירת מקום מאחוריו.
+  awaiting_parent_confirmation: { label: 'שמור · ממתין לאישור הרשמה', badge: 'badge-amber', color: '#FBBF24', icon: UserCheck },
   awaiting_centre_confirmation: { label: 'שמור · ממתין למתנ״ס', badge: 'badge-purple', color: '#C084FC', icon: Building2 },
   intro_scheduled:  { label: 'נקבע אימון הכירות', badge: 'badge-cyan',  color: '#67E8F9', icon: CalendarClock },
   intro_paid:       { label: 'שילם - ממתין להכירות', badge: 'badge-purple', color: '#C084FC', icon: CreditCard },
@@ -37,7 +39,6 @@ export const STATUS_PROGRESS_ORDER = [
   'lead_new',
   'details_completed',
   'health_signed',
-  'pending_signup',
   'awaiting_parent_confirmation',
   'awaiting_centre_confirmation',
   'intro_scheduled',
@@ -53,7 +54,6 @@ export const FUNNEL_STAGE_ORDER = [
   'lead_new',
   'details_completed',
   'health_signed',
-  'pending_signup',
   'intro_scheduled',
   'intro_paid',
   'awaiting_parent_confirmation',

@@ -13,13 +13,13 @@ function fakeStore(tables = {}) {
 test('a hold older than the window is reported, a fresh one is not', () => {
   const store = fakeStore({
     students: [
-      { id: 's1', name: 'נועם', status: 'pending_signup' },
-      { id: 's2', name: 'רותם', status: 'pending_signup' },
+      { id: 's1', name: 'נועם', status: 'awaiting_parent_confirmation' },
+      { id: 's2', name: 'רותם', status: 'awaiting_parent_confirmation' },
       { id: 's3', name: 'רשום כבר', status: 'registered' },
     ],
     lead_status_history: [
-      { entity_id: 's1', to_status: 'pending_signup', changed_at: daysAgo(9) },
-      { entity_id: 's2', to_status: 'pending_signup', changed_at: daysAgo(1) },
+      { entity_id: 's1', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(9) },
+      { entity_id: 's2', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(1) },
     ],
   });
 
@@ -30,11 +30,11 @@ test('a hold older than the window is reported, a fresh one is not', () => {
 
 test('the newest entry into the status is the one that counts', () => {
   const store = fakeStore({
-    students: [{ id: 's1', name: 'נועם', status: 'pending_signup' }],
+    students: [{ id: 's1', name: 'נועם', status: 'awaiting_parent_confirmation' }],
     lead_status_history: [
-      { entity_id: 's1', to_status: 'pending_signup', changed_at: daysAgo(40) },
+      { entity_id: 's1', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(40) },
       // Placed again two days ago — that is the wait the team should see.
-      { entity_id: 's1', to_status: 'pending_signup', changed_at: daysAgo(2) },
+      { entity_id: 's1', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(2) },
     ],
   });
   assert.deepEqual(findStalledSignups({ days: 5, today: TODAY, store }), []);
@@ -43,7 +43,7 @@ test('the newest entry into the status is the one that counts', () => {
 test('a hold with no history row still ages, from the record itself', () => {
   const store = fakeStore({
     students: [
-      { id: 's1', name: 'ותיק', status: 'pending_signup', updated_at: daysAgo(30) },
+      { id: 's1', name: 'ותיק', status: 'awaiting_parent_confirmation', updated_at: daysAgo(30) },
     ],
     lead_status_history: [],
   });
@@ -54,12 +54,12 @@ test('a hold with no history row still ages, from the record itself', () => {
 test('the longest wait comes first', () => {
   const store = fakeStore({
     students: [
-      { id: 's1', name: 'שבוע', status: 'pending_signup' },
-      { id: 's2', name: 'חודש', status: 'pending_signup' },
+      { id: 's1', name: 'שבוע', status: 'awaiting_parent_confirmation' },
+      { id: 's2', name: 'חודש', status: 'awaiting_parent_confirmation' },
     ],
     lead_status_history: [
-      { entity_id: 's1', to_status: 'pending_signup', changed_at: daysAgo(7) },
-      { entity_id: 's2', to_status: 'pending_signup', changed_at: daysAgo(30) },
+      { entity_id: 's1', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(7) },
+      { entity_id: 's2', to_status: 'awaiting_parent_confirmation', changed_at: daysAgo(30) },
     ],
   });
   assert.deepEqual(

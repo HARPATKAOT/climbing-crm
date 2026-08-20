@@ -536,6 +536,7 @@ test('migration dry-run blocks uncertain, overloaded and unverified records', ()
     groups: [{ ...group, maxSlots: 1 }],
     students: [
       { id: 'registered', status: 'registered', groupId: group.id },
+      // שורות ישנות עם הסטטוס שבוטל — זה בדיוק מה שההמרה הזאת קיימת בשבילו.
       { id: 'pending', status: 'pending_signup', groupId: group.id },
       { id: 'missing', status: 'pending_signup', groupId: 'missing-group' },
       { id: 'signed', status: 'health_signed' },
