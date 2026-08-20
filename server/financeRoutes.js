@@ -98,6 +98,10 @@ financeRouter.post('/nightly-scheduled', requireCronSecret, async (_req, res) =>
   }
 });
 
+// החזרה ממסך ההסכמה של גוגל — לפני שומר ההרשאות, כמו שאר ה-callbacks
+// של גוגל: הדפדפן מגיע לכאן בלי כותרת Authorization. ההגנה היא state חתום.
+financeRouter.get('/gmail/oauth/callback', gmailOAuthCallback);
+
 financeRouter.use((req, res, next) => {
   if (!hasSensitiveAccess(req.crmUser, 'finance')) {
     return res.status(403).json({ error: 'אין הרשאה לצפות בנתונים פיננסיים' });
@@ -912,8 +916,6 @@ export async function gmailOAuthCallback(req, res) {
 }
 
 // ─── חיבור Gmail לקליטת חשבוניות (חסם B2) ─────────────────────
-
-financeRouter.get('/gmail/oauth/callback', gmailOAuthCallback);
 
 financeRouter.get('/gmail/status', async (_req, res) => {
   try {
