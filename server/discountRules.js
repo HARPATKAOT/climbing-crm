@@ -41,6 +41,15 @@ export function employeeForStudent(db, studentId) {
   )) || null;
 }
 
+// „הנחה למתאמנים רשומים” נועדה למי שסגר הרשמה, ולא לכל מי שמשויך לחוג.
+// שורת השיוך נוצרת כבר בשלב שמירת המקום ובייבוא מהעבר, ולכן היא לבדה נתנה
+// את ההנחה גם למי שעדיין „ממתין להרשמה” או ממתין לאישור הורה או מתנ״ס.
+const REGISTERED_STATUSES = new Set(['registered', 'active']);
+
+function isRegisteredStudent(student) {
+  return REGISTERED_STATUSES.has(String(student?.status || '').toLowerCase());
+}
+
 function activeGroupsFor(db, student) {
   const enrollments = db.get('enrollments') || [];
   const enrolled = activeEnrollmentGroupIds(enrollments, student?.id);
@@ -59,6 +68,7 @@ export function ruleMatchesStudent(db, rule, studentId) {
     return Boolean(employee && (employee.certifications || []).map(String).includes(String(rule.role)));
   }
   if (rule.audience === DISCOUNT_AUDIENCES.ACTIVE_CLASS) {
+    if (!isRegisteredStudent(student)) return false;
     const groups = activeGroupsFor(db, student);
     return rule.group_id ? groups.includes(String(rule.group_id)) : groups.length > 0;
   }

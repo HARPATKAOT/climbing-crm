@@ -32,6 +32,17 @@ test('class rule can cover every active enrollment or one group', () => {
   assert.deepEqual(matchingDiscountRules(db, 's1').map((r) => r.id), ['all', 'g1']);
 });
 
+test('a class rule skips a student who is only placed, not registered', () => {
+  const rules = [{ id: 'all', active: true, audience: 'active_class', group_id: '' }];
+  const enrollments = [{ id: 'en1', student_id: 's1', group_id: 'g1', status: 'active' }];
+  for (const status of ['pending_signup', 'awaiting_parent_confirmation', 'awaiting_centre_confirmation', 'lead_new']) {
+    const db = fakeDb({ students: [{ id: 's1', status }], enrollments, discount_rules: rules });
+    assert.deepEqual(matchingDiscountRules(db, 's1'), [], `status ${status} must not earn the class discount`);
+  }
+  const registered = fakeDb({ students: [{ id: 's1', status: 'registered' }], enrollments, discount_rules: rules });
+  assert.deepEqual(matchingDiscountRules(registered, 's1').map((r) => r.id), ['all']);
+});
+
 test('a rule becomes a multi-part reusable offer', () => {
   const rule = normalizeDiscountRule({
     name: 'מדריכי נוער', audience: 'employee_role', role: 'מדריך נוער',
