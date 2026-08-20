@@ -584,19 +584,30 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   // היתרה האמיתית, מה שקדם לו סגור. בלי איפוס נופלים לחלון מתגלגל, אחרת המספר
   // רק גדל ולעולם לא חוזר ל"תקין".
   const discrepancyWindow = useMemo(() => {
-    const windowStart = Date.now() - DISCREPANCY_WINDOW_DAYS * 86400000;
-    const resetAt = cashSession?.last_reset_at
-      ? new Date(cashSession.last_reset_at).getTime()
-      : NaN;
-    if (Number.isFinite(resetAt) && resetAt > windowStart) {
-      return { since: resetAt, label: 'מאז האיפוס' };
-    }
-    return { since: windowStart, label: `${DISCREPANCY_WINDOW_DAYS} יום` };
+    const candidates = [
+      { since: Date.now() - DISCREPANCY_WINDOW_DAYS * 86400000, label: `${DISCREPANCY_WINDOW_DAYS} יום` },
+      // המעבר מבדיקות לעבודה אמיתית — לפניו אין מה לספור
+      { since: new Date(`${cashSession?.go_live_from}T00:00:00`).getTime(), label: 'מתחילת העבודה' },
+      { since: new Date(cashSession?.last_reset_at || '').getTime(), label: 'מאז האיפוס' },
+    ].filter((c) => Number.isFinite(c.since));
+    return candidates.reduce((latest, c) => (c.since > latest.since ? c : latest));
   }, [cashSession]);
+
+  // סגירות מתקופת הבדיקות שלפני המעבר לעבודה אמיתית לא מוצגות בכלל, אחרת
+  // הכרטיס למעלה והטבלה למטה מספרים שני סיפורים שונים.
+  const liveShifts = useMemo(() => {
+    const goLive = new Date(`${cashSession?.go_live_from}T00:00:00`).getTime();
+    if (!Number.isFinite(goLive)) return shifts;
+    return shifts.filter((s) => {
+      const stamp = s.closed_at || s.created_at || s.date;
+      const time = stamp ? new Date(stamp).getTime() : NaN;
+      return Number.isFinite(time) && time >= goLive;
+    });
+  }, [shifts, cashSession]);
 
   const problemShifts = useMemo(() => {
     const cutoff = discrepancyWindow.since;
-    return shifts.filter((s) => {
+    return liveShifts.filter((s) => {
       const discrepancy = Number(s.discrepancy);
       if (!Number.isFinite(discrepancy) || discrepancy === 0) return false;
       const stamp = s.closed_at || s.created_at || s.date;
@@ -604,7 +615,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       if (!Number.isFinite(time)) return false;
       return time >= cutoff;
     }).length;
-  }, [shifts, discrepancyWindow]);
+  }, [liveShifts, discrepancyWindow]);
 
   const pendingPayments = payments.filter((p) => p.status === 'pending');
 
@@ -1163,14 +1174,14 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                   </tr>
                 </thead>
                 <tbody>
-                  {shifts.length === 0 && (
+                  {liveShifts.length === 0 && (
                     <tr>
                       <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
                         עדיין אין סגירות קופה שמורות
                       </td>
                     </tr>
                   )}
-                  {shifts.map((s) => (
+                  {liveShifts.map((s) => (
                     <tr key={s.id}>
                       <td>{cashClosureDateTime(s)}</td>
                       <td><span className="badge badge-blue">{s.shift}</span></td>

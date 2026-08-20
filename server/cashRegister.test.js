@@ -12,6 +12,8 @@ import {
   discrepancyByEmployee,
   getLastResetAt,
   sessionSnapshot,
+  CASH_GO_LIVE_KEY,
+  CASH_GO_LIVE_DEFAULT,
   LEDGER_ACTIONS,
 } from './cashRegister.js';
 
@@ -21,13 +23,16 @@ const PLAIN_EMPLOYEE = { id: 'emp-plain', name: 'דני', is_active: true, can_o
 const OPERATOR_BODY = { employee_id: CASH_OPERATOR.id, employee_name: CASH_OPERATOR.name };
 
 function makeStore(seed = {}) {
+  const { appSettings = {}, ...tables } = seed;
   const data = {
     cash_register_sessions: [],
     cash_ledger: [],
     employees: [CASH_OPERATOR, PLAIN_EMPLOYEE],
-    ...seed,
+    ...tables,
   };
   return {
+    getAppSettingLocal: (key) => appSettings[key],
+    setAppSettingLocal: (key, value) => { appSettings[key] = value; },
     get: (t) => data[t] || [],
     getOne: (t, id) => (data[t] || []).find((r) => r.id === id) || null,
     insert: (t, row) => {
@@ -278,6 +283,7 @@ test('ledger running: open/reset gap vs books; fill/empty adjust balance', () =>
 
 test('פערי סגירה נצברים לפי מי שסגר — חוסר ועודף בנפרד', () => {
   const store = makeStore({
+    appSettings: { [CASH_GO_LIVE_KEY]: { from: '2026-07-01' } },
     cash_register_sessions: [
       {
         id: 's1', status: 'closed', closed_at: '2026-08-01T10:00:00.000Z',
@@ -361,4 +367,43 @@ test('getLastResetAt מחזיר את הספירה או האיפוס האחרונ
   });
   assert.ok(getLastResetAt(store) >= first);
   assert.equal(sessionSnapshot(store).last_reset_at, getLastResetAt(store));
+});
+
+test('תקופת הבדיקות שלפני המעבר לעבודה לא נספרת, גם ב"הכל"', () => {
+  const sessions = [
+    {
+      id: 'test1', status: 'closed', closed_at: '2026-08-09T05:12:18.000Z',
+      closed_by_id: 'emp-a', closed_by_name: 'אבי',
+      expected_at_close: 1000, closing_actual: 270, discrepancy: -730,
+    },
+    {
+      id: 'real1', status: 'closed', closed_at: '2026-08-21T18:00:00.000Z',
+      closed_by_id: 'emp-a', closed_by_name: 'אבי',
+      expected_at_close: 410, closing_actual: 400, discrepancy: -10,
+    },
+  ];
+
+  // בלי הגדרה — נופלים לתאריך המעבר שבקוד
+  const store = makeStore({ cash_register_sessions: sessions });
+  assert.equal(sessionSnapshot(store).go_live_from, CASH_GO_LIVE_DEFAULT);
+  const report = discrepancyByEmployee(store, {});
+  assert.equal(report.from, CASH_GO_LIVE_DEFAULT);
+  assert.equal(report.totals.closes, 1);
+  assert.equal(report.totals.shortage_total, 10);
+
+  // בקשה לטווח מוקדם יותר לא פותחת את תקופת הבדיקות
+  const stretched = discrepancyByEmployee(store, { from: '2026-01-01' });
+  assert.equal(stretched.from, CASH_GO_LIVE_DEFAULT);
+  assert.equal(stretched.totals.closes, 1);
+
+  // טווח צר יותר מהמעבר כן מכובד
+  const narrow = discrepancyByEmployee(store, { from: '2026-08-22' });
+  assert.equal(narrow.totals.closes, 0);
+
+  // הזזת התאריך בהגדרה מחזירה את התקופה הישנה בלי גרסה חדשה
+  const moved = makeStore({
+    appSettings: { [CASH_GO_LIVE_KEY]: { from: '2026-08-01' } },
+    cash_register_sessions: sessions,
+  });
+  assert.equal(discrepancyByEmployee(moved, {}).totals.closes, 2);
 });

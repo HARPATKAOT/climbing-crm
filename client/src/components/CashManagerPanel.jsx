@@ -315,6 +315,15 @@ export default function CashManagerPanel({
             ))}
           </div>
 
+          {gapReport?.from && (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+              הנתונים מ־{gapDateLabel(gapReport.from)}
+              {gapReport.from === gapReport.go_live_from
+                ? ' — היום שבו הקופה עברה לעבודה אמיתית. מה שקדם לו היה בדיקות ואינו נספר.'
+                : ''}
+            </div>
+          )}
+
           {gapError && (
             <div style={{ color: '#FCA5A5', marginBottom: 10 }}>{gapError}</div>
           )}

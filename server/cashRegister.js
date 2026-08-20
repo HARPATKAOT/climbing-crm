@@ -161,6 +161,20 @@ export function getLastResetAt(store) {
   return latest;
 }
 
+/**
+ * היום שבו הקופה עברה לעבודה אמיתית. כל מה שנרשם לפניו היה בדיקות של המערכת,
+ * ואסור לו להיספר בשום סטטיסטיקה — סכומי חוסר מהתקופה ההיא נראים כמו כסף חסר
+ * ואינם. להזזת התאריך אין צורך בגרסה חדשה: הערך נשמר תחת המפתח שלמטה.
+ */
+export const CASH_GO_LIVE_KEY = 'cash_register_go_live';
+export const CASH_GO_LIVE_DEFAULT = '2026-08-20';
+
+export function getCashGoLive(store) {
+  const stored = store.getAppSettingLocal?.(CASH_GO_LIVE_KEY);
+  const from = typeof stored === 'string' ? stored : stored?.from;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(from || '')) ? from : CASH_GO_LIVE_DEFAULT;
+}
+
 export function sessionSnapshot(store) {
   const open = getOpenSession(store);
   const lastClosed = getLastClosedSession(store);
@@ -171,6 +185,7 @@ export function sessionSnapshot(store) {
     expected_cash: expected,
     can_sell_cash: !!open,
     last_reset_at: getLastResetAt(store),
+    go_live_from: getCashGoLive(store),
     suggested_opening: lastClosed?.closing_actual != null
       ? roundMoney(lastClosed.closing_actual)
       : expected,
@@ -509,10 +524,14 @@ export function listLedger(store, { type, from, to, limit = 200 } = {}) {
  * הוא הסיפור שמחפשים, וסכום נטו לבדו היה מסתיר אותו.
  */
 export function discrepancyByEmployee(store, { from, to } = {}) {
+  // תקופת הבדיקות לפני המעבר לעבודה אמיתית לא נספרת, גם כשמבקשים "הכל".
+  const goLive = getCashGoLive(store);
+  const start = from && from > goLive ? from : goLive;
+
   const inRange = (stamp) => {
     const day = String(stamp || '').slice(0, 10);
     if (!day) return false;
-    if (from && day < from) return false;
+    if (day < start) return false;
     if (to && day > to) return false;
     return true;
   };
@@ -603,8 +622,9 @@ export function discrepancyByEmployee(store, { from, to } = {}) {
       surplus_total: roundMoney(rows.reduce((s, r) => s + r.surplus_total, 0)),
       net: roundMoney(rows.reduce((s, r) => s + r.net, 0)),
     },
-    from: from || null,
+    from: start,
     to: to || null,
+    go_live_from: goLive,
   };
 }
 
