@@ -203,12 +203,6 @@ export default function PosSale({
   // כפתור „הסרה” שלא מסיר כלום הוא גרוע יותר מכפתור שלא קיים.
   const [dismissedCoupons, setDismissedCoupons] = useState(() => new Set());
   const [newClimberState, setNewClimberState] = useState(null); // null | 'sending' | string
-  // יעד נפרד לטופס ההשתתפות, ולא טלפון החשבונית.
-  //
-  // מי שעומד בדלפק אינו בהכרח מי שחותם: ילד מגיע עם דוד או עם אח בוגר,
-  // והחתימה חייבת להיות של ההורה. אם השדה הזה היה משותף עם טלפון החשבונית,
-  // הקלדת מספר ההורה הייתה משנה למי נרשמת המכירה.
-  const [formPhone, setFormPhone] = useState('');
   // הקבלה האחרונה נשמרת כדי שאפשר יהיה לנסות להדפיס שוב בלי למכור מחדש.
   // בלי זה כל בדיקה של המדפסת עולה עסקה, וכל תקלה מסתיימת בחשבונית ידנית.
   const [lastReceipt, setLastReceipt] = useState(null);
@@ -384,6 +378,20 @@ export default function PosSale({
     return students.filter((s) => String(s.parentId) === String(selectedParent.id));
   }, [students, selectedParent]);
 
+  /**
+   * מי רשום על התיק הזה — השמות שמותר למכור להם כניסה לקיר.
+   *
+   * בדרך כלל אלה ילדי ההורה שנבחר. מתאמן בוגר שאין מעליו תיק הורה לא היה
+   * מופיע ברשימה הזאת בכלל, והמסך היה אומר „אין מתאמנים” על מי שעומד מולו.
+   */
+  const householdClimbers = useMemo(() => {
+    const list = [...childrenOfSelectedParent];
+    if (selectedStudent && !list.some((child) => String(child.id) === String(selectedStudent.id))) {
+      list.unshift(selectedStudent);
+    }
+    return list;
+  }, [childrenOfSelectedParent, selectedStudent]);
+
   const externalParticipantSuggestions = useMemo(() => {
     const query = externalParticipantQuery.trim().toLowerCase();
     if (query.length < 2 || !selectedParent?.id) return [];
@@ -540,9 +548,7 @@ export default function PosSale({
     setWalkInPhone('');
     setWalkInEmail('');
     setShowContactFields(false);
-    // יעד הטופס נגזר מהלקוח שנבחר. אם הוא נשאר אחרי החלפת לקוח, השליחה הבאה
-    // תלך למספר של מי שכבר הלך.
-    setFormPhone('');
+    // הקוד לסריקה וההודעה שייכים ללקוח שהיה כאן, ולא ללקוח הבא.
     setFormQr('');
     setNewClimberState(null);
     setFormWatchPhone('');
@@ -719,16 +725,13 @@ export default function PosSale({
    * פתיחת תיק על סמך שם שהוקלד בדלפק מייצרת לקוחות חצי-ריקים ששמם נכתב
    * בשמיעה, ואת הפרטים האמיתיים הוא ימסור בעצמו בטופס. לכן נשלח רק הקישור.
    *
-   * היעד אינו בהכרח מי שקונה: לקוח ותיק עם אישור בתוקף מגיע עם ילד שאין לו,
-   * והחותם הוא ההורה — לפעמים כזה שאינו עומד כאן בכלל.
+   * היעד הוא הלקוח שזוהה. הורה שאינו רשום אצלנו מגיע דרך שורת החיפוש:
+   * מקלידים את מספרו, המערכת לא מוצאת אותו, והמסגרת הכתומה שולחת לשם.
    */
-  // מספר שהוקלד ידנית גובר: הוא נכתב בדיוק כדי לעקוף את ברירת המחדל.
-  const typedFormPhone = String(formPhone || '').trim();
-  const defaultFormPhone = String(searchPhone || walkInPhone || selectedParent?.phone || '').trim();
-  const formTargetPhone = typedFormPhone || defaultFormPhone;
-  // שם נשלח רק כשידוע בוודאות למי. מספר שהוקלד ביד יכול להיות של הורה אחר,
-  // והודעה שפותחת בשם של מי שעומד בדלפק תגיע לאדם הלא נכון.
-  const formTargetName = (typedFormPhone || searchPhone)
+  const formTargetPhone = String(searchPhone || walkInPhone || selectedParent?.phone || '').trim();
+  // שם נשלח רק כשידוע בוודאות למי. מספר שהוקלד בשורת החיפוש עדיין אינו
+  // מזוהה, והודעה שפונה בשם של מישהו אחר גרועה מהודעה בלי שם.
+  const formTargetName = searchPhone
     ? ''
     : (pendingNewLeadName || walkInName || selectedParent?.name || '');
   // מספרים נשמרים אצלנו גם כ-9725… — בדלפק קוראים 05…, וזה מה שמשווים
@@ -2033,7 +2036,7 @@ export default function PosSale({
                 gap: 8,
               }}
             >
-              <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+              <div style={{ fontSize: 13, color: 'var(--text-1)', minWidth: 0 }}>
                 <div style={{ fontWeight: 800 }}>
                   {selectedStudent ? selectedStudent.name : selectedParent?.name}
                 </div>
@@ -2041,13 +2044,60 @@ export default function PosSale({
                   {selectedStudent && selectedParent?.name && selectedParent.name.trim() !== String(selectedStudent.name || '').trim()
                     ? `הורה: ${selectedParent.name} · `
                     : ''}
-                  {effectivePhone || 'בלי טלפון'}
-                  {effectiveEmail ? ` · ${effectiveEmail}` : ''}
+                  {localPhone(effectivePhone) || 'בלי טלפון'}
+                </div>
+                {/* המתאמנים שרשומים על התיק, במקום המייל — הוא לא נחוץ כאן,
+                    והשאלה שכן נשאלת בדלפק היא למי מותר למכור כניסה לקיר.
+                    אלה בדיוק השמות שיופיעו כ„עבור מי” על שורת הכניסה בעגלה.
+                    שם פרטי בלבד: שם המשפחה חוזר בכל השורה ורק מאריך אותה. */}
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 3 }}>
+                  {householdClimbers.length ? (
+                    <>
+                      מתאמנים:{' '}
+                      {householdClimbers.map((climber, index) => {
+                        const isSelected = String(climber.id) === String(selectedStudentId);
+                        return (
+                          <React.Fragment key={climber.id}>
+                            {index > 0 ? ' · ' : ''}
+                            <span style={isSelected ? { color: 'var(--text-1)', fontWeight: 700 } : undefined}>
+                              {String(climber.name || '').trim().split(/\s+/)[0]}
+                            </span>
+                          </React.Fragment>
+                        );
+                      })}
+                    </>
+                  ) : 'אין מתאמנים רשומים — צריך טופס השתתפות לפני מכירת כניסה'}
                 </div>
               </div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
-                <X size={12} /> החלף
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: '0 0 auto' }}>
+                {/* שני האייקונים שהחליפו את המסגרת הקבועה: קוד לסריקה לילד
+                    חדש שעומד כאן, ושליחה בוואטסאפ ללקוח שזוהה. */}
+                <button
+                  type="button"
+                  className="icon-btn"
+                  disabled={formQrBusy}
+                  onClick={openFormQr}
+                  title={formQr ? 'הסתרת הקוד' : 'קוד לסריקה — מילוי טופס השתתפות לילד נוסף, בלי לשלוח כלום'}
+                  aria-label={formQr ? 'הסתרת הקוד לסריקה' : 'קוד לסריקה למילוי טופס השתתפות'}
+                >
+                  <QrCode size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  disabled={!formTargetPhone || newClimberState === 'sending'}
+                  onClick={sendBlankFormLink}
+                  title={formTargetPhone
+                    ? `שליחת טופס השתתפות בוואטסאפ ל${selectedParent?.name || 'לקוח'} · ${localPhone(formTargetPhone)}`
+                    : 'אין טלפון ללקוח — אי אפשר לשלוח'}
+                  aria-label="שליחת טופס השתתפות בוואטסאפ"
+                >
+                  <Send size={16} />
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
+                  <X size={12} /> החלף
+                </button>
+              </div>
             </div>
           )}
 
@@ -2228,87 +2278,73 @@ export default function PosSale({
             )
           )}
 
-          {/* שליחת טופס ההשתתפות — כפתור קבוע, לא רק כשהחיפוש לא מצא לקוח.
-              מי שכבר יש לו אישור בתוקף מגיע עם ילד שאין לו, ומי שחותם עליו
-              הוא ההורה — שלפעמים אינו האדם שעומד כאן. לכן הטלפון בשדה הזה
-              נפרד מטלפון החשבונית: אפשר לשלוח להורה ולגבות מהמלווה.
-              כשהחיפוש לא מצא כלום המסגרת כתומה ומסבירה, ובכל מצב אחר היא
-              שורה שקטה — כפתור שתמיד נמצא, בלי להשתלט על המסך. */}
-          <div
-            className="form-group"
-            style={{
-              marginBottom: 12, padding: 10, borderRadius: 10,
-              background: formBlockUnknown ? 'rgba(251,191,36,0.06)' : 'var(--bg-input)',
-              border: formBlockUnknown ? '1px solid rgba(251,191,36,0.35)' : '1px solid var(--border)',
-              display: 'flex', flexDirection: 'column', gap: 6,
-            }}
-          >
-            {formBlockUnknown ? (
-              <>
-                <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח שאינו במערכת</div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                  בלי טופס השתתפות חתום אי אפשר למכור כניסה. שלחו את הטופס — הפרטים
-                  ייכנסו למערכת כשהוא ימלא אותו. שום דבר לא נשמר כאן.
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                {hasSelectedCustomer
-                  ? 'שליחת טופס השתתפות — גם למי שהגיע יחד עם הלקוח. הקישור נשלח לטלפון שכאן, והמכירה נשארת על הלקוח שנבחר למעלה.'
-                  : 'שליחת טופס השתתפות למי שעומד בדלפק. אפשר גם להציג קוד לסריקה במקום לשלוח.'}
-              </div>
-            )}
-            {/* השדה ריק וברירת המחדל בתווית: כך רואים לאן זה הולך, ומחליפים
-                את היעד בהקלדה אחת כשהחותם הוא הורה שאינו כאן. */}
-            <input
-              className="input input-sm"
-              value={formPhone}
-              onChange={(e) => {
-                setFormPhone(e.target.value);
-                // לקוח שאינו במערכת הוא גם הלקוח של המכירה — שם המספר הזה
-                // הוא גם טלפון החשבונית, בדיוק כפי שהיה לפני שהשדה הופרד.
-                if (formBlockUnknown) setWalkInPhone(e.target.value);
+          {/* לקוח שאינו במערכת: שולחים לו את טופס ההרשמה ולא שומרים כלום.
+              כשהלקוח כן זוהה שני האייקונים שבשורה שלו עושים את אותו דבר, בלי
+              מסגרת שתופסת רבע מסך על מקרה שקורה פעם ביום. */}
+          {formBlockUnknown && (
+            <div
+              className="form-group"
+              style={{
+                marginBottom: 12, padding: 10, borderRadius: 10,
+                background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.35)',
+                display: 'flex', flexDirection: 'column', gap: 6,
               }}
-              placeholder={defaultFormPhone
-                ? `ברירת מחדל: ${localPhone(defaultFormPhone)} — אפשר להחליף`
-                : 'טלפון לשליחת הטופס — 050...'}
-            />
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                style={{ flex: '1 1 160px' }}
-                disabled={!formTargetPhone || newClimberState === 'sending'}
-                onClick={sendBlankFormLink}
-              >
-                <Send size={14} />
-                {newClimberState === 'sending'
-                  ? 'שולח...'
-                  : formTargetPhone ? `שליחת טופס ל־${localPhone(formTargetPhone)}` : 'שליחת טופס בוואטסאפ'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                style={{ flex: '0 0 auto' }}
-                disabled={formQrBusy}
-                onClick={openFormQr}
-                title={formQr ? 'הסתרת הקוד' : 'קוד לסריקה מהמסך — בלי לשלוח כלום'}
-                aria-label={formQr ? 'הסתרת הקוד' : 'קוד לסריקה'}
-              >
-                <QrCode size={14} /> {formBlockUnknown ? (formQr ? 'הסתר קוד' : 'קוד לסריקה') : ''}
-              </button>
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח שאינו במערכת</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                בלי טופס השתתפות חתום אי אפשר למכור כניסה. שלחו את הטופס — הפרטים
+                ייכנסו למערכת כשהוא ימלא אותו. שום דבר לא נשמר כאן.
+              </div>
+              {/* מספר שהוקלד בשורת החיפוש הוא כבר היעד; אין טעם להקליד אותו שוב. */}
+              {!searchPhone && (
+                <input
+                  className="input input-sm"
+                  value={walkInPhone}
+                  onChange={(e) => setWalkInPhone(e.target.value)}
+                  placeholder="טלפון הלקוח — 050..."
+                />
+              )}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ flex: '1 1 160px' }}
+                  disabled={!formTargetPhone || newClimberState === 'sending'}
+                  onClick={sendBlankFormLink}
+                >
+                  <Send size={14} />
+                  {newClimberState === 'sending'
+                    ? 'שולח...'
+                    : formTargetPhone ? `שליחת טופס ל־${localPhone(formTargetPhone)}` : 'שליחת טופס הרשמה'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ flex: '0 0 auto' }}
+                  disabled={formQrBusy}
+                  onClick={openFormQr}
+                >
+                  <QrCode size={14} /> {formQr ? 'הסתר קוד' : 'קוד לסריקה'}
+                </button>
+              </div>
             </div>
-            {formQr && (
-              <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 4 }}>
-                <PayQr url={formQr} size={148} caption="סרקו למילוי הטופס" />
-              </div>
-            )}
-            {newClimberState && newClimberState !== 'sending' && (
-              <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
-                {newClimberState}
-              </div>
-            )}
-          </div>
+          )}
+
+          {/* התוצאה של השליחה — משותפת לשני המקורות, האייקונים והמסגרת
+              הכתומה, כדי שלא תופיע פעמיים כשהשניים גלויים יחד. */}
+          {formQr && (
+            <div style={{ display: 'flex', justifyContent: 'center', paddingBottom: 8 }}>
+              <PayQr url={formQr} size={148} caption="סרקו למילוי הטופס" />
+            </div>
+          )}
+          {newClimberState && newClimberState !== 'sending' && (
+            <div style={{
+              fontSize: 11.5, paddingBottom: 8,
+              color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)',
+            }}>
+              {newClimberState}
+            </div>
+          )}
         </div>
 
         <div className="card card-p" style={{ marginBottom: 16, position: 'relative', zIndex: 1 }}>
