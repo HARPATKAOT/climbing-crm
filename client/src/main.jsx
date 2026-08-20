@@ -81,6 +81,8 @@ function showsCrmShell() {
   );
 }
 
+const NETWORK_DOWN_MESSAGE = 'אין כרגע חיבור לשרת — נסו שוב בעוד רגע';
+
 // Attach the current session to API calls. In production, Vercel's rewrite
 // proxies /api to Render on the same origin, avoiding browser CORS failures.
 const originalFetch = window.fetch.bind(window);
@@ -94,7 +96,18 @@ window.fetch = async function (resource, init = {}) {
       init = { ...init, headers };
     }
   }
-  return originalFetch(resource, init);
+  if (!isApiRequest) return originalFetch(resource, init);
+  try {
+    return await originalFetch(resource, init);
+  } catch (err) {
+    // fetch rejects on its own only when the request never reached the API — a
+    // dropped line, a sleeping laptop, a server restart. Every screen shows the
+    // caught message as-is, and the browser words this one "Failed to fetch",
+    // which reads at the desk as a broken screen rather than a blip on the line.
+    // A cancelled request is not a failure and must stay recognisable.
+    if (err?.name === 'AbortError') throw err;
+    throw new TypeError(NETWORK_DOWN_MESSAGE);
+  }
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(

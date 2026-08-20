@@ -58,6 +58,11 @@ const CHANNEL_LABELS = {
 
 const SERVER_DOWN_MESSAGE = 'השרת לא זמין כרגע. ההודעה לא נשלחה — נסו שוב בעוד רגע';
 
+// A background refresh runs every few seconds over a card that already shows a
+// full conversation. One failed round trip there says nothing the desk can act
+// on, so it stays quiet until the line is really gone.
+const QUIET_FAILURES_BEFORE_NOTICE = 3;
+
 const CHANNEL_COLORS = {
   whatsapp: 'rgba(37,211,102,0.14)',
   instagram: 'rgba(225,48,108,0.14)',
@@ -787,6 +792,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const requestedThreadIdRef = useRef(selectedThreadId || 'parent');
   // Skip overlapping quiet polls when a round trip is slower than the interval.
   const loadInFlightRef = useRef(false);
+  // Consecutive failed background refreshes. Reset by the first one that works.
+  const quietFailuresRef = useRef(0);
   const currentParentIdRef = useRef(String(parent?.id || ''));
   currentParentIdRef.current = String(parent?.id || '');
 
@@ -802,7 +809,9 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     if (quiet && loadInFlightRef.current) return;
     loadInFlightRef.current = true;
     if (!quiet) setLoading(true);
-    setError('');
+    // A background poll clears the line only once it has actually succeeded —
+    // wiping it on the way out would hide a send failure the desk has not read.
+    if (!quiet) setError('');
     try {
       // Quiet polls only refresh the thread — templates and saved replies barely
       // change, and re-fetching them every few seconds delayed new messages.
@@ -831,6 +840,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       // A slower previous customer must never replace the card that is now on
       // screen. Its result stays cached for an instant return visit.
       if (currentParentIdRef.current !== requestedParentId) return;
+      quietFailuresRef.current = 0;
+      setError('');
       setData(conv);
       onConversationChange?.(requestedParentId, conv);
 
@@ -868,7 +879,16 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       }
       modeSyncedRef.current = true;
     } catch (err) {
-      setError(err.message);
+      if (!quiet) {
+        setError(err.message);
+      } else {
+        // The conversation on screen is still the one that was loaded a moment
+        // ago. Only a run of failures is worth a line above the composer.
+        quietFailuresRef.current += 1;
+        if (quietFailuresRef.current >= QUIET_FAILURES_BEFORE_NOTICE) {
+          setError(err.message);
+        }
+      }
     } finally {
       loadInFlightRef.current = false;
       if (!quiet) setLoading(false);

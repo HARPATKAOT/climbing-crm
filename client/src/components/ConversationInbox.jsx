@@ -9,6 +9,9 @@ import { useLiveMessages } from '../hooks/useLiveMessages.js';
 
 // Safety refresh only — the live wait is what normally brings new messages in.
 const REFRESH_MS = 30_000;
+// A background refresh that fails once says nothing the desk can act on — the
+// list on screen is still good. Only a run of them means the line is really out.
+const QUIET_FAILURES_BEFORE_NOTICE = 3;
 const NARROW_BREAKPOINT = 900;
 const NARROW_QUERY = `(max-width: ${NARROW_BREAKPOINT - 1}px)`;
 
@@ -157,6 +160,8 @@ export default function ConversationInbox({ parents = [], onHandled }) {
   );
   // The list poll keeps an old closure — read the live selection from a ref.
   const selectedIdRef = useRef(null);
+  // Consecutive failed background refreshes. Reset by the first one that works.
+  const quietFailuresRef = useRef(0);
 
   useEffect(() => {
     const mq = window.matchMedia(NARROW_QUERY);
@@ -173,6 +178,7 @@ export default function ConversationInbox({ parents = [], onHandled }) {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || 'טעינת השיחות נכשלה');
       const list = Array.isArray(json.conversations) ? json.conversations : [];
+      quietFailuresRef.current = 0;
       setConversations(list);
       setError('');
       // On a wide screen the reading pane should never sit empty. On a phone the
@@ -182,7 +188,15 @@ export default function ConversationInbox({ parents = [], onHandled }) {
         setSelectedId(list[0].parentId);
       }
     } catch (err) {
-      setError(err.message || 'טעינת השיחות נכשלה');
+      const message = err.message || 'טעינת השיחות נכשלה';
+      if (!quiet) {
+        setError(message);
+      } else {
+        // The queue on screen is still the one that loaded a moment ago. Only a
+        // run of failed background refreshes is worth an error over a live list.
+        quietFailuresRef.current += 1;
+        if (quietFailuresRef.current >= QUIET_FAILURES_BEFORE_NOTICE) setError(message);
+      }
     } finally {
       setLoading(false);
     }
