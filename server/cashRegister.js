@@ -146,6 +146,21 @@ function insertLedger(store, row) {
   });
 }
 
+/**
+ * מתי המנהל הצהיר לאחרונה על היתרה האמיתית (ספירה או איפוס). כל מה שקרה לפני
+ * הרגע הזה כבר יושב, ולכן ספירת החריגות למנהל מתחילה ממנו.
+ */
+export function getLastResetAt(store) {
+  let latest = null;
+  for (const row of store.get('cash_ledger') || []) {
+    if (row.action_type !== LEDGER_ACTIONS.RESET) continue;
+    const at = row.created_at || null;
+    if (!at) continue;
+    if (!latest || String(at) > String(latest)) latest = at;
+  }
+  return latest;
+}
+
 export function sessionSnapshot(store) {
   const open = getOpenSession(store);
   const lastClosed = getLastClosedSession(store);
@@ -155,6 +170,7 @@ export function sessionSnapshot(store) {
     lastClosed,
     expected_cash: expected,
     can_sell_cash: !!open,
+    last_reset_at: getLastResetAt(store),
     suggested_opening: lastClosed?.closing_actual != null
       ? roundMoney(lastClosed.closing_actual)
       : expected,
@@ -484,6 +500,112 @@ export function listLedger(store, { type, from, to, limit = 200 } = {}) {
     return String(b.id || '').localeCompare(String(a.id || ''));
   });
   return rows.slice(0, Math.min(500, Math.max(1, Number(limit) || 200)));
+}
+
+/**
+ * פערי סגירת קופה לפי עובד — מי מוסר מגירה שלא תואמת את הצפוי, וכמה.
+ * מסתכל רק על סגירות: פער בפתיחה או בספירת מנהל שייך למי שסגר לפניו, לא
+ * למי שספר. חוסר ועודף נצברים בנפרד — עובד שהחוסרים שלו לא מתקזזים בעודפים
+ * הוא הסיפור שמחפשים, וסכום נטו לבדו היה מסתיר אותו.
+ */
+export function discrepancyByEmployee(store, { from, to } = {}) {
+  const inRange = (stamp) => {
+    const day = String(stamp || '').slice(0, 10);
+    if (!day) return false;
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    return true;
+  };
+
+  const closes = [];
+  for (const session of store.get('cash_register_sessions') || []) {
+    if (session.status !== 'closed') continue;
+    const at = session.closed_at || session.updated_at || session.created_at;
+    if (!inRange(at)) continue;
+    closes.push({
+      at,
+      key: session.closed_by_id || session.closed_by_name || 'unknown',
+      employee_id: session.closed_by_id || null,
+      employee_name: session.closed_by_name || 'לא ידוע',
+      discrepancy: Number(session.discrepancy),
+      expected: Number(session.expected_at_close),
+      actual: Number(session.closing_actual),
+      session_id: session.id,
+    });
+  }
+
+  // סגירות ישנות שנרשמו לפני מודל המשמרות — נספרות לפי שם העובד בלבד.
+  const covered = new Set(closes.map((c) => String(c.session_id)));
+  for (const legacy of store.get('cash_register_shifts') || []) {
+    if (legacy.session_id && covered.has(String(legacy.session_id))) continue;
+    const at = legacy.closed_at || legacy.created_at || legacy.date;
+    if (!inRange(at)) continue;
+    const name = String(legacy.employee || '').trim();
+    if (!name) continue;
+    closes.push({
+      at,
+      key: name,
+      employee_id: null,
+      employee_name: name,
+      discrepancy: Number(legacy.discrepancy),
+      expected: Number(legacy.expected),
+      actual: Number(legacy.actual),
+      session_id: legacy.session_id || null,
+    });
+  }
+
+  const byEmployee = new Map();
+  for (const close of closes) {
+    if (!byEmployee.has(close.key)) {
+      byEmployee.set(close.key, {
+        employee_id: close.employee_id,
+        employee_name: close.employee_name,
+        closes: 0,
+        gaps: 0,
+        shortage_total: 0,
+        surplus_total: 0,
+        net: 0,
+        worst_shortage: 0,
+        last_gap_at: null,
+      });
+    }
+    const stats = byEmployee.get(close.key);
+    if (!stats.employee_id && close.employee_id) stats.employee_id = close.employee_id;
+    stats.closes += 1;
+
+    const gap = close.discrepancy;
+    if (!Number.isFinite(gap) || gap === 0) continue;
+    stats.gaps += 1;
+    stats.net = roundMoney(stats.net + gap);
+    if (gap < 0) {
+      stats.shortage_total = roundMoney(stats.shortage_total + Math.abs(gap));
+      stats.worst_shortage = Math.max(stats.worst_shortage, roundMoney(Math.abs(gap)));
+    } else {
+      stats.surplus_total = roundMoney(stats.surplus_total + gap);
+    }
+    if (!stats.last_gap_at || String(close.at) > String(stats.last_gap_at)) {
+      stats.last_gap_at = close.at;
+    }
+  }
+
+  const rows = [...byEmployee.values()].sort((a, b) => (
+    b.shortage_total - a.shortage_total
+    || b.gaps - a.gaps
+    || String(a.employee_name).localeCompare(String(b.employee_name), 'he')
+  ));
+
+  return {
+    rows,
+    totals: {
+      closes: rows.reduce((s, r) => s + r.closes, 0),
+      gaps: rows.reduce((s, r) => s + r.gaps, 0),
+      shortage_total: roundMoney(rows.reduce((s, r) => s + r.shortage_total, 0)),
+      surplus_total: roundMoney(rows.reduce((s, r) => s + r.surplus_total, 0)),
+      net: roundMoney(rows.reduce((s, r) => s + r.net, 0)),
+    },
+    from: from || null,
+    to: to || null,
+  };
 }
 
 /**

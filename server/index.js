@@ -68,6 +68,7 @@ import {
   recordSaleInLedger,
   recordRefundInLedger,
   listLedger,
+  discrepancyByEmployee,
   actionTypeLabel,
   getOpenSession,
   roundMoney as cashRoundMoney,
@@ -15980,6 +15981,14 @@ app.get('/api/cash-register/ledger', (req, res) => {
     expected_cash: sessionSnapshot(db).expected_cash,
     session: getOpenSession(db),
   });
+});
+
+// מי מוסר קופה שלא תואמת את הצפוי — לבעלים בלבד.
+app.get('/api/cash-register/discrepancy-by-employee', requireOwner, (req, res) => {
+  res.json(discrepancyByEmployee(db, {
+    from: req.query.from,
+    to: req.query.to,
+  }));
 });
 
 app.post('/api/cash-register/receipt-bytes', (req, res) => {

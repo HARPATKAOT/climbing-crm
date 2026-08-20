@@ -9,6 +9,9 @@ import {
   recordSaleInLedger,
   recordRefundInLedger,
   listLedger,
+  discrepancyByEmployee,
+  getLastResetAt,
+  sessionSnapshot,
   LEDGER_ACTIONS,
 } from './cashRegister.js';
 
@@ -271,4 +274,91 @@ test('ledger running: open/reset gap vs books; fill/empty adjust balance', () =>
     () => openSession(store, { denominations: { 100: 1 }, body: OPERATOR_BODY }),
     /כבר יש משמרת פתוחה/,
   );
+});
+
+test('פערי סגירה נצברים לפי מי שסגר — חוסר ועודף בנפרד', () => {
+  const store = makeStore({
+    cash_register_sessions: [
+      {
+        id: 's1', status: 'closed', closed_at: '2026-08-01T10:00:00.000Z',
+        closed_by_id: 'emp-a', closed_by_name: 'אבי',
+        expected_at_close: 500, closing_actual: 400, discrepancy: -100,
+      },
+      {
+        id: 's2', status: 'closed', closed_at: '2026-08-05T10:00:00.000Z',
+        closed_by_id: 'emp-a', closed_by_name: 'אבי',
+        expected_at_close: 300, closing_actual: 260, discrepancy: -40,
+      },
+      {
+        id: 's3', status: 'closed', closed_at: '2026-08-06T10:00:00.000Z',
+        closed_by_id: 'emp-b', closed_by_name: 'בת',
+        expected_at_close: 200, closing_actual: 230, discrepancy: 30,
+      },
+      {
+        id: 's4', status: 'closed', closed_at: '2026-08-07T10:00:00.000Z',
+        closed_by_id: 'emp-b', closed_by_name: 'בת',
+        expected_at_close: 200, closing_actual: 200, discrepancy: 0,
+      },
+      // משמרת פתוחה עדיין לא נספרת
+      { id: 's5', status: 'open', opened_at: '2026-08-08T06:00:00.000Z', discrepancy: -999 },
+    ],
+    // שיקוף הסגירות לרשימה הישנה — אסור שייספר פעמיים
+    cash_register_shifts: [
+      { id: 'l1', session_id: 's1', employee: 'אבי', discrepancy: -100, created_at: '2026-08-01T10:00:00.000Z' },
+      { id: 'l2', employee: 'גד', discrepancy: -25, created_at: '2026-08-02T10:00:00.000Z' },
+    ],
+  });
+
+  const report = discrepancyByEmployee(store, {});
+  const byName = Object.fromEntries(report.rows.map((r) => [r.employee_name, r]));
+
+  assert.equal(byName['אבי'].closes, 2);
+  assert.equal(byName['אבי'].gaps, 2);
+  assert.equal(byName['אבי'].shortage_total, 140);
+  assert.equal(byName['אבי'].worst_shortage, 100);
+  assert.equal(byName['אבי'].surplus_total, 0);
+
+  assert.equal(byName['בת'].closes, 2);
+  assert.equal(byName['בת'].gaps, 1);
+  assert.equal(byName['בת'].surplus_total, 30);
+  assert.equal(byName['בת'].shortage_total, 0);
+
+  // סגירה ישנה בלי session_id נספרת פעם אחת לפי השם
+  assert.equal(byName['גד'].closes, 1);
+  assert.equal(byName['גד'].shortage_total, 25);
+
+  // הגדול בחוסר מוביל את הרשימה
+  assert.equal(report.rows[0].employee_name, 'אבי');
+  assert.equal(report.totals.closes, 5);
+  assert.equal(report.totals.gaps, 4);
+  assert.equal(report.totals.shortage_total, 165);
+
+  // חלון תאריכים חותך סגירות ישנות
+  const recent = discrepancyByEmployee(store, { from: '2026-08-05' });
+  assert.equal(recent.totals.closes, 3);
+  assert.equal(recent.totals.shortage_total, 40);
+});
+
+test('getLastResetAt מחזיר את הספירה או האיפוס האחרונים', () => {
+  const store = makeStore();
+  assert.equal(getLastResetAt(store), null);
+
+  openSession(store, { denominations: { 100: 1 }, body: OPERATOR_BODY });
+  assert.equal(getLastResetAt(store), null);
+
+  adjustCash(store, {
+    action: 'reset',
+    denominations: { 100: 1, 20: 1 },
+    body: { employee_name: 'מנהל' },
+  });
+  const first = getLastResetAt(store);
+  assert.ok(first);
+
+  adjustCash(store, {
+    action: 'reset',
+    denominations: { 50: 1 },
+    body: { employee_name: 'מנהל' },
+  });
+  assert.ok(getLastResetAt(store) >= first);
+  assert.equal(sessionSnapshot(store).last_reset_at, getLastResetAt(store));
 });

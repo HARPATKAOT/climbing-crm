@@ -580,9 +580,22 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const expectedCash = Math.round(Number(cashSession?.expected_cash || 0));
   const cashSessionOpen = !!cashSession?.open;
 
-  // חריגות נספרות בחלון מתגלגל, אחרת המספר רק גדל ולעולם לא חוזר ל"תקין".
+  // ספירת החריגות מתחילה באיפוס/ספירה האחרונים של המנהל — מהרגע שהוא הצהיר על
+  // היתרה האמיתית, מה שקדם לו סגור. בלי איפוס נופלים לחלון מתגלגל, אחרת המספר
+  // רק גדל ולעולם לא חוזר ל"תקין".
+  const discrepancyWindow = useMemo(() => {
+    const windowStart = Date.now() - DISCREPANCY_WINDOW_DAYS * 86400000;
+    const resetAt = cashSession?.last_reset_at
+      ? new Date(cashSession.last_reset_at).getTime()
+      : NaN;
+    if (Number.isFinite(resetAt) && resetAt > windowStart) {
+      return { since: resetAt, label: 'מאז האיפוס' };
+    }
+    return { since: windowStart, label: `${DISCREPANCY_WINDOW_DAYS} יום` };
+  }, [cashSession]);
+
   const problemShifts = useMemo(() => {
-    const cutoff = Date.now() - DISCREPANCY_WINDOW_DAYS * 86400000;
+    const cutoff = discrepancyWindow.since;
     return shifts.filter((s) => {
       const discrepancy = Number(s.discrepancy);
       if (!Number.isFinite(discrepancy) || discrepancy === 0) return false;
@@ -591,7 +604,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       if (!Number.isFinite(time)) return false;
       return time >= cutoff;
     }).length;
-  }, [shifts]);
+  }, [shifts, discrepancyWindow]);
 
   const pendingPayments = payments.filter((p) => p.status === 'pending');
 
@@ -690,7 +703,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
             </div>
           </div>
           <div className="card stat-card" style={{ '--stat-color': problemShifts > 0 ? '#EF4444' : '#10B981' }}>
-            <div className="stat-label">חריגות קופה ({DISCREPANCY_WINDOW_DAYS} יום)</div>
+            <div className="stat-label">חריגות קופה ({discrepancyWindow.label})</div>
             <div className="stat-value" style={{ color: problemShifts > 0 ? 'var(--red)' : 'var(--green)' }}>
               {problemShifts > 0 ? `${problemShifts} חריגות` : 'תקין'}
             </div>
@@ -729,7 +742,12 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       {activeTab === 'discounts' && isOwner && <DiscountCenter />}
 
       {activeTab === 'manager' && isOwner && (
-        <CashManagerPanel employees={employees} canResetCash={canResetCash} />
+        <CashManagerPanel
+          employees={employees}
+          canResetCash={canResetCash}
+          isOwner={isOwner}
+          onCashChange={refreshRegister}
+        />
       )}
 
       {activeTab === 'history' && (

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Wallet, ArrowDownCircle, ArrowUpCircle, Calculator, Filter, Printer, RotateCcw,
-  Unlock, Lock, Banknote, CreditCard, Undo2,
+  Unlock, Lock, Banknote, CreditCard, Undo2, Users,
 } from 'lucide-react';
 import CashCountModal from './CashCountModal.jsx';
 import { sendEscPosBase64, thermalSupported } from '../utils/thermalPrinter.js';
@@ -27,6 +27,28 @@ async function readJson(res) {
         : 'השרת החזיר תשובה לא צפויה — נסו לרענן'
     );
   }
+}
+
+const GAP_RANGES = [
+  { days: 30, label: '30 יום' },
+  { days: 90, label: '90 יום' },
+  { days: 365, label: 'שנה' },
+  { days: 0, label: 'הכל' },
+];
+
+function isoDaysAgo(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function gapDateLabel(stamp) {
+  if (!stamp) return '—';
+  const d = new Date(stamp);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('he-IL', {
+    timeZone: 'Asia/Jerusalem', year: '2-digit', month: '2-digit', day: '2-digit',
+  });
 }
 
 const TOOLS = [
@@ -139,7 +161,12 @@ function formatBalance(bal) {
   })}`;
 }
 
-export default function CashManagerPanel({ employees = [], canResetCash = false }) {
+export default function CashManagerPanel({
+  employees = [],
+  canResetCash = false,
+  isOwner = false,
+  onCashChange,
+}) {
   const [expected, setExpected] = useState(0);
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -148,6 +175,9 @@ export default function CashManagerPanel({ employees = [], canResetCash = false 
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [countMode, setCountMode] = useState(null);
+  const [gapDays, setGapDays] = useState(90);
+  const [gapReport, setGapReport] = useState(null);
+  const [gapError, setGapError] = useState('');
 
   const refresh = useCallback(async () => {
     setError('');
@@ -170,6 +200,25 @@ export default function CashManagerPanel({ employees = [], canResetCash = false 
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
   }, [refresh]);
+
+  const loadGaps = useCallback(async () => {
+    if (!isOwner) return;
+    setGapError('');
+    const qs = new URLSearchParams();
+    if (gapDays) qs.set('from', isoDaysAgo(gapDays));
+    try {
+      const res = await fetch(`/api/cash-register/discrepancy-by-employee?${qs}`);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || 'שגיאה בטעינת פערי הסגירה');
+      setGapReport(data);
+    } catch (err) {
+      setGapError(err.message);
+    }
+  }, [gapDays, isOwner]);
+
+  useEffect(() => {
+    loadGaps();
+  }, [loadGaps]);
 
   const testDrawer = async () => {
     setError('');
@@ -242,6 +291,99 @@ export default function CashManagerPanel({ employees = [], canResetCash = false 
           </button>
         </div>
       </div>
+
+      {isOwner && (
+        <div className="card" style={{ padding: 20 }}>
+          <div className="section-title" style={{ marginBottom: 4 }}>
+            <Users size={16} /> פערי סגירה לפי עובד
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+            ההפרש בין מה שאמור היה להיות במגירה לבין מה שנספר, לפי מי שסגר.
+            חוסר ועודף נספרים בנפרד — עובד שהחוסרים שלו לא מתקזזים הוא זה שצריך בירור.
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {GAP_RANGES.map((r) => (
+              <button
+                key={r.days}
+                type="button"
+                className={`tab-pill ${gapDays === r.days ? 'active' : ''}`}
+                onClick={() => setGapDays(r.days)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
+          {gapError && (
+            <div style={{ color: '#FCA5A5', marginBottom: 10 }}>{gapError}</div>
+          )}
+
+          <div className="table-wrap">
+            <table className="crm-table">
+              <thead>
+                <tr>
+                  <th>עובד</th>
+                  <th>סגירות</th>
+                  <th>פערים</th>
+                  <th>חוסר מצטבר</th>
+                  <th>עודף מצטבר</th>
+                  <th>החוסר הגדול</th>
+                  <th>פער אחרון</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(gapReport?.rows || []).map((r) => (
+                  <tr key={r.employee_id || r.employee_name}>
+                    <td style={{ fontWeight: 600 }}>{r.employee_name}</td>
+                    <td>{r.closes}</td>
+                    <td style={{ color: r.gaps ? 'var(--amber)' : 'var(--green)', fontWeight: 600 }}>
+                      {r.gaps}
+                    </td>
+                    <td style={{ color: r.shortage_total > 0 ? 'var(--red)' : 'var(--text-3)', fontWeight: 700 }}>
+                      {r.shortage_total > 0 ? `−₪${r.shortage_total.toLocaleString('he-IL')}` : '—'}
+                    </td>
+                    <td style={{ color: r.surplus_total > 0 ? 'var(--amber)' : 'var(--text-3)' }}>
+                      {r.surplus_total > 0 ? `+₪${r.surplus_total.toLocaleString('he-IL')}` : '—'}
+                    </td>
+                    <td>{r.worst_shortage > 0 ? `₪${r.worst_shortage.toLocaleString('he-IL')}` : '—'}</td>
+                    <td>{gapDateLabel(r.last_gap_at)}</td>
+                  </tr>
+                ))}
+                {!(gapReport?.rows || []).length && (
+                  <tr>
+                    <td colSpan={7} style={{ color: 'var(--text-3)' }}>
+                      אין סגירות קופה בטווח הזה
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              {!!gapReport?.totals?.closes && (
+                <tfoot>
+                  <tr>
+                    <td style={{ fontWeight: 700 }}>סה״כ</td>
+                    <td>{gapReport.totals.closes}</td>
+                    <td>{gapReport.totals.gaps}</td>
+                    <td style={{ fontWeight: 700 }}>
+                      {gapReport.totals.shortage_total > 0
+                        ? `−₪${gapReport.totals.shortage_total.toLocaleString('he-IL')}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {gapReport.totals.surplus_total > 0
+                        ? `+₪${gapReport.totals.surplus_total.toLocaleString('he-IL')}`
+                        : '—'}
+                    </td>
+                    <td colSpan={2} style={{ color: 'var(--text-3)' }}>
+                      נטו {formatDiscrepancy(gapReport.totals.net)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ padding: 20 }}>
         <div className="section-title" style={{ marginBottom: 12 }}>
@@ -332,6 +474,8 @@ export default function CashManagerPanel({ employees = [], canResetCash = false 
               `${actionDoneLabel[countMode] || 'הפעולה נשמרה'} · יתרה כעת ₪${Number(data.expected_cash ?? 0).toLocaleString('he-IL')}`
             );
             await refresh().catch((e) => setError(e.message));
+            await loadGaps();
+            await onCashChange?.();
           }}
         />
       )}
