@@ -11,8 +11,30 @@ function waPhone(raw) {
   return digits.length >= 11 ? digits : '';
 }
 
-function StatusItem({ Icon, label, settled, detail, loading }) {
-  const stateLabel = loading ? 'בודק...' : settled ? 'מוסדר' : 'לא מוסדר';
+/** יום/חודש — די כדי לדעת אם זה פג מזמן או אתמול, בלי להאריך את השורה. */
+function shortDay(value) {
+  const raw = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return '';
+  const [, month, day] = raw.split('-');
+  return `${Number(day)}/${Number(month)}`;
+}
+
+/**
+ * „לא מוסדר” הסתיר את ההבדל שהדלפק צריך: אישור שפג תוקף וטופס שמעולם לא
+ * נחתם נראו אותו דבר על המסך, וההסבר האמיתי ישב ב-tooltip שאיש לא מרחף
+ * מעליו באמצע תור. כאן הכתובית עצמה אומרת מה קרה, ועם התאריך.
+ */
+function documentStateLabel(state, date) {
+  const day = shortDay(date);
+  if (state === 'valid') return day ? `בתוקף עד ${day}` : 'בתוקף';
+  if (state === 'expired') return day ? `פג ב־${day}` : 'פג תוקף';
+  if (state === 'blocked') return 'חסימה רפואית';
+  return 'לא נחתם מעולם';
+}
+
+function StatusItem({ Icon, label, state, detail, loading }) {
+  const settled = state === 'valid';
+  const stateLabel = loading ? 'בודק...' : detail;
   return (
     <div
       className={`entry-status-item ${loading ? 'entry-status-loading' : settled ? 'entry-status-settled' : 'entry-status-pending'}`}
@@ -29,20 +51,15 @@ function StatusItem({ Icon, label, settled, detail, loading }) {
 }
 
 function EntryStatusRow({ documents, loading }) {
-  const healthState = documents?.health?.state;
-  const waiverState = documents?.waiver?.state;
-  const healthSettled = healthState === 'valid';
-  const waiverSettled = waiverState === 'valid';
-  const healthDetail = healthSettled
-    ? 'הצהרת הבריאות בתוקף'
-    : healthState === 'expired' ? 'הצהרת הבריאות פגה' : healthState === 'blocked' ? 'קיימת חסימה רפואית' : 'חסרה הצהרת בריאות';
-  const waiverDetail = waiverSettled
-    ? 'אישור ההשתתפות בקיר בתוקף'
-    : waiverState === 'expired' ? 'אישור ההשתתפות בקיר פג' : 'חסר אישור השתתפות בקיר';
+  const health = documents?.health;
+  const waiver = documents?.waiver;
+  // תוקף מוצג מתאריך הפקיעה; חסר אין לו תאריך, וזה בדיוק מה שצריך להיאמר.
+  const healthDetail = documentStateLabel(health?.state, health?.expires_at);
+  const waiverDetail = documentStateLabel(waiver?.state, waiver?.expires_at);
   return (
     <div className="entry-status-row" aria-label="סטטוס כניסה">
-      <StatusItem Icon={HeartPulse} label="הצהרת בריאות" settled={healthSettled} detail={healthDetail} loading={loading || !documents} />
-      <StatusItem Icon={ClipboardCheck} label="אישור השתתפות" settled={waiverSettled} detail={waiverDetail} loading={loading || !documents} />
+      <StatusItem Icon={HeartPulse} label="הצהרת בריאות" state={health?.state} detail={healthDetail} loading={loading || !documents} />
+      <StatusItem Icon={ClipboardCheck} label="אישור השתתפות" state={waiver?.state} detail={waiverDetail} loading={loading || !documents} />
     </div>
   );
 }
@@ -138,6 +155,36 @@ export default function ClimberEntryPanel({
     }
     load(studentId);
   }, [studentId]);
+
+  /**
+   * החתימה נופלת לכאן לבד.
+   *
+   * ההורה חותם בטלפון שלו, ועד עכשיו המסך הזה לא ידע על זה: הדלפקיסט רענן
+   * ידנית או התקשר לשאול אם כבר חתם. כל עוד המסמכים אינם בתוקף הפאנל שואל
+   * מחדש אחת לעשר שניות, ונעצר כשהם תקינים — או אחרי כחמש דקות, כי מי
+   * שלא חתם עד אז לא יחתום בגלל שהמסך ממשיך לשאול.
+   */
+  const hasSummary = !!summary;
+  const documentsSettled = summary?.documents?.state === 'valid';
+  const pollTicksRef = useRef(0);
+  useEffect(() => { pollTicksRef.current = 0; }, [studentId]);
+  useEffect(() => {
+    if (!studentId || !hasSummary || documentsSettled) return undefined;
+    const timer = setInterval(() => {
+      pollTicksRef.current += 1;
+      if (pollTicksRef.current > 30) {
+        clearInterval(timer);
+        return;
+      }
+      load(studentId);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [studentId, hasSummary, documentsSettled]);
+
+  // רגע החתימה — אחרי שנשלח קישור, ההודעה שמתחתיו צריכה לומר שהוא נסגר.
+  useEffect(() => {
+    if (documentsSettled && sendState === 'sent') setSendNote('✓ הטופס נחתם — אפשר להיכנס');
+  }, [documentsSettled, sendState]);
 
   if (!studentId) return null;
 

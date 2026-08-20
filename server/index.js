@@ -19703,6 +19703,55 @@ app.post('/api/checkin/send-form-to-phone', async (req, res) => {
 });
 
 /**
+ * מה יש למספר הזה כרגע — כדי שהדלפק ידע שהטופס מולא בלי לרענן.
+ *
+ * אחרי שליחת הקישור המסך נשאר תקוע ב„נשלח”: הלקוח ממלא בטלפון שלו, ואיש
+ * בדלפק לא רואה את זה עד שמישהו מרענן או מתקשר לשאול. הכתובת הזאת נשאלת
+ * בלולאה קצרה ומחזירה תמונת מצב — כמה הצהרות חתומות יש למספר ואילו תיקים
+ * פתוחים עליו. הצד השני משווה למה שהיה ברגע השליחה; אין כאן זמן־שליחה כי
+ * להצהרה יש תאריך בלבד, בלי שעה, והשוואת תאריכים לא הייתה מבחינה בין
+ * טופס שמולא עכשיו לטופס שמולא הבוקר.
+ */
+app.get('/api/checkin/form-status', async (req, res) => {
+  const digits = String(req.query.phone || '').replace(/\D/g, '');
+  if (digits.length < 9) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
+  const tail = digits.slice(-9);
+  // תשע ספרות אחרונות: אותו מספר נשמר אצלנו גם כ-05… וגם כ-9725…
+  const sameNumber = (value) => {
+    const other = String(value || '').replace(/\D/g, '');
+    return other.length >= 9 && other.slice(-9) === tail;
+  };
+
+  const [students, parents, declarations] = await readTablesFresh(
+    'students',
+    'parents',
+    'health_declarations'
+  );
+
+  const signed = (declarations || []).filter((decl) => (
+    sameNumber(decl.phone) && (decl.signed === true || decl.status === 'approved')
+  ));
+  const parentIds = new Set(
+    (parents || []).filter((parent) => sameNumber(parent.phone)).map((parent) => String(parent.id))
+  );
+  const files = (students || [])
+    .filter((student) => sameNumber(student.phone) || parentIds.has(String(student.parentId)))
+    .map((student) => ({ id: student.id, name: student.name || '' }));
+
+  res.json({
+    phone: digits,
+    signedCount: signed.length,
+    climbers: signed.map((decl) => ({
+      id: decl.id,
+      studentId: decl.studentId || null,
+      name: decl.climberName || decl.studentName || '',
+      date: decl.signedDate || decl.date || null,
+    })),
+    files,
+  });
+});
+
+/**
  * טבלת „ממתינים לטיפול” של הדלפק: מבחני אבטחה חסרים וקישורי תשלום פתוחים.
  *
  * הכללים עצמם ב-`pendingHandling.js`; כאן רק אספקת הנתונים.
