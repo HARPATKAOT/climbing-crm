@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ClipboardCheck, Copy, CreditCard, Download, ExternalLink, FileCheck2, FileX2, Loader2, Pencil, Plus, RefreshCw,
+  Copy, CreditCard, Download, ExternalLink, FileCheck2, FileX2, Loader2, Pencil, Plus, RefreshCw,
   CalendarDays, Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
 } from 'lucide-react';
 import InfoHint from '../utils/InfoHint.jsx';
@@ -460,26 +460,6 @@ export default function ActivityRegistrationPanel({
     } catch {
       setCopied(false);
       setMsg(url);
-    }
-  };
-
-  /**
-   * קישור אישור פרטי הפעילות — אותו slug של דף האירוע עם ‎/confirm בסוף.
-   * טופס נפרד לרשומים; ההצהרות שכבר נחתמו קפואות ולא נערכות בדיעבד.
-   */
-  const copyDetailsConfirmLink = async () => {
-    let url = linkUrl;
-    if (!url) {
-      const created = await ensureLink();
-      url = created?.url || '';
-    }
-    if (!url) return;
-    const confirmUrl = `${url.replace(/\/+$/, '')}/confirm`;
-    try {
-      await navigator.clipboard.writeText(confirmUrl);
-      setMsg('קישור אישור הפרטים הועתק');
-    } catch {
-      setMsg(confirmUrl);
     }
   };
 
@@ -1660,20 +1640,6 @@ export default function ActivityRegistrationPanel({
                 {sendFeedback.message}
               </div>
             )}
-            <div className="registration-link-row" style={{ marginTop: 8 }}>
-              <div className="registration-link-value" style={{ fontSize: 12 }}>
-                <span>אישור פרטי הפעילות — טופס חתימה נפרד לרשומים</span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm registration-copy-btn"
-                onClick={copyDetailsConfirmLink}
-                disabled={!!busy}
-              >
-                <Copy size={14} />
-                העתקת קישור
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -1820,17 +1786,6 @@ export default function ActivityRegistrationPanel({
                         title={r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
                       >
                         {r.declaration_signed ? <FileCheck2 size={18} /> : <FileX2 size={18} />}
-                      </span>
-                      {/* אישור פרטי הפעילות — נחתם בטופס הנפרד, פעם אחת לכל הורה. */}
-                      <span
-                        className={`registration-declaration-status registration-declaration-status--${r.details_confirmed_at ? 'signed' : 'missing'}`}
-                        role="img"
-                        aria-label={r.details_confirmed_at ? 'פרטי הפעילות אושרו' : 'פרטי הפעילות טרם אושרו'}
-                        title={r.details_confirmed_at
-                          ? `פרטי הפעילות אושרו ב-${new Date(r.details_confirmed_at).toLocaleDateString('he-IL')}`
-                          : 'פרטי הפעילות טרם אושרו בטופס הנפרד'}
-                      >
-                        <ClipboardCheck size={18} />
                       </span>
                       {/* מי שלא נרשם ליום שמסומן כרגע מקבל הערה במקום מתג —
                           עדיף שיֵראה בשורה ויוסבר, מאשר שייעלם ויֵראה כאילו

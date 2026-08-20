@@ -224,10 +224,6 @@ import {
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
 import {
-  confirmActivityDetails,
-  findDetailsConfirmation,
-} from './activityDetailsConfirmation.js';
-import {
   normalizeChargeBasis,
   normalizeCount,
   normalizeMoney,
@@ -6665,37 +6661,24 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
   if (supa.isEnabled()) {
-    const [remoteRegs, remoteOrders, remoteDeclarations, remotePayments, remoteInterest, remoteDetailConfirmations] = await Promise.all([
+    const [remoteRegs, remoteOrders, remoteDeclarations, remotePayments, remoteInterest] = await Promise.all([
       supa.getAll('activity_registrations'),
       supa.getAll('activity_registration_orders'),
       supa.getAll('health_declarations'),
       supa.getAll('payments'),
       supa.getAll(INTEREST_COLLECTION),
-      supa.getAll('activity_detail_confirmations'),
     ]);
     if (remoteRegs) db.set('activity_registrations', remoteRegs);
     if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
     if (remoteDeclarations) db.set('health_declarations', remoteDeclarations);
     if (remotePayments) db.set('payments', remotePayments);
     if (remoteInterest) db.set(INTEREST_COLLECTION, remoteInterest);
-    if (remoteDetailConfirmations) db.set('activity_detail_confirmations', remoteDetailConfirmations);
   }
   const regs = activeRegistrations(db, activity.id).sort((a, b) =>
     String(b.created_at || '').localeCompare(String(a.created_at || ''))
   );
   const parents = db.get('parents') || [];
   const declarations = db.get('health_declarations') || [];
-  // אישור פרטי הפעילות נחתם פעם אחת לכל הורה; כאן הוא מוצמד לכל הרשמה שלו.
-  const detailConfirmations = (db.get('activity_detail_confirmations') || []).filter(
-    (confirmation) => String(confirmation.activity_id) === String(activity.id)
-      && confirmation.status !== 'cancelled'
-  );
-  const confirmationForRegistration = (registration) => detailConfirmations.find(
-    (confirmation) => (
-      (registration.parent_id && String(confirmation.parent_id || '') === String(registration.parent_id))
-      || (registration.phone && parentPhonesMatch(confirmation.signer_phone, registration.phone))
-    )
-  ) || null;
   const enriched = regs.map((registration) => ({
     ...registration,
     parent_name: parents.find((parent) => String(parent.id) === String(registration.parent_id))?.name || '',
@@ -6705,7 +6688,6 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
         declaration.signed &&
         !!declaration.signature_url
     ),
-    details_confirmed_at: confirmationForRegistration(registration)?.signed_at || null,
   }));
 
   let hostPayment = summarizeHostPayment(db, activity);
@@ -9244,115 +9226,6 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
   } catch (err) {
     console.error('public activity household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
-  }
-});
-
-/**
- * אישור פרטי פעילות — טופס נפרד להורים שכבר רשומים. במכוון אין כאן בדיקת
- * registrationIsOpen: ההרשמה יכולה להיסגר, והמאשרים הם בדיוק מי שכבר בפנים.
- */
-async function loadDetailsConfirmationContext(req, res) {
-  const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
-  if (!storeAvailable) {
-    const unavailable = publicStoreUnavailableError();
-    res.status(unavailable.status).json(unavailable.body);
-    return null;
-  }
-  if (!activity) {
-    res.status(404).json({ error: 'הפעילות לא נמצאה' });
-    return null;
-  }
-  if (supa.isEnabled()) {
-    const [remoteRegs, remoteConfirmations] = await Promise.all([
-      supa.getAll('activity_registrations'),
-      supa.getAll('activity_detail_confirmations'),
-    ]);
-    if (remoteRegs) db.set('activity_registrations', remoteRegs);
-    if (remoteConfirmations) db.set('activity_detail_confirmations', remoteConfirmations);
-  }
-  return { activity };
-}
-
-/** ההרשמות שהאישור של המספר הזה מכסה — לפי כרטיס ההורה או הטלפון שעל ההרשמה. */
-function registrationsForVerifiedPhone(db, activityId, phone) {
-  const parent = (db.get('parents') || []).find((row) => parentPhonesMatch(row.phone, phone)) || null;
-  const registrations = activeRegistrations(db, activityId).filter((registration) => (
-    (parent && String(registration.parent_id || '') === String(parent.id))
-    || parentPhonesMatch(registration.phone, phone)
-  ));
-  return { parent, registrations };
-}
-
-app.get('/api/public/activities/:slug/details-confirmation', publicFormRateLimit, async (req, res) => {
-  try {
-    const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
-    if (!verified) return;
-    const context = await loadDetailsConfirmationContext(req, res);
-    if (!context) return;
-    const { parent, registrations } = registrationsForVerifiedPhone(db, context.activity.id, verified.phone);
-    const existing = findDetailsConfirmation(db, context.activity.id, {
-      parentId: parent?.id || null,
-      phone: verified.phone,
-      phonesMatch: parentPhonesMatch,
-    });
-    res.json({
-      registered: registrations.length > 0,
-      participants: registrations.map((registration) => registration.participant_name).filter(Boolean),
-      signer_name: parent?.name || '',
-      confirmed: !!existing,
-      confirmation: existing
-        ? { id: existing.id, signed_at: existing.signed_at, signer_name: existing.signer_name }
-        : null,
-    });
-  } catch (err) {
-    console.error('public details-confirmation context error:', err.message);
-    res.status(err.status || 500).json({ error: err.message || 'טעינת האישור נכשלה' });
-  }
-});
-
-app.post('/api/public/activities/:slug/details-confirmation', publicFormRateLimit, async (req, res) => {
-  try {
-    const verified = requireVerifiedPublicPhone(req, res, req.body?.phone);
-    if (!verified) return;
-    const context = await loadDetailsConfirmationContext(req, res);
-    if (!context) return;
-    const { parent, registrations } = registrationsForVerifiedPhone(db, context.activity.id, verified.phone);
-    if (!registrations.length) {
-      return res.status(403).json({
-        error: 'לא נמצאה הרשמה לפעילות הזו על המספר שאומת — האישור מיועד למשפחות שכבר נרשמו',
-      });
-    }
-    const existing = findDetailsConfirmation(db, context.activity.id, {
-      parentId: parent?.id || null,
-      phone: verified.phone,
-      phonesMatch: parentPhonesMatch,
-    });
-    if (existing) {
-      return res.json({
-        success: true,
-        existing: true,
-        confirmation: { id: existing.id, signed_at: existing.signed_at, signer_name: existing.signer_name },
-      });
-    }
-    const record = await confirmActivityDetails({
-      db,
-      persist: persistCore,
-      activity: context.activity,
-      parent,
-      participantNames: registrations.map((registration) => registration.participant_name),
-      signerName: req.body?.name,
-      signerPhone: verified.phone,
-      signature: req.body?.signature,
-      phoneVerification: verifiedPhoneEvidence(verified),
-      requestContext: requestEvidence(req),
-    });
-    res.status(201).json({
-      success: true,
-      confirmation: { id: record.id, signed_at: record.signed_at, signer_name: record.signer_name },
-    });
-  } catch (err) {
-    console.error('public details-confirmation error:', err.message);
-    res.status(err.status || 500).json({ error: err.message || 'שמירת האישור נכשלה' });
   }
 });
 
