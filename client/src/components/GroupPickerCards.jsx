@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, CalendarDays, Clock3, ShieldCheck, Users, X } from 'lucide-react';
+import { Check, CalendarDays, Clock3, ShieldCheck, Sparkles, Users, X } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 import { getGroupDays, groupColor, shortGroupLabel } from '../scheduleUtils.js';
 
@@ -36,6 +36,7 @@ export default function GroupPickerCards({
   // many pixels, so the whole week lands inside a window without scrolling.
   fitHeight = null,
   modeByGroupId = null,
+  introByGroupId = null,
   activeId = null,
   onReverseToggle = null,
   onModeChange = null,
@@ -155,6 +156,7 @@ export default function GroupPickerCards({
                   scale={scale}
                   checked={selected.has(String(g.id))}
                   mode={modeByGroupId?.[String(g.id)] || null}
+                  intro={introByGroupId?.[String(g.id)] || null}
                   active={String(activeId || '') === String(g.id)}
                   disabled={disabled}
                   onToggle={() => onToggle(String(g.id))}
@@ -178,7 +180,16 @@ const PLACEMENT_BADGES = {
   fixed: { label: 'רשום', title: 'שיבוץ קבוע', color: '#34D399', icon: ShieldCheck },
 };
 
-function MiniBlock({ group, top, height, checked, mode, active, disabled, onToggle, onReverseToggle, onModeChange, compact = false, scale = 0.75 }) {
+/** The intro session is not a placement mode — it is a date this child is coming. */
+export const INTRO_COLOR = '#F472B6';
+
+/** «6.9» — the day itself, which is all that fits on a block this size. */
+function shortIntroDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
+  return m ? `${Number(m[3])}.${Number(m[2])}` : '';
+}
+
+function MiniBlock({ group, top, height, checked, mode, intro, active, disabled, onToggle, onReverseToggle, onModeChange, compact = false, scale = 0.75 }) {
   const c = groupColor(group);
   const label = shortGroupLabel(group.name) || group.name;
   // A roomier board carries a roomier caption; the tiny one stays at 9px.
@@ -189,7 +200,7 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
     top, height,
     left: 2, right: 2,
     background: c.bg,
-    border: `1.5px solid ${mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].color : (checked ? c.text : c.border)}`,
+    border: `1.5px solid ${intro ? INTRO_COLOR : (mode && PLACEMENT_BADGES[mode] ? PLACEMENT_BADGES[mode].color : (checked ? c.text : c.border))}`,
     borderRadius: 5,
     padding: compact ? '2px' : '3px 4px',
     cursor: disabled ? 'default' : 'pointer',
@@ -212,6 +223,23 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
     }}>
       {label}
     </span>
+    {/* An intro session is the one thing on this board that is a date rather
+        than a status, and it was readable nowhere: the card said
+        "scheduled · 2026-09-06" in English, beside a board that showed only
+        that some place was being held. Pinned to the corner because the block
+        below is already full and clips whatever does not fit. */}
+    {intro && (
+      <span style={{
+        position: 'absolute', top: 1, left: 1, zIndex: 2,
+        display: 'inline-flex', alignItems: 'center', gap: 2,
+        borderRadius: 4, padding: '0 3px', maxWidth: 'calc(100% - 2px)',
+        fontSize: Math.max(7.5, fontSize - 1.5), fontWeight: 900, whiteSpace: 'nowrap',
+        color: '#08111F', background: INTRO_COLOR, boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+      }}>
+        <Sparkles size={compact ? 8 : 9} strokeWidth={3} />
+        היכרות {shortIntroDate(intro.date)}
+      </span>
+    )}
     {onModeChange ? (
       <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
         <span style={{
@@ -263,9 +291,13 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
     ) : null}
   </>;
 
+  const introTitle = intro
+    ? ` · אימון היכרות ${shortIntroDate(intro.date)}${intro.paid ? ' (שולם)' : ' (טרם שולם)'}`
+    : '';
+
   if (onModeChange) {
     return (
-      <div title={`${label}${group.time ? ` · ${group.time}` : ''}`} style={blockStyle}>
+      <div title={`${label}${group.time ? ` · ${group.time}` : ''}${introTitle}`} style={blockStyle}>
         {content}
       </div>
     );
@@ -274,7 +306,7 @@ function MiniBlock({ group, top, height, checked, mode, active, disabled, onTogg
   return (
     <button
       type="button"
-      title={`${label}${group.time ? ` · ${group.time}` : ''}`}
+      title={`${label}${group.time ? ` · ${group.time}` : ''}${introTitle}`}
       onClick={onToggle}
       onContextMenu={(event) => {
         if (!onReverseToggle || disabled) return;

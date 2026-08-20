@@ -1637,6 +1637,40 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
   });
 });
 
+test('תשלום על אימון היכרות נראה בכרטיס — הוא לא „דיווח לבדיקה”', async () => {
+  // האמא שילמה וכתבה „בוצע, תודה”. הבוט ענה שהדיווח התקבל לבדיקה ושהמקום
+  // יישמר „ברגע שהתשלום יאומת” — חמישים שניות אחרי ש-paid_at כבר נכתב על
+  // ההזמנה. כסף שאנחנו רואים אינו טענה של לקוח.
+  const booking = (patch) => ({
+    id: 'ib-test', student_id: 's-yotam', student_name: 'יותם כהן', group_id: GROUP_GD.id,
+    session_date: '2026-09-06', status: 'scheduled', ...patch,
+  });
+
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam({ status: 'intro_scheduled', groupId: GROUP_GD.id })],
+    ...signedFormFor(['s-yotam']),
+    [INTRO_COLLECTION]: [booking({ paid_at: null })],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const kid = (await tools.getFamilyCard()).ילדים[0];
+    assert.equal(kid.אימון_היכרות.שולם, false);
+    assert.match(kid.אימון_היכרות.הערה, /טרם נקלט/);
+  });
+
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam({ status: 'intro_scheduled', groupId: GROUP_GD.id })],
+    ...signedFormFor(['s-yotam']),
+    [INTRO_COLLECTION]: [booking({ paid_at: '2026-08-20T09:10:12.909Z' })],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const kid = (await tools.getFamilyCard()).ילדים[0];
+    assert.equal(kid.אימון_היכרות.שולם, true);
+    assert.ok(kid.אימון_היכרות.תאריך, 'ציפינו לתאריך האימון בכרטיס');
+    assert.doesNotMatch(kid.אימון_היכרות.הערה, /טרם נקלט/);
+  });
+});
 test('שאלה של הלקוח אינה שם', async () => {
   // ליבי שאלה „באיזה עיר”, ולא היה בזה סימן שאלה ולא מילה מרשימת המילים —
   // אז הכרטיס שלה נשמר בשם „ליבי באיזה עיר”. אחרי זה היא עזבה.

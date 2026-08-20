@@ -46,6 +46,7 @@ import {
   continueAfterIntro as continueDurableIntro,
   createIntroBooking,
   createPlacementHold,
+  openIntroForStudent,
   joinGroupWaitlist,
   markPlacementRegistered,
   releasePlacementHold,
@@ -1094,6 +1095,26 @@ export function holdsASeat(student) {
 
 export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
+}
+
+/**
+ * The intro session on the card, and — the part that was missing — whether it
+ * is paid for. „בוצע, תודה” was answered with „הדיווח התקבל לבדיקה” because
+ * nothing in front of the model could say the money had arrived.
+ */
+function introCardSection(student) {
+  const booking = openIntroForStudent(db, student?.id);
+  if (!booking) return {};
+  const paid = Boolean(booking.paid_at);
+  return {
+    אימון_היכרות: {
+      תאריך: booking.session_date ? spellOutDate(booking.session_date) : '',
+      שולם: paid,
+      הערה: paid
+        ? 'התשלום נקלט אצלנו. אם הלקוח מדווח ששילם — לאשר לו שהמקום שמור, בלי «נבדוק».'
+        : 'טרם נקלט תשלום. המקום באימון ההיכרות נשמר רק אחרי תשלום בקישור.',
+    },
+  };
 }
 
 /** The open registration step, in the shape the model reads. See registrationSteps. */
@@ -3051,6 +3072,7 @@ export function buildCustomerTools({
           })),
           קבוצה: group ? describeGroup(group) : '',
           סטטוס: botVisibleStudentStatus(s, group),
+          ...introCardSection(s),
           ...(s.status === 'pending_signup' && !group
             ? { הערת_סטטוס: 'אין קבוצה משובצת, ולכן אין להציג את המתאמן כממתין להרשמה' }
             : {}),

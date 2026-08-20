@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { STATUSES, STATUS_PROGRESS_ORDER, LEAD_SOURCES, LEAD_SEGMENTS, DAYS_FULL } from '../mockData.js';
 import { icountClientUrl } from '../utils/icountLinks.js';
 import { ListIcon } from './broadcastListIcons.jsx';
@@ -3012,6 +3012,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     .includes(registrationLifecycle.intro?.status)
     ? registrationLifecycle.intro
     : null;
+  // The board and the line below it say the same thing about the intro, so it
+  // is described once. Which group it is on is what makes it findable at all.
+  const introOnBoard = introBooking ? {
+    groupId: introBooking.group_id || '',
+    date: introBooking.session_date || '',
+    paid: Boolean(introBooking.paid_at),
+  } : null;
+  const introDayLabel = (value) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
+    if (!m) return String(value || '—');
+    const day = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`)
+      .toLocaleDateString('he-IL', { weekday: 'long' });
+    return `${day}, ${Number(m[3])}.${Number(m[2])}.${m[1]}`;
+  };
   const lifecycleDate = (value) => {
     if (!value) return '—';
     const parsed = new Date(value);
@@ -5199,6 +5213,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   <GroupPlacementEditor
                     groups={groups}
                     placements={placementModes}
+                    intro={introOnBoard}
                     onPlacementsChange={setPlacementModes}
                     onSave={handleSaveGroup}
                     onCancel={() => {
@@ -5279,8 +5294,21 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       </button>
                     </div>
                     {introBooking && (
-                      <div style={{ marginTop: 7, fontSize: 12, color: 'var(--text-2)' }}>
-                        אימון היכרות: {introBooking.session_date || '—'} · {introBooking.status}
+                      <div style={{
+                        marginTop: 8, padding: '6px 8px', borderRadius: 7,
+                        border: '1px solid rgba(244,114,182,0.45)', background: 'rgba(244,114,182,0.10)',
+                        display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                        fontSize: 12, color: 'var(--text-1)',
+                      }}>
+                        <Sparkles size={13} color="#F472B6" />
+                        <span style={{ fontWeight: 800 }}>אימון היכרות</span>
+                        <span style={{ color: 'var(--text-2)' }}>{introDayLabel(introBooking.session_date)}</span>
+                        {introBooking.group_name && (
+                          <span style={{ color: 'var(--text-3)' }}>· {introBooking.group_name}</span>
+                        )}
+                        <span className={introBooking.paid_at ? 'badge badge-green' : 'badge badge-amber'}>
+                          {introBooking.paid_at ? 'שולם' : 'טרם שולם'}
+                        </span>
                       </div>
                     )}
                     {lifecycleMessage && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>{lifecycleMessage}</div>}

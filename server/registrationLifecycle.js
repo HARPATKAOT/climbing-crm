@@ -843,6 +843,25 @@ export async function requeueUndeliveredWaitlistOffer({ db, persist, hold, now =
   return { ok: true, entry: updated || entry };
 }
 
+/** Intro bookings that still mean something: paid for, or waiting to be. */
+const OPEN_INTRO_STATUSES = ['payment_pending', 'paid', 'scheduled', 'awaiting_decision'];
+
+/**
+ * The intro session a trainee is currently booked on, newest first.
+ *
+ * Nothing on the customer side could see this. A mother paid, wrote „בוצע,
+ * תודה”, and was told her report would be checked — while `paid_at` had been
+ * stamped on this row fifty seconds earlier. A payment we can read is not a
+ * claim to be verified.
+ */
+export function openIntroForStudent(db, studentId) {
+  if (!studentId) return null;
+  return rows(db, INTRO_COLLECTION)
+    .filter((booking) => String(booking.student_id || '') === String(studentId)
+      && OPEN_INTRO_STATUSES.includes(String(booking.status || '')))
+    .sort((a, b) => String(b.session_date || '').localeCompare(String(a.session_date || '')))[0] || null;
+}
+
 export function activeIntroProduct(pricelist = []) {
   const matches = (pricelist || []).filter((item) => (
     item

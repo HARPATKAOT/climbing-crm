@@ -1,6 +1,6 @@
 import React from 'react';
-import { Check, Clock3, ShieldCheck, Users } from 'lucide-react';
-import GroupPickerCards from './GroupPickerCards.jsx';
+import { Check, Clock3, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import GroupPickerCards, { INTRO_COLOR } from './GroupPickerCards.jsx';
 
 const MODE_ORDER = ['none', 'waitlist', 'hold', 'fixed'];
 const LEGEND = [
@@ -9,6 +9,9 @@ const LEGEND = [
   { key: 'fixed', label: 'רשום', icon: ShieldCheck, color: '#34D399' },
 ];
 
+/** Not a mode anyone can set here — a fact about the child, shown where it applies. */
+const INTRO_LEGEND = { label: 'אימון היכרות', icon: Sparkles, color: INTRO_COLOR };
+
 function cycleMode(current, direction) {
   const index = Math.max(0, MODE_ORDER.indexOf(current || 'none'));
   const nextIndex = Math.min(MODE_ORDER.length - 1, Math.max(0, index + direction));
@@ -16,7 +19,8 @@ function cycleMode(current, direction) {
 }
 
 export default function GroupPlacementEditor({
-  groups = [], placements = {}, onPlacementsChange, onSave, onCancel, saving = false, error = '',
+  groups = [], placements = {}, intro = null,
+  onPlacementsChange, onSave, onCancel, saving = false, error = '',
 }) {
   const change = (groupId, direction) => {
     const id = String(groupId);
@@ -39,12 +43,19 @@ export default function GroupPlacementEditor({
             <Icon size={12} /> {label}
           </span>
         ))}
+        {intro?.groupId && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: INTRO_LEGEND.color }}>
+            <INTRO_LEGEND.icon size={12} /> {INTRO_LEGEND.label}
+            {intro.paid ? '' : ' (טרם שולם)'}
+          </span>
+        )}
       </div>
       <div className="card" style={{ padding: 8, background: 'var(--surface-2)', overflow: 'hidden' }}>
         <GroupPickerCards
           groups={groups}
           selectedIds={selectedIds}
           modeByGroupId={placements}
+          introByGroupId={intro?.groupId ? { [String(intro.groupId)]: intro } : null}
           onToggle={(groupId) => change(groupId, 1)}
           onReverseToggle={(groupId) => change(groupId, -1)}
           disabled={saving}
