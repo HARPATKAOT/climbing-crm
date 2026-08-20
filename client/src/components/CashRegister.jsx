@@ -14,6 +14,8 @@ import CashManagerPanel from './CashManagerPanel.jsx';
 import DiscountCenter from './DiscountCenter.jsx';
 import ActivityPriceBook from './ActivityPriceBook.jsx';
 
+const DISCREPANCY_WINDOW_DAYS = 30;
+
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
   return Number.isNaN(n) ? 0 : n;
@@ -137,6 +139,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
+  const [cashSession, setCashSession] = useState(null);
   const [activeTab, setActiveTab] = useState(() => {
     const sharedTabs = ['sale', 'history'];
     const ownerTabs = ['products', 'activity-prices', 'discounts', 'manager', 'icount'];
@@ -148,7 +151,6 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
 
   const [icountStatus, setIcountStatus] = useState({ loading: true });
   const [icountDocs, setIcountDocs] = useState([]);
-  const [icountTotal, setIcountTotal] = useState(0);
   const [icountLoading, setIcountLoading] = useState(false);
   const [docLinkBusyKey, setDocLinkBusyKey] = useState('');
   const [docLinkError, setDocLinkError] = useState('');
@@ -176,6 +178,8 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     try {
       const data = await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []));
       setShifts(Array.isArray(data) ? data : []);
+      const session = await fetch('/api/cash-register/session').then((r) => (r.ok ? r.json() : null));
+      setCashSession(session && typeof session === 'object' ? session : null);
       const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
       const list = Array.isArray(emps) ? emps : [];
       setEmployees(list);
@@ -183,6 +187,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     } catch (err) {
       console.error(err);
       setShifts([]);
+      setCashSession(null);
     }
   }, [employee, isOwner]);
 
@@ -428,10 +433,8 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       if (docsRes.ok) {
         const docsData = await docsRes.json();
         setIcountDocs(Array.isArray(docsData.docs) ? docsData.docs : []);
-        setIcountTotal(Number(docsData.recognizedTotal ?? docsData.total) || 0);
       } else {
         setIcountDocs([]);
-        setIcountTotal(0);
       }
 
       if (payRes.ok) {
@@ -573,8 +576,23 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     }
   };
 
-  const totalCash = shifts.reduce((sum, s) => sum + Number(s.actual || 0), 0);
-  const problemShifts = shifts.filter((s) => Number(s.discrepancy) !== 0).length;
+  // מה שאמור לשכב בקופה עכשיו — יתרת התנועות, לא סכום מצטבר של סגירות.
+  const expectedCash = Math.round(Number(cashSession?.expected_cash || 0));
+  const cashSessionOpen = !!cashSession?.open;
+
+  // חריגות נספרות בחלון מתגלגל, אחרת המספר רק גדל ולעולם לא חוזר ל"תקין".
+  const problemShifts = useMemo(() => {
+    const cutoff = Date.now() - DISCREPANCY_WINDOW_DAYS * 86400000;
+    return shifts.filter((s) => {
+      const discrepancy = Number(s.discrepancy);
+      if (!Number.isFinite(discrepancy) || discrepancy === 0) return false;
+      const stamp = s.closed_at || s.created_at || s.date;
+      const time = stamp ? new Date(stamp).getTime() : NaN;
+      if (!Number.isFinite(time)) return false;
+      return time >= cutoff;
+    }).length;
+  }, [shifts]);
+
   const pendingPayments = payments.filter((p) => p.status === 'pending');
 
   const filteredPosSales = useMemo(() => {
@@ -665,16 +683,14 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       {isOwner && (
         <div className="stats-grid" style={{ marginBottom: 24 }}>
           <div className="card stat-card" style={{ '--stat-color': '#10B981' }}>
-            <div className="stat-label">הכנסות מזומן (סגירות קופה)</div>
-            <div className="stat-value">₪{totalCash.toLocaleString()}</div>
-          </div>
-          <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
-            <div className="stat-label">הכנסה חשבונאית (30 יום)</div>
-            <div className="stat-value">₪{Math.round(icountTotal).toLocaleString()}</div>
-            <div className={`stat-sub ${icountStatus.ok ? 'up' : 'down'}`}>{statusLine}</div>
+            <div className="stat-label">מזומן שאמור להיות בקופה</div>
+            <div className="stat-value">₪{expectedCash.toLocaleString()}</div>
+            <div className={`stat-sub ${cashSessionOpen ? 'up' : ''}`}>
+              {cashSessionOpen ? 'משמרת פתוחה' : 'אין משמרת פתוחה'}
+            </div>
           </div>
           <div className="card stat-card" style={{ '--stat-color': problemShifts > 0 ? '#EF4444' : '#10B981' }}>
-            <div className="stat-label">חריגות קופה</div>
+            <div className="stat-label">חריגות קופה ({DISCREPANCY_WINDOW_DAYS} יום)</div>
             <div className="stat-value" style={{ color: problemShifts > 0 ? 'var(--red)' : 'var(--green)' }}>
               {problemShifts > 0 ? `${problemShifts} חריגות` : 'תקין'}
             </div>
