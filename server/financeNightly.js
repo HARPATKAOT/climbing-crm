@@ -63,7 +63,7 @@ export async function runFinanceNightly({ now = new Date() } = {}) {
   // משיכת iCount טרייה לפני היישוב — אין cron חיצוני שעושה את זה.
   await part('icount_pull', 'reconciliation', () => runFinanceSync({ full: false, sources: ['icount'] }));
   await part('outbox', 'icount_outbox', () => processOutbox(store, { icountClient: icount, now }));
-  await part('email', 'doc_ingestion', async () => (gmailConfigured()
+  await part('email', 'doc_ingestion', async () => ((await gmailConfigured())
     ? runEmailIngestion(store, { provider: createGmailProvider() })
     : { skipped: true, reason: 'Gmail לא מחובר (חסם B2)' }));
   // תשלומים עתידיים שתאריכם הגיע הופכים להוצאה ומצטרפים למחזור האשראי.

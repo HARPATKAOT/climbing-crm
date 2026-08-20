@@ -22,7 +22,11 @@ import { durableRecordingStore, runBankSync } from './bankSync.js';
 import { runFinanceNightly, runFinanceNightlyIfDue } from './financeNightly.js';
 import { reviveOutboxRow } from './icountOutbox.js';
 import { ingestDocumentFile } from './documentIngestion.js';
-import { createGmailProvider, gmailConfigured, runEmailIngestion } from './emailIngestion.js';
+import {
+  completeGmailOAuth, createGmailProvider, disconnectGmail, gmailAuthUrl, gmailConfigured,
+  gmailStatus, runEmailIngestion,
+} from './emailIngestion.js';
+import { issueOAuthState, verifyOAuthState } from './security.js';
 import {
   learnAlias,
   matchableDocuments,
@@ -888,10 +892,57 @@ financeRouter.get('/documents/:id/download', (req, res) => {
   return res.send(Buffer.from(match[2], 'base64'));
 });
 
+/**
+ * החזרה ממסך ההסכמה של גוגל — הדפדפן מגיע לכאן בלי כותרת הרשאה,
+ * ולכן הנתיב רשום כציבורי ב-auth.js. ההגנה היא state חתום שהונפק אצלנו.
+ */
+export async function gmailOAuthCallback(req, res) {
+  const base = process.env.FRONTEND_URL || 'https://app.kirboaz.co.il';
+  try {
+    const code = req.query.code;
+    if (!code || !verifyOAuthState(req.query.state, 'finance-gmail')) {
+      return res.redirect(`${base}/finance?gmail=error`);
+    }
+    await completeGmailOAuth(String(code));
+    return res.redirect(`${base}/finance?gmail=connected`);
+  } catch (error) {
+    console.error('Gmail invoices OAuth callback failed:', error.message);
+    return res.redirect(`${base}/finance?gmail=error&msg=${encodeURIComponent(error.message)}`);
+  }
+}
+
+// ─── חיבור Gmail לקליטת חשבוניות (חסם B2) ─────────────────────
+
+financeRouter.get('/gmail/oauth/callback', gmailOAuthCallback);
+
+financeRouter.get('/gmail/status', async (_req, res) => {
+  try {
+    res.json(await gmailStatus());
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'בדיקת חיבור Gmail נכשלה' });
+  }
+});
+
+financeRouter.get('/gmail/auth-url', (_req, res) => {
+  try {
+    res.json({ url: gmailAuthUrl(issueOAuthState('finance-gmail')) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+financeRouter.post('/gmail/disconnect', async (_req, res) => {
+  try {
+    res.json(await disconnectGmail());
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'ניתוק Gmail נכשל' });
+  }
+});
+
 financeRouter.post('/email-sync', async (_req, res) => {
   try {
-    if (!gmailConfigured()) {
-      return res.status(409).json({ error: 'תיבת המייל עדיין לא מחוברת — נדרשים מפתחות Google (חסם B2 ב-PROGRESS.md)' });
+    if (!(await gmailConfigured())) {
+      return res.status(409).json({ error: 'תיבת המייל עדיין לא מחוברת — יש ללחוץ "חיבור Gmail" במרכז הפיננסי' });
     }
     const store = durableRecordingStore();
     const summary = await runEmailIngestion(store, { provider: createGmailProvider() });

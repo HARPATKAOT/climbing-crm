@@ -14,28 +14,142 @@ import { financeFlag } from './financeCore.js';
 import { ingestDocumentFile } from './documentIngestion.js';
 import { findInvoiceLinks } from './documentParsing.js';
 import { upsertInboxItem } from './bankIngestion.js';
+import * as supa from './supa.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+// קריאה בלבד. אין ולא יהיה כאן scope שמאפשר שליחה או מחיקה.
+const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+const SETTINGS_KEY = 'finance_gmail_invoices';
 
-export function gmailConfigured() {
-  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GMAIL_INVOICES_REFRESH_TOKEN);
+let memorySettings = null;
+
+async function loadGmailSettings({ force = false } = {}) {
+  if (!force && memorySettings) return memorySettings;
+  const remote = await supa.getAppSetting(SETTINGS_KEY);
+  memorySettings = remote && typeof remote === 'object' ? { ...remote } : {};
+  return memorySettings;
+}
+
+async function saveGmailSettings(patch) {
+  const current = await loadGmailSettings({ force: true });
+  memorySettings = { ...current, ...patch, updated_at: new Date().toISOString() };
+  await supa.setAppSetting(SETTINGS_KEY, memorySettings);
+  return memorySettings;
+}
+
+export function gmailClientConfigured() {
+  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+
+function publicApiBase() {
+  return (
+    process.env.PUBLIC_API_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://climbing-crm-api.onrender.com'
+      : `http://localhost:${process.env.PORT || 5000}`)
+  );
+}
+
+export function gmailRedirectUri() {
+  return process.env.GMAIL_INVOICES_REDIRECT_URI || `${publicApiBase()}/api/finance/gmail/oauth/callback`;
+}
+
+/**
+ * ה-refresh token נשמר במסד (app_settings) ולא ב-env: חיבור מחדש הוא
+ * לחיצה אחת ולא עריכת משתני סביבה ואתחול שרת. env נשאר כגיבוי.
+ */
+async function gmailRefreshToken() {
+  const settings = await loadGmailSettings();
+  return settings.refreshToken || process.env.GMAIL_INVOICES_REFRESH_TOKEN || '';
+}
+
+export async function gmailStatus() {
+  const settings = await loadGmailSettings({ force: true });
+  return {
+    client_configured: gmailClientConfigured(),
+    connected: Boolean(settings.refreshToken || process.env.GMAIL_INVOICES_REFRESH_TOKEN),
+    email: settings.email || null,
+    label: settings.label || 'Invoices',
+    connected_at: settings.connected_at || null,
+    last_error: settings.last_error || null,
+    redirect_uri: gmailRedirectUri(),
+  };
+}
+
+export function gmailAuthUrl(state = 'finance-gmail') {
+  if (!gmailClientConfigured()) throw new Error('חסרים מפתחות גוגל בשרת');
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    redirect_uri: gmailRedirectUri(),
+    response_type: 'code',
+    scope: GMAIL_SCOPES.join(' '),
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return `${AUTH_URL}?${params.toString()}`;
+}
+
+export async function completeGmailOAuth(code) {
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: gmailRedirectUri(),
+      grant_type: 'authorization_code',
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.refresh_token) {
+    throw new Error(data.error_description || data.error || 'גוגל לא החזיר מפתח קבוע — יש לאשר מחדש');
+  }
+  let email = null;
+  try {
+    const profile = await gmailGet(data.access_token, '/profile');
+    email = profile.emailAddress || null;
+  } catch { /* הכתובת היא נוחות בלבד */ }
+  await saveGmailSettings({
+    refreshToken: data.refresh_token,
+    email,
+    connected_at: new Date().toISOString(),
+    last_error: null,
+  });
+  return { connected: true, email };
+}
+
+export async function disconnectGmail() {
+  memorySettings = {};
+  await supa.setAppSetting(SETTINGS_KEY, {});
+  return { connected: false };
+}
+
+export async function gmailConfigured() {
+  return Boolean(gmailClientConfigured() && (await gmailRefreshToken()));
 }
 
 async function gmailAccessToken() {
+  const refreshToken = await gmailRefreshToken();
   const response = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID,
       client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      refresh_token: process.env.GMAIL_INVOICES_REFRESH_TOKEN,
+      refresh_token: refreshToken,
       grant_type: 'refresh_token',
     }),
   });
   const data = await response.json();
   if (!response.ok || !data.access_token) {
-    const error = new Error(data.error_description || 'רענון הטוקן של Gmail נכשל');
+    // מסך הסכמה במצב Testing מנפיק מפתח שפג אחרי 7 ימים — זו התקלה
+    // השכיחה כאן, והיא נרשמת כדי שהמסך ידע להציע חיבור מחדש.
+    await saveGmailSettings({ last_error: data.error_description || data.error || 'refresh failed' }).catch(() => {});
+    const error = new Error(data.error_description || 'רענון הטוקן של Gmail נכשל — יש לחבר מחדש');
     error.code = 'auth_required';
     throw error;
   }
@@ -66,8 +180,8 @@ export function createGmailProvider({ label = 'Invoices' } = {}) {
   return {
     key: 'gmail',
     async listInvoiceMessages(cursor) {
-      if (!gmailConfigured()) {
-        const error = new Error('Gmail לא מחובר — חסרים GOOGLE_CLIENT_ID/SECRET ו-GMAIL_INVOICES_REFRESH_TOKEN');
+      if (!(await gmailConfigured())) {
+        const error = new Error('Gmail לא מחובר — יש להתחבר ממסך המרכז הפיננסי');
         error.code = 'not_configured';
         throw error;
       }

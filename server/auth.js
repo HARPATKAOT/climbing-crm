@@ -69,6 +69,7 @@ const PUBLIC_API_ROUTES = [
   /^\/google-contacts\/oauth\/callback$/,
   /^\/google-contacts\/sync-due$/,
   /^\/google-business-profile\/oauth\/callback$/,
+  /^\/finance\/gmail\/oauth\/callback$/,
   /^\/finance\/sync-scheduled$/,
   /^\/finance\/bank-sync-scheduled$/,
   /^\/finance\/nightly-scheduled$/,

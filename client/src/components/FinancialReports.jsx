@@ -554,6 +554,66 @@ const readFile = (file, mode = 'data-url') => new Promise((resolve, reject) => {
   else reader.readAsDataURL(file);
 });
 
+/** חיבור תיבת המייל — אישור אצל גוגל, בלי סיסמאות, בהרשאת קריאה בלבד. */
+function GmailConnection() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    fetchJson('/api/finance/gmail/status').then(setStatus).catch(() => setStatus(null));
+  }, []);
+  useEffect(load, [load]);
+  if (!status) return null;
+
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const { url } = await fetchJson('/api/finance/gmail/auth-url');
+      window.location.href = url;
+    } catch (error) {
+      window.alert(error.message || 'פתיחת האישור נכשלה');
+      setBusy(false);
+    }
+  };
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const summary = await fetchJson('/api/finance/email-sync', { method: 'POST' });
+      window.alert(`נקלטו ${summary.ingested || 0} חשבוניות מתוך ${summary.messages || 0} הודעות`);
+    } catch (error) {
+      window.alert(error.message || 'קליטת המייל נכשלה');
+    }
+    setBusy(false);
+    load();
+  };
+  const disconnect = async () => {
+    if (!window.confirm('לנתק את תיבת המייל?')) return;
+    setBusy(true);
+    await fetchJson('/api/finance/gmail/disconnect', { method: 'POST' }).catch(() => {});
+    setBusy(false);
+    load();
+  };
+
+  return <article className="card finance-panel">
+    <header>
+      <div>
+        <h2>קליטת חשבוניות מהמייל</h2>
+        <p>{status.connected
+          ? `מחובר${status.email ? ` לתיבה ${status.email}` : ''} · נקראות הודעות עם תווית "${status.label}" בלבד`
+          : 'לא מחובר · החיבור באישור מול גוגל, בהרשאת קריאה בלבד'}</p>
+      </div>
+      <div className="finance-payment-header-actions">
+        {status.connected
+          ? <>
+            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={sync}><RefreshCw size={14} />משיכה עכשיו</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={disconnect}><X size={14} />ניתוק</button>
+          </>
+          : <button className="btn btn-primary btn-sm" disabled={busy || !status.client_configured} onClick={connect}><Mail size={14} />חיבור Gmail</button>}
+      </div>
+    </header>
+    {status.last_error && <div className="finance-quality-list"><span><AlertTriangle /> החיבור נפל: {status.last_error} — יש לחבר מחדש</span></div>}
+  </article>;
+}
+
 /** פאנל בריאות הסנכרון (FINANCE_SPEC 4.3.9) — מה רץ, מה תקוע, איפה הפערים. */
 function SyncHealthPanel() {
   const [health, setHealth] = useState(null);
@@ -827,7 +887,7 @@ export default function FinancialReports() {
           return <div className="finance-inbox-row" key={expense.id}><div className="finance-inbox-main"><span className={`finance-doc-icon ${attachment ? 'has-file' : ''}`}><ReceiptText /></span><div><strong>{expense.supplier_name || expense.name}</strong><small>{expense.expense_date || 'ללא תאריך'} · {moneyPrecise.format(expense.amount_gross || 0)}{expense.document_number ? ` · מס׳ ${expense.document_number}` : ''}</small></div></div><div className="finance-inbox-state"><span className={attachment ? 'is-filed' : 'is-empty'}>{attachment ? attachment.file_name : 'חסרה חשבונית'}</span><MatchBadge match={expense.match} />{expense.accountant_delivery ? <span className="finance-sent"><Send size={13} /> נשלח</span> : null}</div><div className="finance-inbox-actions">{attachment ? <a className="btn btn-ghost btn-sm" href={`/api/finance/expenses/${expense.id}/attachments/${attachment.id}/download`}>הורדה</a> : <label className="btn btn-ghost btn-sm"><FileUp size={14} />צרף<input type="file" hidden accept="application/pdf,image/jpeg,image/png" onChange={(e) => uploadExistingInvoice(expense.id, e.target.files?.[0])} /></label>}{expense.match?.status === 'review' && <button className="btn btn-ghost btn-sm" onClick={() => confirmMatch(expense.id, expense.match.transaction_id)}><CheckCircle2 size={14} />אישור</button>}{attachment && !expense.accountant_delivery && <button className="btn btn-ghost btn-sm" onClick={() => sendToAccountant(expense.id)}><Send size={14} />שלח</button>}</div></div>;
         })}{!(automation.expenses || []).length && <div className="finance-empty">הוסף הוצאה או ייבא תנועות כדי להתחיל</div>}</div></article>
         <article className="card finance-panel"><header><div><h2>תנועות שדורשות חשבונית</h2><p>המערכת אינה מניחה שכל חיוב הוא הוצאה מוכרת.</p></div></header><div className="finance-transaction-list">{(automation.transactions || []).slice(0, 60).map((row) => <div key={row.id}><span className="finance-doc-icon"><CreditCard /></span><div><strong>{row.description}</strong><small>{row.transaction_date} · {row.provider || (row.account_type === 'bank' ? 'בנק' : 'אשראי')}{row.account_last4 ? ` · •••• ${row.account_last4}` : ''}</small></div><b>{moneyPrecise.format(row.amount)}</b><MatchBadge match={row.match} /></div>)}{!(automation.transactions || []).length && <div className="finance-empty">טרם יובאו תנועות בנק או אשראי</div>}</div></article>
-        <SyncHealthPanel />
+        <GmailConnection /><SyncHealthPanel />
         <div className="finance-security-note"><ShieldCheck size={16} /><span>המערכת שומרת רק תנועות ו־4 ספרות אחרונות — ללא סיסמת בנק, ללא מספר כרטיס מלא וללא הרשאת ביצוע פעולות.</span></div>
       </div>}
     </>}
