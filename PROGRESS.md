@@ -7,7 +7,7 @@
 | # | מה | סטטוס | מה נדרש מהבעלים |
 |---|---|---|---|
 | B1 | ~~משיכת בנק/אשראי חיה (מרכנתיל + Max)~~ **הושלם 18.08**: שתי המשיכות חיות (מקס 227 חיובים, מרכנתיל 59 תנועות + 14 התאמות סליקה). החשבון העסקי נכנס דרך `LOGIN_PAGE_SME` בזרימה שלנו (`bankProviders.js`), לא דרך הספרייה; Chrome מותקן בפקודת הבנייה | המלצה פתוחה: להחליף למשתמש בנק ייעודי בהרשאת צפייה בלבד |
-| B2 | Gmail — קריאת חשבוניות מהתיבה | interface + mock, flag כבוי | יצירת OAuth ב-Google Cloud + `GMAIL_INVOICES_REFRESH_TOKEN` ב-Render |
+| B2 | Gmail — קריאת חשבוניות מהתיבה | **זרימת החיבור נבנתה (18.08)**: כפתור „חיבור Gmail” במרכז הפיננסי, האסימון נשמר ב-app_settings (לא ב-env), callback ציבורי עם state חתום. הדגל `doc_ingestion` כבוי בייצור | בקונסולת Google Cloud: להפעיל Gmail API, להוסיף redirect URI `https://climbing-crm-api.onrender.com/api/finance/gmail/oauth/callback`, ולהוסיף scope `gmail.readonly` למסך ההסכמה. ב-Gmail: תווית בשם `Invoices` + מסנן. ב-Render: `FINANCE_FLAG_DOC_INGESTION=1` |
 | B3 | מיגרציית SQL של הטבלאות המנורמלות | קובץ SQL מוכן, לא הורץ | הרצה ידנית ב-Supabase SQL editor (לא חוסם — הכול רץ על kv) |
 | B4 | OCR לחשבוניות סרוקות (תמונה בלי שכבת טקסט) | לא מומש | החלטה על ספק OCR — בינתיים נקלט עם confidence נמוך לשיוך ידני |
 | B5 | שליחת מייל לרו״ח (Resend) | הקוד מוכן; stub בטוח עד שיהיה מפתח | יצירת חשבון Resend (חינם) + אימות דומיין שולח + `RESEND_API_KEY` ב-Render, וכתובת הרו״ח בהגדרות המסירה |
