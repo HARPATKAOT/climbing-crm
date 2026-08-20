@@ -2094,7 +2094,16 @@ export default function PosSale({
                 >
                   <Send size={16} />
                 </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
+                {/* החלפת לקוח מנקה גם את העגלה, כמו מכירה שהסתיימה.
+                    שורת כניסה לקיר נושאת את המתאמנים שנבחרו מהמשפחה הקודמת,
+                    ומי שהחליף לקוח בלי לרוקן את העגלה גבה כניסה על שמות
+                    שאינם של מי שעומד מולו. */}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={resetRegister}
+                  title="בחירת לקוח אחר — מנקה גם את העגלה ואת אמצעי התשלום"
+                >
                   <X size={12} /> החלף
                 </button>
               </div>
